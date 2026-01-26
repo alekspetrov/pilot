@@ -20,14 +20,8 @@ Pilot is an autonomous AI development pipeline that receives tickets from Linear
 ## Quick Start
 
 ```bash
-# Install from source
-git clone https://github.com/alekspetrov/pilot.git
-cd pilot
-make build
-sudo mv bin/pilot /usr/local/bin/
-
-# Or with Go
-go install github.com/alekspetrov/pilot/cmd/pilot@latest
+# Install with Homebrew
+brew install alekspetrov/pilot/pilot
 
 # Configure
 pilot init
@@ -70,6 +64,12 @@ Manager creates ticket → Pilot ships code → Engineer reviews PR
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew install alekspetrov/pilot/pilot
+```
+
 ### From Source
 
 ```bash
@@ -87,7 +87,7 @@ go install github.com/alekspetrov/pilot/cmd/pilot@latest
 
 ### Requirements
 
-- Go 1.22+
+- Go 1.22+ (for building from source)
 - Python 3.11+
 - [Claude Code CLI](https://claude.ai/code)
 - [Claude Code CLI](https://github.com/anthropics/claude-code)
