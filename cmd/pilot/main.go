@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/alekspetrov/pilot/internal/banner"
 	"github.com/alekspetrov/pilot/internal/config"
 	"github.com/alekspetrov/pilot/internal/pilot"
 )
@@ -73,9 +74,9 @@ func newStartCmd() *cobra.Command {
 				return fmt.Errorf("failed to start Pilot: %w", err)
 			}
 
-			fmt.Println("🚀 Pilot started")
-			fmt.Printf("   Gateway: http://%s:%d\n", cfg.Gateway.Host, cfg.Gateway.Port)
-			fmt.Printf("   Health:  http://%s:%d/health\n", cfg.Gateway.Host, cfg.Gateway.Port)
+			// Show startup banner
+			gateway := fmt.Sprintf("http://%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
+			banner.StartupBanner(version, gateway)
 
 			// Wait for shutdown signal
 			sigCh := make(chan os.Signal, 1)
@@ -182,13 +183,16 @@ func newInitCmd() *cobra.Command {
 				return fmt.Errorf("failed to save config: %w", err)
 			}
 
-			fmt.Println("🔧 Pilot initialized!")
-			fmt.Printf("   Config created at: %s\n", configPath)
+			// Show banner
+			banner.PrintWithVersion(version)
+
+			fmt.Println("   ✅ Initialized!")
+			fmt.Printf("   Config: %s\n", configPath)
 			fmt.Println()
-			fmt.Println("Next steps:")
-			fmt.Println("  1. Edit the config file with your API keys")
-			fmt.Println("  2. Add your projects to the config")
-			fmt.Println("  3. Run 'pilot start' to start the daemon")
+			fmt.Println("   Next steps:")
+			fmt.Println("   1. Edit config with your API keys")
+			fmt.Println("   2. Add your projects")
+			fmt.Println("   3. Run 'pilot start'")
 
 			return nil
 		},
