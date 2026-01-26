@@ -30,8 +30,15 @@
       },
       "navigator-integration": {
         "label": "Navigator Integration",
-        "description": "Prompt includes 'Start my Navigator session' for context efficiency",
-        "related": ["executor", "autonomous-completion"]
+        "description": "Prompt includes 'Start my Navigator session' which triggers: 1) Navigator index load (~2k tokens), 2) WORKFLOW CHECK with complexity detection, 3) Autonomous completion protocol. Navigator handles documentation loading, task workflow, and commit automation.",
+        "related": ["executor", "autonomous-completion"],
+        "key_concepts": [
+          "Session start loads .agent/DEVELOPMENT-README.md",
+          "WORKFLOW CHECK determines LOOP/TASK/DIRECT mode",
+          "Autonomous completion: commit, archive, close ticket",
+          "Loop mode with NAVIGATOR_STATUS blocks and EXIT_SIGNAL",
+          "92% token reduction via lazy loading"
+        ]
       },
       "terminal-workflow": {
         "label": "Terminal Workflow",
@@ -97,6 +104,20 @@
         "summary": "BuildPrompt checks for .agent/ folder to conditionally add Navigator session start. This auto-detects Navigator-enabled projects.",
         "concepts": ["executor", "navigator-integration"],
         "confidence": 0.95,
+        "created": "2026-01-26"
+      },
+      "mem-006": {
+        "type": "pattern",
+        "summary": "Navigator prompt should use 'Run until done' to trigger Loop Mode. Navigator then handles WORKFLOW CHECK, phase transitions (RESEARCH→PLAN→IMPL→VERIFY→COMPLETE), and EXIT_SIGNAL for completion.",
+        "concepts": ["executor", "navigator-integration"],
+        "confidence": 0.95,
+        "created": "2026-01-26"
+      },
+      "mem-007": {
+        "type": "learning",
+        "summary": "Pilot can detect Navigator progress by parsing: 'Phase:', 'Progress:', 'EXIT_SIGNAL: true', 'Mode: LOOP/TASK'. These appear in Claude Code stdout when Navigator is active.",
+        "concepts": ["executor", "navigator-integration"],
+        "confidence": 0.9,
         "created": "2026-01-26"
       }
     }

@@ -186,48 +186,94 @@ func (r *Runner) BuildPrompt(task *Task) string {
 
 	// Check if project has Navigator initialized
 	agentDir := filepath.Join(task.ProjectPath, ".agent")
+	hasNavigator := false
 	if _, err := os.Stat(agentDir); err == nil {
+		hasNavigator = true
+	}
+
+	// Navigator-aware prompt structure
+	if hasNavigator {
+		// Navigator handles workflow, autonomous completion, and documentation
 		sb.WriteString("Start my Navigator session.\n\n")
-	}
+		sb.WriteString(fmt.Sprintf("## Task: %s\n\n", task.ID))
+		sb.WriteString(fmt.Sprintf("%s\n\n", task.Description))
 
-	sb.WriteString(fmt.Sprintf("## Task: %s\n\n", task.ID))
-	sb.WriteString(fmt.Sprintf("%s\n\n", task.Description))
+		if task.Branch != "" {
+			sb.WriteString(fmt.Sprintf("Create branch `%s` before starting.\n\n", task.Branch))
+		}
 
-	sb.WriteString("## Instructions\n\n")
-
-	if task.Branch != "" {
-		sb.WriteString(fmt.Sprintf("1. Create git branch: `%s`\n", task.Branch))
+		// Navigator will handle: workflow check, complexity detection, autonomous completion
+		sb.WriteString("Run until done. Use Navigator's autonomous completion protocol.\n")
 	} else {
-		sb.WriteString("1. Work on current branch (no new branch)\n")
-	}
+		// Non-Navigator project: explicit instructions needed
+		sb.WriteString(fmt.Sprintf("## Task: %s\n\n", task.ID))
+		sb.WriteString(fmt.Sprintf("%s\n\n", task.Description))
+		sb.WriteString("## Instructions\n\n")
 
-	sb.WriteString("2. Implement exactly what is requested - nothing more\n")
-	sb.WriteString("3. Commit with format: `type(scope): description`\n")
-	sb.WriteString("\nWork autonomously. Do not ask for confirmation.\n")
+		if task.Branch != "" {
+			sb.WriteString(fmt.Sprintf("1. Create git branch: `%s`\n", task.Branch))
+		} else {
+			sb.WriteString("1. Work on current branch (no new branch)\n")
+		}
+
+		sb.WriteString("2. Implement exactly what is requested - nothing more\n")
+		sb.WriteString("3. Write tests if appropriate\n")
+		sb.WriteString("4. Commit with format: `type(scope): description`\n")
+		sb.WriteString("\nWork autonomously. Do not ask for confirmation.\n")
+	}
 
 	return sb.String()
 }
 
 // parseProgressFromOutput attempts to parse progress from Claude Code output
 func (r *Runner) parseProgressFromOutput(taskID, line string) {
-	// Look for Navigator status blocks or phase transitions
-	if strings.Contains(line, "PHASE:") {
-		parts := strings.Split(line, "PHASE:")
+	// Navigator WORKFLOW CHECK block
+	if strings.Contains(line, "Mode:") && (strings.Contains(line, "LOOP") || strings.Contains(line, "TASK") || strings.Contains(line, "DIRECT")) {
+		if strings.Contains(line, "LOOP") {
+			r.reportProgress(taskID, "Loop Mode", 10, "Navigator loop mode active")
+		} else if strings.Contains(line, "TASK") {
+			r.reportProgress(taskID, "Task Mode", 10, "Navigator task mode active")
+		}
+	}
+
+	// Navigator NAVIGATOR_STATUS block phase detection
+	if strings.Contains(line, "Phase:") {
+		parts := strings.Split(line, "Phase:")
 		if len(parts) > 1 {
 			phase := strings.TrimSpace(parts[1])
+			// Handle "RESEARCH → PLAN" format
+			if strings.Contains(phase, "→") {
+				phaseParts := strings.Split(phase, "→")
+				if len(phaseParts) > 1 {
+					phase = strings.TrimSpace(phaseParts[1])
+				}
+			}
 			r.reportProgress(taskID, phase, r.phaseToProgress(phase), "")
 		}
-	} else if strings.Contains(line, "Progress:") {
-		// Parse progress percentage
-		// Format: "Progress: 75%"
+	}
+
+	// Navigator Progress percentage
+	if strings.Contains(line, "Progress:") {
 		parts := strings.Split(line, "Progress:")
 		if len(parts) > 1 {
 			progressStr := strings.TrimSpace(parts[1])
 			progressStr = strings.TrimSuffix(progressStr, "%")
 			var progress int
 			fmt.Sscanf(progressStr, "%d", &progress)
-			r.reportProgress(taskID, "Working", progress, "")
+			if progress > 0 {
+				r.reportProgress(taskID, "Working", progress, "")
+			}
 		}
+	}
+
+	// Navigator EXIT_SIGNAL detection
+	if strings.Contains(line, "EXIT_SIGNAL: true") {
+		r.reportProgress(taskID, "Completing", 95, "Navigator exit signal received")
+	}
+
+	// Commit detection
+	if strings.Contains(line, "git commit") || strings.Contains(line, "committed") {
+		r.reportProgress(taskID, "Committed", 90, "Changes committed")
 	}
 }
 
