@@ -76,6 +76,151 @@ func TestIsRunning(t *testing.T) {
 	}
 }
 
+func TestParseStreamEvent(t *testing.T) {
+	runner := NewRunner()
+
+	// Track progress calls
+	var progressCalls []struct {
+		phase   string
+		message string
+	}
+	runner.OnProgress(func(taskID, phase string, progress int, message string) {
+		progressCalls = append(progressCalls, struct {
+			phase   string
+			message string
+		}{phase, message})
+	})
+
+	tests := []struct {
+		name          string
+		json          string
+		wantResult    string
+		wantError     string
+		wantProgress  bool
+		expectedPhase string
+	}{
+		{
+			name:          "system init",
+			json:          `{"type":"system","subtype":"init","session_id":"abc"}`,
+			wantProgress:  true,
+			expectedPhase: "Initialized",
+		},
+		{
+			name:          "tool use Write",
+			json:          `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/tmp/test.go"}}]}}`,
+			wantProgress:  true,
+			expectedPhase: "Write",
+		},
+		{
+			name:          "tool use Bash",
+			json:          `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go build"}}]}}`,
+			wantProgress:  true,
+			expectedPhase: "Bash",
+		},
+		{
+			name:       "result success",
+			json:       `{"type":"result","subtype":"success","result":"Done!","is_error":false}`,
+			wantResult: "Done!",
+		},
+		{
+			name:      "result error",
+			json:      `{"type":"result","subtype":"error","result":"Failed","is_error":true}`,
+			wantError: "Failed",
+		},
+		{
+			name:         "invalid json",
+			json:         `not valid json`,
+			wantProgress: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			progressCalls = nil
+			toolCount := 0
+
+			result, errMsg := runner.parseStreamEvent("TASK-1", tt.json, &toolCount)
+
+			if result != tt.wantResult {
+				t.Errorf("result = %q, want %q", result, tt.wantResult)
+			}
+			if errMsg != tt.wantError {
+				t.Errorf("error = %q, want %q", errMsg, tt.wantError)
+			}
+			if tt.wantProgress && len(progressCalls) == 0 {
+				t.Error("expected progress call, got none")
+			}
+			if tt.expectedPhase != "" && len(progressCalls) > 0 {
+				if progressCalls[0].phase != tt.expectedPhase {
+					t.Errorf("phase = %q, want %q", progressCalls[0].phase, tt.expectedPhase)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatToolMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		input    map[string]interface{}
+		want     string
+	}{
+		{
+			name:     "Write tool",
+			toolName: "Write",
+			input:    map[string]interface{}{"file_path": "/path/to/file.go"},
+			want:     "Writing file.go",
+		},
+		{
+			name:     "Bash tool",
+			toolName: "Bash",
+			input:    map[string]interface{}{"command": "go test ./..."},
+			want:     "Running: go test ./...",
+		},
+		{
+			name:     "Read tool",
+			toolName: "Read",
+			input:    map[string]interface{}{"file_path": "/src/main.go"},
+			want:     "Reading main.go",
+		},
+		{
+			name:     "Unknown tool",
+			toolName: "CustomTool",
+			input:    map[string]interface{}{},
+			want:     "Using CustomTool",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatToolMessage(tt.toolName, tt.input)
+			if got != tt.want {
+				t.Errorf("formatToolMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTruncateText(t *testing.T) {
+	tests := []struct {
+		text   string
+		maxLen int
+		want   string
+	}{
+		{"short", 10, "short"},
+		{"this is a longer text", 10, "this is..."},
+		{"with\nnewlines", 20, "with newlines"},
+	}
+
+	for _, tt := range tests {
+		got := truncateText(tt.text, tt.maxLen)
+		if got != tt.want {
+			t.Errorf("truncateText(%q, %d) = %q, want %q", tt.text, tt.maxLen, got, tt.want)
+		}
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) > 0 && len(substr) > 0 && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || contains(s[1:], substr)))
 }

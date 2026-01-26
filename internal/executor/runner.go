@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,39 @@ import (
 	"sync"
 	"time"
 )
+
+// StreamEvent represents a Claude Code stream-json event
+type StreamEvent struct {
+	Type          string           `json:"type"`
+	Subtype       string           `json:"subtype,omitempty"`
+	Message       *AssistantMsg    `json:"message,omitempty"`
+	Result        string           `json:"result,omitempty"`
+	IsError       bool             `json:"is_error,omitempty"`
+	DurationMS    int              `json:"duration_ms,omitempty"`
+	NumTurns      int              `json:"num_turns,omitempty"`
+	ToolUseResult json.RawMessage  `json:"tool_use_result,omitempty"`
+}
+
+// AssistantMsg represents the message field in assistant events
+type AssistantMsg struct {
+	Content []ContentBlock `json:"content"`
+}
+
+// ContentBlock represents content in assistant messages
+type ContentBlock struct {
+	Type  string                 `json:"type"`
+	Text  string                 `json:"text,omitempty"`
+	Name  string                 `json:"name,omitempty"`
+	Input map[string]interface{} `json:"input,omitempty"`
+}
+
+// ToolResultContent represents tool result in user events
+type ToolResultContent struct {
+	ToolUseID string `json:"tool_use_id"`
+	Type      string `json:"type"`
+	Content   string `json:"content"`
+	IsError   bool   `json:"is_error"`
+}
 
 // Task represents a task to be executed
 type Task struct {
@@ -63,8 +97,9 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 	// Build the prompt for Claude Code
 	prompt := r.BuildPrompt(task)
 
-	// Create the Claude Code command
-	cmd := exec.CommandContext(ctx, "claude", "-p", prompt)
+	// Create the Claude Code command with stream-json output
+	// --verbose is required for stream-json to work
+	cmd := exec.CommandContext(ctx, "claude", "-p", prompt, "--verbose", "--output-format", "stream-json")
 	cmd.Dir = task.ProjectPath
 
 	// Track the running command
@@ -97,23 +132,35 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 		return nil, fmt.Errorf("failed to start Claude Code: %w", err)
 	}
 
-	// Collect output
-	var outputBuilder strings.Builder
-	var errorBuilder strings.Builder
+	// State for tracking progress and result
+	var finalResult string
+	var finalError string
+	var toolCount int
 	var wg sync.WaitGroup
 
-	// Read stdout
+	// Read stdout (stream-json events)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		scanner := bufio.NewScanner(stdout)
+		// Increase buffer size for large JSON events
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
+
 		for scanner.Scan() {
 			line := scanner.Text()
-			outputBuilder.WriteString(line + "\n")
 			if task.Verbose {
 				fmt.Printf("   %s\n", line)
 			}
-			r.parseProgressFromOutput(task.ID, line)
+
+			// Parse JSON event
+			result, errMsg := r.parseStreamEvent(task.ID, line, &toolCount)
+			if result != "" {
+				finalResult = result
+			}
+			if errMsg != "" {
+				finalError = errMsg
+			}
 		}
 	}()
 
@@ -122,12 +169,16 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 	go func() {
 		defer wg.Done()
 		scanner := bufio.NewScanner(stderr)
+		var errorBuilder strings.Builder
 		for scanner.Scan() {
 			line := scanner.Text()
 			errorBuilder.WriteString(line + "\n")
 			if task.Verbose {
 				fmt.Printf("   [err] %s\n", line)
 			}
+		}
+		if errorBuilder.Len() > 0 && finalError == "" {
+			finalError = errorBuilder.String()
 		}
 	}()
 
@@ -140,8 +191,8 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 
 	result := &ExecutionResult{
 		TaskID:   task.ID,
-		Output:   outputBuilder.String(),
-		Error:    errorBuilder.String(),
+		Output:   finalResult,
+		Error:    finalError,
 		Duration: duration,
 	}
 
@@ -233,39 +284,116 @@ func (r *Runner) BuildPrompt(task *Task) string {
 	return sb.String()
 }
 
-// parseProgressFromOutput attempts to parse progress from Claude Code output
-// NOTE: Claude Code outputs natural language, not structured progress.
-// We detect key events rather than try to parse percentages.
-func (r *Runner) parseProgressFromOutput(taskID, line string) {
-	lineLower := strings.ToLower(line)
-
-	// File creation/modification detection
-	if strings.Contains(lineLower, "creating file") || strings.Contains(lineLower, "wrote file") ||
-		strings.Contains(lineLower, "created file") || strings.Contains(lineLower, "writing to") {
-		r.reportProgress(taskID, "Writing", 50, "Creating files...")
+// parseStreamEvent parses a stream-json event and reports progress
+// Returns (finalResult, errorMessage) - non-empty when task completes
+func (r *Runner) parseStreamEvent(taskID, line string, toolCount *int) (string, string) {
+	var event StreamEvent
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		// Not valid JSON, skip
+		return "", ""
 	}
 
-	// Commit detection (reliable - git output is structured)
-	if strings.Contains(lineLower, "git commit") || strings.Contains(lineLower, "committed") ||
-		strings.Contains(line, "[main ") || strings.Contains(line, "[pilot/") {
-		r.reportProgress(taskID, "Committed", 90, "Changes committed")
+	switch event.Type {
+	case "system":
+		if event.Subtype == "init" {
+			r.reportProgress(taskID, "Initialized", 5, "Claude Code session started")
+		}
+
+	case "assistant":
+		if event.Message != nil {
+			for _, block := range event.Message.Content {
+				switch block.Type {
+				case "tool_use":
+					*toolCount++
+					toolName := block.Name
+					message := formatToolMessage(toolName, block.Input)
+					// Progress based on tool count (rough estimate)
+					progress := min(10+(*toolCount*5), 85)
+					r.reportProgress(taskID, toolName, progress, message)
+
+				case "text":
+					// Claude is thinking/responding - only report if meaningful
+					if len(block.Text) > 20 {
+						preview := truncateText(block.Text, 60)
+						r.reportProgress(taskID, "Thinking", 50, preview)
+					}
+				}
+			}
+		}
+
+	case "user":
+		// Tool result - check for errors
+		if len(event.ToolUseResult) > 0 {
+			var resultStr string
+			if err := json.Unmarshal(event.ToolUseResult, &resultStr); err == nil {
+				if strings.HasPrefix(resultStr, "Error:") {
+					r.reportProgress(taskID, "Error", 0, truncateText(resultStr, 80))
+				}
+			}
+		}
+
+	case "result":
+		if event.IsError {
+			return "", event.Result
+		}
+		return event.Result, ""
 	}
 
-	// Branch creation detection
-	if strings.Contains(lineLower, "switched to") && strings.Contains(lineLower, "branch") {
-		r.reportProgress(taskID, "Branch", 15, "Branch created")
-	}
+	return "", ""
+}
 
-	// Error detection
-	if strings.Contains(lineLower, "error:") || strings.Contains(lineLower, "failed:") {
-		r.reportProgress(taskID, "Issue", 0, "Encountered an issue")
+// formatToolMessage creates a human-readable message for tool usage
+func formatToolMessage(toolName string, input map[string]interface{}) string {
+	switch toolName {
+	case "Write":
+		if fp, ok := input["file_path"].(string); ok {
+			return fmt.Sprintf("Writing %s", filepath.Base(fp))
+		}
+	case "Edit":
+		if fp, ok := input["file_path"].(string); ok {
+			return fmt.Sprintf("Editing %s", filepath.Base(fp))
+		}
+	case "Read":
+		if fp, ok := input["file_path"].(string); ok {
+			return fmt.Sprintf("Reading %s", filepath.Base(fp))
+		}
+	case "Bash":
+		if cmd, ok := input["command"].(string); ok {
+			return fmt.Sprintf("Running: %s", truncateText(cmd, 40))
+		}
+	case "Glob":
+		if pattern, ok := input["pattern"].(string); ok {
+			return fmt.Sprintf("Searching: %s", pattern)
+		}
+	case "Grep":
+		if pattern, ok := input["pattern"].(string); ok {
+			return fmt.Sprintf("Grep: %s", truncateText(pattern, 30))
+		}
+	case "Task":
+		if desc, ok := input["description"].(string); ok {
+			return fmt.Sprintf("Spawning: %s", truncateText(desc, 40))
+		}
 	}
+	return fmt.Sprintf("Using %s", toolName)
+}
 
-	// Test running detection
-	if strings.Contains(lineLower, "running tests") || strings.Contains(lineLower, "go test") ||
-		strings.Contains(lineLower, "pytest") || strings.Contains(lineLower, "npm test") {
-		r.reportProgress(taskID, "Testing", 75, "Running tests...")
+// truncateText truncates text to maxLen and adds ellipsis
+func truncateText(text string, maxLen int) string {
+	// Remove newlines for display
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.TrimSpace(text)
+	if len(text) <= maxLen {
+		return text
 	}
+	return text[:maxLen-3] + "..."
+}
+
+// min returns the smaller of two ints
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 

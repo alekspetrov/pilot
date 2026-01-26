@@ -290,7 +290,7 @@ Examples:
 			if dryRun {
 				fmt.Println("🧪 DRY RUN - showing what would execute:")
 				fmt.Println()
-				fmt.Println("Command: claude -p \"<prompt>\"")
+				fmt.Println("Command: claude -p \"<prompt>\" --verbose --output-format stream-json")
 				fmt.Println("Working directory:", projectPath)
 				fmt.Println()
 				fmt.Println("Prompt:")
@@ -306,21 +306,19 @@ Examples:
 			// Create the executor runner
 			runner := executor.NewRunner()
 
-			// Set up progress callback (for non-verbose mode)
-			if !verbose {
-				runner.OnProgress(func(taskID, phase string, progress int, message string) {
-					timestamp := time.Now().Format("15:04:05")
-					if message != "" {
-						fmt.Printf("   [%s] %s (%d%%): %s\n", timestamp, phase, progress, message)
-					} else {
-						fmt.Printf("   [%s] %s (%d%%)\n", timestamp, phase, progress)
-					}
-				})
-			}
+			// Always set up progress callback for real-time updates
+			runner.OnProgress(func(taskID, phase string, progress int, message string) {
+				timestamp := time.Now().Format("15:04:05")
+				if message != "" {
+					fmt.Printf("   [%s] %s (%d%%): %s\n", timestamp, phase, progress, message)
+				} else {
+					fmt.Printf("   [%s] %s (%d%%)\n", timestamp, phase, progress)
+				}
+			})
 
 			fmt.Println("⏳ Executing task with Claude Code...")
 			if verbose {
-				fmt.Println("   (streaming output)")
+				fmt.Println("   (streaming raw JSON)")
 			}
 			fmt.Println()
 
