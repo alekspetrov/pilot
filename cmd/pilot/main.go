@@ -221,6 +221,7 @@ func newTaskCmd() *cobra.Command {
 	var dryRun bool
 	var noBranch bool
 	var verbose bool
+	var createPR bool
 
 	cmd := &cobra.Command{
 		Use:   "task [description]",
@@ -231,7 +232,8 @@ Examples:
   pilot task "Add user authentication with JWT"
   pilot task "Fix the login bug in auth.go" --project /path/to/project
   pilot task "Refactor the API handlers" --dry-run
-  pilot task "Add index.py with hello world" --verbose`,
+  pilot task "Add index.py with hello world" --verbose
+  pilot task "Add new feature" --create-pr`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			taskDesc := args[0]
@@ -263,6 +265,9 @@ Examples:
 			} else {
 				fmt.Printf("   Branch:    %s\n", branchName)
 			}
+			if createPR {
+				fmt.Printf("   Create PR: ✓ enabled\n")
+			}
 			if hasNavigator {
 				fmt.Printf("   Navigator: ✓ enabled\n")
 			}
@@ -280,10 +285,15 @@ Examples:
 				ProjectPath: projectPath,
 				Branch:      branchName,
 				Verbose:     verbose,
+				CreatePR:    createPR,
 			}
 
 			if noBranch {
 				task.Branch = ""
+				if createPR {
+					fmt.Println("⚠️  Warning: --create-pr requires a branch. Use without --no-branch.")
+					return nil
+				}
 			}
 
 			// Dry run mode - just show what would happen
@@ -382,6 +392,7 @@ Examples:
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be executed without running")
 	cmd.Flags().BoolVar(&noBranch, "no-branch", false, "Don't create a new git branch")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Stream Claude Code output")
+	cmd.Flags().BoolVar(&createPR, "create-pr", false, "Create GitHub PR after successful execution")
 
 	return cmd
 }

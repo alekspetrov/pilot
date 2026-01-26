@@ -49,15 +49,16 @@ type ToolResultContent struct {
 
 // progressState tracks execution phase for compact progress reporting
 type progressState struct {
-	phase        string // Current phase: Exploring, Implementing, Testing, Committing
-	filesRead    int    // Count of files read
-	filesWrite   int    // Count of files written
-	commands     int    // Count of bash commands
-	hasNavigator bool   // Project has Navigator
-	navPhase     string // Navigator phase: INIT, RESEARCH, IMPL, VERIFY, COMPLETE
-	navIteration int    // Navigator loop iteration
-	navProgress  int    // Navigator-reported progress
-	exitSignal   bool   // Navigator EXIT_SIGNAL detected
+	phase        string   // Current phase: Exploring, Implementing, Testing, Committing
+	filesRead    int      // Count of files read
+	filesWrite   int      // Count of files written
+	commands     int      // Count of bash commands
+	hasNavigator bool     // Project has Navigator
+	navPhase     string   // Navigator phase: INIT, RESEARCH, IMPL, VERIFY, COMPLETE
+	navIteration int      // Navigator loop iteration
+	navProgress  int      // Navigator-reported progress
+	exitSignal   bool     // Navigator EXIT_SIGNAL detected
+	commitSHAs   []string // Extracted commit SHAs from git output
 }
 
 // Task represents a task to be executed
@@ -69,6 +70,8 @@ type Task struct {
 	ProjectPath string
 	Branch      string
 	Verbose     bool // Stream Claude Code output to console
+	CreatePR    bool // Create GitHub PR after successful execution
+	BaseBranch  string // Base branch for PR (defaults to main/master)
 }
 
 // ExecutionResult represents the result of task execution
@@ -107,6 +110,23 @@ func (r *Runner) OnProgress(callback ProgressCallback) {
 // Execute runs a task using Claude Code
 func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, error) {
 	start := time.Now()
+
+	// Initialize git operations
+	git := NewGitOperations(task.ProjectPath)
+
+	// Create branch if specified
+	if task.Branch != "" {
+		r.reportProgress(task.ID, "Branching", 5, fmt.Sprintf("Creating branch %s...", task.Branch))
+		if err := git.CreateBranch(ctx, task.Branch); err != nil {
+			// Check if branch already exists - try to switch to it
+			if switchErr := git.SwitchBranch(ctx, task.Branch); switchErr != nil {
+				return nil, fmt.Errorf("failed to create/switch branch: %w", err)
+			}
+			r.reportProgress(task.ID, "Branching", 8, fmt.Sprintf("Switched to existing branch %s", task.Branch))
+		} else {
+			r.reportProgress(task.ID, "Branching", 8, fmt.Sprintf("Created branch %s", task.Branch))
+		}
+	}
 
 	// Build the prompt for Claude Code
 	prompt := r.BuildPrompt(task)
@@ -215,6 +235,11 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 		Duration: duration,
 	}
 
+	// Extract commit SHA from state
+	if len(state.commitSHAs) > 0 {
+		result.CommitSHA = state.commitSHAs[len(state.commitSHAs)-1] // Use last commit
+	}
+
 	if err != nil {
 		result.Success = false
 		if result.Error == "" {
@@ -223,7 +248,46 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 		r.reportProgress(task.ID, "Failed", 100, result.Error)
 	} else {
 		result.Success = true
-		r.reportProgress(task.ID, "Completed", 100, "Task completed successfully")
+		r.reportProgress(task.ID, "Completed", 95, "Execution completed")
+
+		// Create PR if requested and we have commits
+		if task.CreatePR && task.Branch != "" {
+			r.reportProgress(task.ID, "Creating PR", 96, "Pushing branch...")
+
+			// Push branch
+			if err := git.Push(ctx, task.Branch); err != nil {
+				result.Error = fmt.Sprintf("push failed: %v", err)
+				r.reportProgress(task.ID, "PR Failed", 100, result.Error)
+				return result, nil
+			}
+
+			r.reportProgress(task.ID, "Creating PR", 98, "Creating pull request...")
+
+			// Determine base branch
+			baseBranch := task.BaseBranch
+			if baseBranch == "" {
+				baseBranch, _ = git.GetDefaultBranch(ctx)
+				if baseBranch == "" {
+					baseBranch = "main"
+				}
+			}
+
+			// Generate PR body
+			prBody := fmt.Sprintf("## Summary\n\nAutomated PR created by Pilot for task %s.\n\n## Changes\n\n%s", task.ID, task.Description)
+
+			// Create PR
+			prURL, err := git.CreatePR(ctx, task.Title, prBody, baseBranch)
+			if err != nil {
+				result.Error = fmt.Sprintf("PR creation failed: %v", err)
+				r.reportProgress(task.ID, "PR Failed", 100, result.Error)
+				return result, nil
+			}
+
+			result.PRUrl = prURL
+			r.reportProgress(task.ID, "Completed", 100, fmt.Sprintf("PR created: %s", prURL))
+		} else {
+			r.reportProgress(task.ID, "Completed", 100, "Task completed successfully")
+		}
 	}
 
 	return result, nil
@@ -332,8 +396,15 @@ func (r *Runner) parseStreamEvent(taskID, line string, state *progressState) (st
 		}
 
 	case "user":
-		// Tool results - skip error reporting (too noisy)
-		// Errors will show in final result if task fails
+		// Tool results - parse for commit SHAs
+		if event.ToolUseResult != nil {
+			var toolResult ToolResultContent
+			if err := json.Unmarshal(event.ToolUseResult, &toolResult); err == nil {
+				// Extract commit SHA from git commit output
+				// Pattern: "[branch abc1234] commit message" or "[main abc1234] message"
+				extractCommitSHA(toolResult.Content, state)
+			}
+		}
 
 	case "result":
 		if event.IsError {
@@ -700,6 +771,51 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// extractCommitSHA extracts git commit SHA from tool output
+// Pattern: "[branch abc1234]" or "[main abc1234]" from git commit output
+func extractCommitSHA(content string, state *progressState) {
+	// Look for git commit output pattern: [branch sha]
+	// Example: "[main abc1234] feat: add feature"
+	// Example: "[pilot/TASK-123 def5678] fix: bug"
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "[") {
+			continue
+		}
+
+		// Find closing bracket
+		closeBracket := strings.Index(line, "]")
+		if closeBracket == -1 {
+			continue
+		}
+
+		// Extract branch and SHA: "[branch sha]"
+		inside := line[1:closeBracket]
+		parts := strings.Fields(inside)
+		if len(parts) >= 2 {
+			sha := parts[len(parts)-1]
+			// Validate SHA format (7-40 hex characters)
+			if isValidSHA(sha) {
+				state.commitSHAs = append(state.commitSHAs, sha)
+			}
+		}
+	}
+}
+
+// isValidSHA checks if a string looks like a git SHA (7-40 hex chars)
+func isValidSHA(s string) bool {
+	if len(s) < 7 || len(s) > 40 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 

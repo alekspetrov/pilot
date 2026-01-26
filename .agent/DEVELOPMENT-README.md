@@ -73,8 +73,13 @@ if _, err := os.Stat(agentDir); err == nil {
 - [x] Navigator skill detection (nav-start, nav-loop, nav-task, etc.)
 - [x] File-based progress (.agent/ writes → Checkpoint/Documenting phases)
 - [ ] End-to-end testing with real Linear webhook
-- [ ] Git operations in executor (branch, commit, PR)
-- [ ] PR creation workflow
+- [x] **TASK-03**: Git & PR workflow (branch, commit SHA, PR creation)
+
+## Active Tasks
+
+- **TASK-03**: Git & PR Workflow (Status: ✅ Complete)
+  - File: `.agent/tasks/TASK-03-git-pr-workflow.md`
+  - Completed: 2026-01-26
 
 ## Project Structure
 
