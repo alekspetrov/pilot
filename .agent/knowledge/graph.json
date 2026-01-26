@@ -1,0 +1,95 @@
+{
+  "version": "1.0.0",
+  "updated": "2026-01-26T12:00:00Z",
+  "nodes": {
+    "concepts": {
+      "pilot-architecture": {
+        "label": "Pilot Architecture",
+        "description": "Go daemon + Python orchestrator pattern",
+        "related": ["gateway", "executor", "orchestrator", "memory"]
+      },
+      "gateway": {
+        "label": "Gateway",
+        "description": "WebSocket control plane + HTTP API on :9090",
+        "files": ["internal/gateway/server.go", "internal/gateway/router.go"]
+      },
+      "executor": {
+        "label": "Executor",
+        "description": "Claude Code process spawner and manager",
+        "files": ["internal/executor/runner.go", "internal/executor/git.go"]
+      },
+      "orchestrator": {
+        "label": "Orchestrator",
+        "description": "Python bridge for LLM task planning",
+        "files": ["internal/orchestrator/bridge.go", "orchestrator/"]
+      },
+      "claude-code-integration": {
+        "label": "Claude Code Integration",
+        "description": "Spawns `claude -p <prompt>` with Navigator instructions",
+        "files": ["internal/executor/runner.go:174-191"]
+      },
+      "navigator-integration": {
+        "label": "Navigator Integration",
+        "description": "Prompt includes 'Start my Navigator session' for context efficiency",
+        "related": ["executor", "autonomous-completion"]
+      },
+      "terminal-workflow": {
+        "label": "Terminal Workflow",
+        "description": "Run tasks via CLI without Linear webhooks",
+        "related": ["pilot-task-command"]
+      },
+      "pilot-task-command": {
+        "label": "pilot task Command",
+        "description": "New command to execute tasks from terminal (replacing pilot test)",
+        "status": "planned"
+      }
+    },
+    "tasks": {
+      "TASK-01": {
+        "title": "Gateway Foundation",
+        "status": "completed",
+        "concepts": ["gateway", "pilot-architecture"]
+      },
+      "TASK-02": {
+        "title": "Orchestrator Integration",
+        "status": "completed",
+        "concepts": ["orchestrator", "pilot-architecture"]
+      },
+      "TASK-03": {
+        "title": "Replace pilot test with pilot task",
+        "status": "planned",
+        "concepts": ["terminal-workflow", "pilot-task-command", "executor"]
+      }
+    },
+    "memories": {
+      "mem-001": {
+        "type": "decision",
+        "summary": "Go for daemon (single binary), Python for AI logic (flexibility)",
+        "concepts": ["pilot-architecture"],
+        "confidence": 0.95,
+        "created": "2026-01-26"
+      },
+      "mem-002": {
+        "type": "pattern",
+        "summary": "Executor builds prompt with 'Start my Navigator session' prefix for Claude Code",
+        "concepts": ["executor", "navigator-integration", "claude-code-integration"],
+        "confidence": 0.95,
+        "created": "2026-01-26"
+      },
+      "mem-003": {
+        "type": "decision",
+        "summary": "pilot test was dry-run only, replacing with pilot task for real execution",
+        "concepts": ["terminal-workflow", "pilot-task-command"],
+        "confidence": 0.9,
+        "created": "2026-01-26"
+      }
+    }
+  },
+  "edges": [
+    {"from": "executor", "to": "claude-code-integration", "type": "implements"},
+    {"from": "claude-code-integration", "to": "navigator-integration", "type": "uses"},
+    {"from": "pilot-task-command", "to": "executor", "type": "uses"},
+    {"from": "pilot-task-command", "to": "terminal-workflow", "type": "enables"},
+    {"from": "TASK-03", "to": "pilot-task-command", "type": "implements"}
+  ]
+}

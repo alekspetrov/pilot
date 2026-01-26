@@ -35,16 +35,35 @@ func TestBuildPrompt(t *testing.T) {
 	// Check that key elements are in the prompt
 	tests := []string{
 		"TASK-123",
-		"Add authentication",
 		"Implement user authentication flow",
 		"pilot/TASK-123",
-		"Navigator",
+		"commit",
 	}
 
 	for _, expected := range tests {
 		if !contains(prompt, expected) {
 			t.Errorf("Prompt missing expected content: %s", expected)
 		}
+	}
+}
+
+func TestBuildPromptNoBranch(t *testing.T) {
+	runner := NewRunner()
+
+	task := &Task{
+		ID:          "TASK-456",
+		Description: "Fix a bug",
+		ProjectPath: "/path/to/project",
+		Branch:      "", // No branch
+	}
+
+	prompt := runner.buildPrompt(task)
+
+	if !contains(prompt, "current branch") {
+		t.Error("Prompt should mention current branch when Branch is empty")
+	}
+	if contains(prompt, "Create a new git branch") {
+		t.Error("Prompt should not mention creating branch when Branch is empty")
 	}
 }
 

@@ -172,23 +172,27 @@ func (r *Runner) IsRunning(taskID string) bool {
 
 // buildPrompt builds the prompt for Claude Code
 func (r *Runner) buildPrompt(task *Task) string {
-	prompt := fmt.Sprintf(`Start my Navigator session and implement the following task:
+	var branchInstr string
+	if task.Branch != "" {
+		branchInstr = fmt.Sprintf("1. Create a new git branch: %s\n", task.Branch)
+	} else {
+		branchInstr = "1. Work on the current branch (no new branch)\n"
+	}
+
+	prompt := fmt.Sprintf(`Implement the following task:
 
 Task ID: %s
-Title: %s
 
 Description:
 %s
 
 Instructions:
-1. Create a new git branch: %s
-2. Implement the feature following project patterns
-3. Write tests for the implementation
-4. Commit changes with conventional commit format
-5. Create a PR with proper description
+%s2. Implement the feature following project patterns
+3. Write tests if appropriate
+4. Commit changes with conventional commit format: type(scope): description
 
-Use Navigator's autonomous completion protocol - commit and complete without prompting.
-`, task.ID, task.Title, task.Description, task.Branch)
+Work autonomously - implement and commit without prompting for confirmation.
+`, task.ID, task.Description, branchInstr)
 
 	return prompt
 }

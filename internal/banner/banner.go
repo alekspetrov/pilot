@@ -17,13 +17,13 @@ const Tagline = "AI That Ships Your Tickets"
 
 // Print prints the banner with tagline
 func Print() {
-	fmt.Println(Logo)
+	fmt.Print(Logo)
 	fmt.Printf("   %s\n\n", Tagline)
 }
 
 // PrintWithVersion prints the banner with version info
 func PrintWithVersion(version string) {
-	fmt.Println(Logo)
+	fmt.Print(Logo)
 	fmt.Printf("   %s\n", Tagline)
 	fmt.Printf("   v%s\n\n", version)
 }
@@ -35,7 +35,7 @@ func PrintCompact() {
 
 // StartupBanner prints the full startup banner
 func StartupBanner(version, gateway string) {
-	fmt.Println(Logo)
+	fmt.Print(Logo)
 	fmt.Printf("   %s\n", Tagline)
 	fmt.Println()
 	fmt.Printf("   Version:  v%s\n", version)
