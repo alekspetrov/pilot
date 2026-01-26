@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,10 +49,15 @@ type ToolResultContent struct {
 
 // progressState tracks execution phase for compact progress reporting
 type progressState struct {
-	phase      string // Current phase: Exploring, Implementing, Testing, Committing
-	filesRead  int    // Count of files read
-	filesWrite int    // Count of files written
-	commands   int    // Count of bash commands
+	phase        string // Current phase: Exploring, Implementing, Testing, Committing
+	filesRead    int    // Count of files read
+	filesWrite   int    // Count of files written
+	commands     int    // Count of bash commands
+	hasNavigator bool   // Project has Navigator
+	navPhase     string // Navigator phase: INIT, RESEARCH, IMPL, VERIFY, COMPLETE
+	navIteration int    // Navigator loop iteration
+	navProgress  int    // Navigator-reported progress
+	exitSignal   bool   // Navigator EXIT_SIGNAL detected
 }
 
 // Task represents a task to be executed
@@ -315,10 +321,13 @@ func (r *Runner) parseStreamEvent(taskID, line string, state *progressState) (st
 	case "assistant":
 		if event.Message != nil {
 			for _, block := range event.Message.Content {
-				if block.Type == "tool_use" {
+				switch block.Type {
+				case "tool_use":
 					r.handleToolUse(taskID, block.Name, block.Input, state)
+				case "text":
+					// Parse Navigator-specific patterns from text
+					r.parseNavigatorPatterns(taskID, block.Text, state)
 				}
-				// Skip "Thinking" messages - too noisy
 			}
 		}
 
@@ -334,6 +343,169 @@ func (r *Runner) parseStreamEvent(taskID, line string, state *progressState) (st
 	}
 
 	return "", ""
+}
+
+// parseNavigatorPatterns detects Navigator-specific progress signals from text
+func (r *Runner) parseNavigatorPatterns(taskID, text string, state *progressState) {
+	// Navigator Session Started
+	if strings.Contains(text, "Navigator Session Started") {
+		state.hasNavigator = true
+		r.reportProgress(taskID, "Navigator", 10, "Navigator session started")
+		return
+	}
+
+	// Navigator Status Block - extract phase and progress
+	if strings.Contains(text, "NAVIGATOR_STATUS") {
+		state.hasNavigator = true
+		r.parseNavigatorStatusBlock(taskID, text, state)
+		return
+	}
+
+	// Phase transitions
+	if strings.Contains(text, "PHASE:") && strings.Contains(text, "→") {
+		// Extract phase from "PHASE: X → Y" pattern
+		if idx := strings.Index(text, "→"); idx != -1 {
+			after := strings.TrimSpace(text[idx+3:]) // Skip "→ "
+			if newline := strings.Index(after, "\n"); newline != -1 {
+				after = after[:newline]
+			}
+			phase := strings.TrimSpace(after)
+			if phase != "" {
+				r.handleNavigatorPhase(taskID, phase, state)
+			}
+		}
+		return
+	}
+
+	// Workflow check - indicates task analysis
+	if strings.Contains(text, "WORKFLOW CHECK") {
+		if state.phase != "Analyzing" {
+			state.phase = "Analyzing"
+			r.reportProgress(taskID, "Analyzing", 12, "Workflow check...")
+		}
+		return
+	}
+
+	// Task Mode
+	if strings.Contains(text, "TASK MODE ACTIVATED") {
+		r.reportProgress(taskID, "Task Mode", 15, "Task mode activated")
+		return
+	}
+
+	// Completion signals
+	if strings.Contains(text, "LOOP COMPLETE") || strings.Contains(text, "TASK MODE COMPLETE") {
+		state.exitSignal = true
+		r.reportProgress(taskID, "Completing", 95, "Task complete signal received")
+		return
+	}
+
+	// EXIT_SIGNAL detection
+	if strings.Contains(text, "EXIT_SIGNAL: true") || strings.Contains(text, "EXIT_SIGNAL:true") {
+		state.exitSignal = true
+		r.reportProgress(taskID, "Finishing", 92, "Exit signal detected")
+		return
+	}
+
+	// Stagnation detection
+	if strings.Contains(text, "STAGNATION DETECTED") {
+		r.reportProgress(taskID, "⚠️ Stalled", 0, "Navigator detected stagnation")
+		return
+	}
+}
+
+// parseNavigatorStatusBlock extracts progress from Navigator status block
+func (r *Runner) parseNavigatorStatusBlock(taskID, text string, state *progressState) {
+	// Extract Phase: from status block
+	if idx := strings.Index(text, "Phase:"); idx != -1 {
+		line := text[idx:]
+		if newline := strings.Index(line, "\n"); newline != -1 {
+			line = line[:newline]
+		}
+		phase := strings.TrimSpace(strings.TrimPrefix(line, "Phase:"))
+		if phase != "" {
+			r.handleNavigatorPhase(taskID, phase, state)
+		}
+	}
+
+	// Extract Progress: percentage
+	if idx := strings.Index(text, "Progress:"); idx != -1 {
+		line := text[idx:]
+		if newline := strings.Index(line, "\n"); newline != -1 {
+			line = line[:newline]
+		}
+		// Parse "Progress: 45%" or similar
+		line = strings.TrimPrefix(line, "Progress:")
+		line = strings.TrimSpace(line)
+		line = strings.TrimSuffix(line, "%")
+		if pct, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+			state.navProgress = pct
+		}
+	}
+
+	// Extract Iteration
+	if idx := strings.Index(text, "Iteration:"); idx != -1 {
+		line := text[idx:]
+		if newline := strings.Index(line, "\n"); newline != -1 {
+			line = line[:newline]
+		}
+		// Parse "Iteration: 2/5" format
+		line = strings.TrimPrefix(line, "Iteration:")
+		if slash := strings.Index(line, "/"); slash != -1 {
+			if iter, err := strconv.Atoi(strings.TrimSpace(line[:slash])); err == nil {
+				state.navIteration = iter
+			}
+		}
+	}
+}
+
+// handleNavigatorPhase maps Navigator phases to progress
+func (r *Runner) handleNavigatorPhase(taskID, phase string, state *progressState) {
+	phase = strings.ToUpper(strings.TrimSpace(phase))
+
+	// Skip if same phase
+	if state.navPhase == phase {
+		return
+	}
+	state.navPhase = phase
+
+	var displayPhase string
+	var progress int
+	var message string
+
+	switch phase {
+	case "INIT":
+		displayPhase = "Init"
+		progress = 10
+		message = "Initializing task..."
+	case "RESEARCH":
+		displayPhase = "Research"
+		progress = 25
+		message = "Researching codebase..."
+	case "IMPL", "IMPLEMENTATION":
+		displayPhase = "Implement"
+		progress = 50
+		message = "Implementing changes..."
+	case "VERIFY", "VERIFICATION":
+		displayPhase = "Verify"
+		progress = 80
+		message = "Verifying changes..."
+	case "COMPLETE", "COMPLETED":
+		displayPhase = "Complete"
+		progress = 95
+		message = "Finalizing..."
+	default:
+		displayPhase = phase
+		progress = 50
+		message = fmt.Sprintf("Phase: %s", phase)
+	}
+
+	// Use Navigator's reported progress if available
+	if state.navProgress > 0 {
+		progress = state.navProgress
+	}
+
+	state.phase = displayPhase
+	r.reportProgress(taskID, displayPhase, progress, message)
 }
 
 // handleToolUse processes tool usage and updates phase-based progress
@@ -353,12 +525,29 @@ func (r *Runner) handleToolUse(taskID, toolName string, input map[string]interfa
 
 	case "Write", "Edit":
 		state.filesWrite++
-		if state.phase != "Implementing" || state.filesWrite == 1 {
-			newPhase = "Implementing"
-			progress = 40 + min(state.filesWrite*5, 30)
-			if fp, ok := input["file_path"].(string); ok {
+		if fp, ok := input["file_path"].(string); ok {
+			// Check if writing to .agent/ (Navigator activity)
+			if strings.Contains(fp, ".agent/") {
+				state.hasNavigator = true
+				if strings.Contains(fp, ".context-markers/") {
+					newPhase = "Checkpoint"
+					progress = 88
+					message = "Creating context marker..."
+				} else if strings.Contains(fp, "/tasks/") {
+					newPhase = "Documenting"
+					progress = 85
+					message = "Updating task docs..."
+				}
+				// Don't report other .agent/ writes
+			} else if state.phase != "Implementing" || state.filesWrite == 1 {
+				newPhase = "Implementing"
+				progress = 40 + min(state.filesWrite*5, 30)
 				message = fmt.Sprintf("Creating %s", filepath.Base(fp))
-			} else {
+			}
+		} else {
+			if state.phase != "Implementing" {
+				newPhase = "Implementing"
+				progress = 40
 				message = "Writing files..."
 			}
 		}
@@ -409,6 +598,45 @@ func (r *Runner) handleToolUse(taskID, toolName string, input map[string]interfa
 				message = fmt.Sprintf("Spawning agent: %s", truncateText(desc, 40))
 			} else {
 				message = "Running sub-task..."
+			}
+		}
+
+	case "Skill":
+		// Navigator skill invocation
+		if skill, ok := input["skill"].(string); ok {
+			state.hasNavigator = true
+			skillLower := strings.ToLower(skill)
+
+			switch {
+			case strings.HasPrefix(skillLower, "nav-start"):
+				newPhase = "Navigator"
+				progress = 10
+				message = "Starting Navigator session..."
+			case strings.HasPrefix(skillLower, "nav-loop"):
+				newPhase = "Loop Mode"
+				progress = 20
+				message = "Entering loop mode..."
+			case strings.HasPrefix(skillLower, "nav-task"):
+				newPhase = "Task Mode"
+				progress = 15
+				message = "Task mode activated..."
+			case strings.HasPrefix(skillLower, "nav-compact"):
+				newPhase = "Compacting"
+				progress = 90
+				message = "Compacting context..."
+			case strings.HasPrefix(skillLower, "nav-marker"):
+				newPhase = "Checkpoint"
+				progress = 88
+				message = "Creating checkpoint..."
+			case strings.HasPrefix(skillLower, "nav-simplify"):
+				newPhase = "Simplifying"
+				progress = 82
+				message = "Simplifying code..."
+			default:
+				// Other nav skills
+				if strings.HasPrefix(skillLower, "nav-") {
+					message = fmt.Sprintf("Navigator: %s", skill)
+				}
 			}
 		}
 	}
