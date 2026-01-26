@@ -27,7 +27,7 @@
 | Orchestrator (Python) | ✅ Complete | `orchestrator/` |
 | CLI Commands | ⚠️ Basic | `cmd/pilot/` |
 
-### Week 1-2 Progress
+### Week 1-2 Progress ✅
 
 - [x] Go project setup
 - [x] Gateway skeleton (WebSocket + HTTP)
@@ -35,12 +35,21 @@
 - [x] Linear adapter (webhook receiver)
 - [x] Basic CLI (`pilot start`, `pilot status`)
 
-### Next Steps (Week 3-4)
+### Week 3-4 Progress ✅
 
-- [ ] Wire orchestrator to gateway
-- [ ] Ticket → Navigator task conversion
-- [ ] Claude Code spawning integration
-- [ ] Go ↔ Python IPC
+- [x] Wire orchestrator to gateway
+- [x] Ticket → Navigator task conversion
+- [x] Python bridge for LLM planning
+- [x] Go ↔ Python IPC (subprocess)
+- [x] Pilot core integration
+- [x] Tests (24 passing)
+
+### Next Steps (Week 5-6)
+
+- [ ] End-to-end testing with real Linear webhook
+- [ ] TUI dashboard integration
+- [ ] Git operations in executor
+- [ ] PR creation workflow
 
 ## Project Structure
 
