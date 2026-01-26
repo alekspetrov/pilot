@@ -164,6 +164,11 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Router returns the server's router
+func (s *Server) Router() *Router {
+	return s.router
+}
+
 // handleLinearWebhook receives webhooks from Linear
 func (s *Server) handleLinearWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
