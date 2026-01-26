@@ -1,0 +1,59 @@
+# Pilot Configuration
+# Copy this to ~/.pilot/config.yaml and customize
+
+version: "1.0"
+
+# Gateway server settings
+gateway:
+  host: "127.0.0.1"
+  port: 9090
+
+# Authentication
+auth:
+  type: "claude-code"  # "claude-code" (local) or "api-token" (remote)
+  # token: "sk-ant-..."  # Required if type is "api-token"
+
+# Adapters
+adapters:
+  # Linear - Issue tracking
+  linear:
+    enabled: false
+    api_key: "${LINEAR_API_KEY}"
+    team_id: "your-team-id"
+    pilot_label: "pilot"    # Issues with this label are picked up
+    auto_assign: true        # Auto-assign issues to Pilot
+
+  # Slack - Notifications
+  slack:
+    enabled: false
+    bot_token: "${SLACK_BOT_TOKEN}"
+    channel: "#dev-notifications"
+
+# Orchestrator settings
+orchestrator:
+  model: "claude-sonnet-4-20250514"
+  max_concurrent: 2          # Max parallel tasks
+
+  # Daily brief
+  daily_brief:
+    enabled: false
+    time: "09:00"
+    timezone: "America/New_York"
+
+# Memory settings
+memory:
+  path: "~/.pilot/data"
+  cross_project: true        # Share learnings across projects
+
+# Project configurations
+projects:
+  # Example project
+  - name: "my-app"
+    path: "/path/to/my-app"
+    navigator: true           # Use Navigator for context efficiency
+    default_branch: "main"
+
+# Dashboard settings
+dashboard:
+  refresh_interval: 1000     # ms
+  show_logs: true

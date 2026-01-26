@@ -1,0 +1,6 @@
+# Pilot Orchestrator Dependencies
+# Python 3.11+
+
+# No external dependencies for core functionality
+# LLM integration would add:
+# anthropic>=0.25.0
