@@ -205,9 +205,18 @@ func (r *Runner) BuildPrompt(task *Task) string {
 		// Navigator will handle: workflow check, complexity detection, autonomous completion
 		sb.WriteString("Run until done. Use Navigator's autonomous completion protocol.\n")
 	} else {
-		// Non-Navigator project: explicit instructions needed
+		// Non-Navigator project: explicit instructions with strict constraints
 		sb.WriteString(fmt.Sprintf("## Task: %s\n\n", task.ID))
 		sb.WriteString(fmt.Sprintf("%s\n\n", task.Description))
+
+		sb.WriteString("## Constraints\n\n")
+		sb.WriteString("- ONLY create files explicitly mentioned in the task\n")
+		sb.WriteString("- Do NOT create additional files, tests, configs, or dependencies\n")
+		sb.WriteString("- Do NOT modify existing files unless explicitly requested\n")
+		sb.WriteString("- If task specifies a file type (e.g., .py), use ONLY that type\n")
+		sb.WriteString("- Do NOT add package.json, requirements.txt, or build configs\n")
+		sb.WriteString("- Keep implementation minimal and focused\n\n")
+
 		sb.WriteString("## Instructions\n\n")
 
 		if task.Branch != "" {
@@ -216,9 +225,8 @@ func (r *Runner) BuildPrompt(task *Task) string {
 			sb.WriteString("1. Work on current branch (no new branch)\n")
 		}
 
-		sb.WriteString("2. Implement exactly what is requested - nothing more\n")
-		sb.WriteString("3. Write tests if appropriate\n")
-		sb.WriteString("4. Commit with format: `type(scope): description`\n")
+		sb.WriteString("2. Implement EXACTLY what is requested - nothing more, nothing less\n")
+		sb.WriteString("3. Commit with format: `type(scope): description`\n")
 		sb.WriteString("\nWork autonomously. Do not ask for confirmation.\n")
 	}
 
@@ -226,74 +234,40 @@ func (r *Runner) BuildPrompt(task *Task) string {
 }
 
 // parseProgressFromOutput attempts to parse progress from Claude Code output
+// NOTE: Claude Code outputs natural language, not structured progress.
+// We detect key events rather than try to parse percentages.
 func (r *Runner) parseProgressFromOutput(taskID, line string) {
-	// Navigator WORKFLOW CHECK block
-	if strings.Contains(line, "Mode:") && (strings.Contains(line, "LOOP") || strings.Contains(line, "TASK") || strings.Contains(line, "DIRECT")) {
-		if strings.Contains(line, "LOOP") {
-			r.reportProgress(taskID, "Loop Mode", 10, "Navigator loop mode active")
-		} else if strings.Contains(line, "TASK") {
-			r.reportProgress(taskID, "Task Mode", 10, "Navigator task mode active")
-		}
+	lineLower := strings.ToLower(line)
+
+	// File creation/modification detection
+	if strings.Contains(lineLower, "creating file") || strings.Contains(lineLower, "wrote file") ||
+		strings.Contains(lineLower, "created file") || strings.Contains(lineLower, "writing to") {
+		r.reportProgress(taskID, "Writing", 50, "Creating files...")
 	}
 
-	// Navigator NAVIGATOR_STATUS block phase detection
-	if strings.Contains(line, "Phase:") {
-		parts := strings.Split(line, "Phase:")
-		if len(parts) > 1 {
-			phase := strings.TrimSpace(parts[1])
-			// Handle "RESEARCH → PLAN" format
-			if strings.Contains(phase, "→") {
-				phaseParts := strings.Split(phase, "→")
-				if len(phaseParts) > 1 {
-					phase = strings.TrimSpace(phaseParts[1])
-				}
-			}
-			r.reportProgress(taskID, phase, r.phaseToProgress(phase), "")
-		}
-	}
-
-	// Navigator Progress percentage
-	if strings.Contains(line, "Progress:") {
-		parts := strings.Split(line, "Progress:")
-		if len(parts) > 1 {
-			progressStr := strings.TrimSpace(parts[1])
-			progressStr = strings.TrimSuffix(progressStr, "%")
-			var progress int
-			fmt.Sscanf(progressStr, "%d", &progress)
-			if progress > 0 {
-				r.reportProgress(taskID, "Working", progress, "")
-			}
-		}
-	}
-
-	// Navigator EXIT_SIGNAL detection
-	if strings.Contains(line, "EXIT_SIGNAL: true") {
-		r.reportProgress(taskID, "Completing", 95, "Navigator exit signal received")
-	}
-
-	// Commit detection
-	if strings.Contains(line, "git commit") || strings.Contains(line, "committed") {
+	// Commit detection (reliable - git output is structured)
+	if strings.Contains(lineLower, "git commit") || strings.Contains(lineLower, "committed") ||
+		strings.Contains(line, "[main ") || strings.Contains(line, "[pilot/") {
 		r.reportProgress(taskID, "Committed", 90, "Changes committed")
 	}
-}
 
-// phaseToProgress converts a phase name to approximate progress percentage
-func (r *Runner) phaseToProgress(phase string) int {
-	switch strings.ToUpper(phase) {
-	case "INIT", "RESEARCH":
-		return 10
-	case "PLAN":
-		return 25
-	case "IMPL", "IMPLEMENTATION":
-		return 50
-	case "VERIFY", "TEST":
-		return 75
-	case "COMPLETE", "DONE":
-		return 100
-	default:
-		return 50
+	// Branch creation detection
+	if strings.Contains(lineLower, "switched to") && strings.Contains(lineLower, "branch") {
+		r.reportProgress(taskID, "Branch", 15, "Branch created")
+	}
+
+	// Error detection
+	if strings.Contains(lineLower, "error:") || strings.Contains(lineLower, "failed:") {
+		r.reportProgress(taskID, "Issue", 0, "Encountered an issue")
+	}
+
+	// Test running detection
+	if strings.Contains(lineLower, "running tests") || strings.Contains(lineLower, "go test") ||
+		strings.Contains(lineLower, "pytest") || strings.Contains(lineLower, "npm test") {
+		r.reportProgress(taskID, "Testing", 75, "Running tests...")
 	}
 }
+
 
 // reportProgress sends a progress update
 func (r *Runner) reportProgress(taskID, phase string, progress int, message string) {

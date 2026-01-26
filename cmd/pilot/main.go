@@ -309,8 +309,11 @@ Examples:
 			// Set up progress callback (for non-verbose mode)
 			if !verbose {
 				runner.OnProgress(func(taskID, phase string, progress int, message string) {
-					if progress == 0 || progress == 100 {
-						fmt.Printf("   %s: %s\n", phase, message)
+					timestamp := time.Now().Format("15:04:05")
+					if message != "" {
+						fmt.Printf("   [%s] %s (%d%%): %s\n", timestamp, phase, progress, message)
+					} else {
+						fmt.Printf("   [%s] %s (%d%%)\n", timestamp, phase, progress)
 					}
 				})
 			}

@@ -67,34 +67,6 @@ func TestBuildPromptNoBranch(t *testing.T) {
 	}
 }
 
-func TestPhaseToProgress(t *testing.T) {
-	runner := NewRunner()
-
-	tests := []struct {
-		phase    string
-		expected int
-	}{
-		{"INIT", 10},
-		{"RESEARCH", 10},
-		{"PLAN", 25},
-		{"IMPL", 50},
-		{"IMPLEMENTATION", 50},
-		{"VERIFY", 75},
-		{"TEST", 75},
-		{"COMPLETE", 100},
-		{"DONE", 100},
-		{"UNKNOWN", 50},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.phase, func(t *testing.T) {
-			result := runner.phaseToProgress(tt.phase)
-			if result != tt.expected {
-				t.Errorf("phaseToProgress(%s) = %d, want %d", tt.phase, result, tt.expected)
-			}
-		})
-	}
-}
 
 func TestIsRunning(t *testing.T) {
 	runner := NewRunner()

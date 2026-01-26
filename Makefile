@@ -1,4 +1,4 @@
-.PHONY: build run test clean install lint fmt deps dev
+.PHONY: build run test test-e2e clean install lint fmt deps dev
 
 # Variables
 BINARY_NAME=pilot
@@ -44,6 +44,16 @@ test:
 test-coverage:
 	go test -v -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
+
+# Run end-to-end tests
+test-e2e: build
+	@echo "Running E2E tests..."
+	./scripts/test-e2e.sh
+
+# Run end-to-end tests with live Claude Code execution
+test-e2e-live: build
+	@echo "Running E2E tests (including live Claude Code)..."
+	RUN_LIVE_TESTS=true ./scripts/test-e2e.sh
 
 # Lint the code
 lint:
@@ -94,8 +104,10 @@ help:
 	@echo "  make run            Build and run the daemon"
 	@echo "  make dev            Run in development mode"
 	@echo "  make deps           Install dependencies"
-	@echo "  make test           Run tests"
+	@echo "  make test           Run unit tests"
 	@echo "  make test-coverage  Run tests with coverage"
+	@echo "  make test-e2e       Run end-to-end tests"
+	@echo "  make test-e2e-live  Run E2E tests with live Claude"
 	@echo "  make lint           Run linter"
 	@echo "  make fmt            Format code"
 	@echo "  make clean          Clean build artifacts"
