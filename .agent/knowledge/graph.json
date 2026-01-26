@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated": "2026-01-26T12:00:00Z",
+  "updated": "2026-01-26T12:45:00Z",
   "nodes": {
     "concepts": {
       "pilot-architecture": {
@@ -81,6 +81,20 @@
         "summary": "pilot test was dry-run only, replacing with pilot task for real execution",
         "concepts": ["terminal-workflow", "pilot-task-command"],
         "confidence": 0.9,
+        "created": "2026-01-26"
+      },
+      "mem-004": {
+        "type": "pitfall",
+        "summary": "CRITICAL: Never remove Navigator integration from executor prompt when refactoring. The 'Start my Navigator session' prefix is core to Pilot's value proposition - context-efficient AI development. When simplifying code, preserve this integration.",
+        "concepts": ["executor", "navigator-integration", "claude-code-integration"],
+        "confidence": 1.0,
+        "created": "2026-01-26"
+      },
+      "mem-005": {
+        "type": "pattern",
+        "summary": "BuildPrompt checks for .agent/ folder to conditionally add Navigator session start. This auto-detects Navigator-enabled projects.",
+        "concepts": ["executor", "navigator-integration"],
+        "confidence": 0.95,
         "created": "2026-01-26"
       }
     }

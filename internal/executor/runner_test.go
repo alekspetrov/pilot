@@ -26,7 +26,7 @@ func TestBuildPrompt(t *testing.T) {
 		Branch:      "pilot/TASK-123",
 	}
 
-	prompt := runner.buildPrompt(task)
+	prompt := runner.BuildPrompt(task)
 
 	if prompt == "" {
 		t.Error("buildPrompt returned empty string")
@@ -37,7 +37,7 @@ func TestBuildPrompt(t *testing.T) {
 		"TASK-123",
 		"Implement user authentication flow",
 		"pilot/TASK-123",
-		"commit",
+		"Commit",
 	}
 
 	for _, expected := range tests {
@@ -57,7 +57,7 @@ func TestBuildPromptNoBranch(t *testing.T) {
 		Branch:      "", // No branch
 	}
 
-	prompt := runner.buildPrompt(task)
+	prompt := runner.BuildPrompt(task)
 
 	if !contains(prompt, "current branch") {
 		t.Error("Prompt should mention current branch when Branch is empty")

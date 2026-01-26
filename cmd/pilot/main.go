@@ -220,6 +220,7 @@ func newTaskCmd() *cobra.Command {
 	var projectPath string
 	var dryRun bool
 	var noBranch bool
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "task [description]",
@@ -229,7 +230,8 @@ func newTaskCmd() *cobra.Command {
 Examples:
   pilot task "Add user authentication with JWT"
   pilot task "Fix the login bug in auth.go" --project /path/to/project
-  pilot task "Refactor the API handlers" --dry-run`,
+  pilot task "Refactor the API handlers" --dry-run
+  pilot task "Add index.py with hello world" --verbose`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			taskDesc := args[0]
@@ -246,16 +248,43 @@ Examples:
 			taskID := fmt.Sprintf("TASK-%d", time.Now().Unix()%100000)
 			branchName := fmt.Sprintf("pilot/%s", taskID)
 
+			// Check for Navigator
+			hasNavigator := false
+			if _, err := os.Stat(projectPath + "/.agent"); err == nil {
+				hasNavigator = true
+			}
+
 			fmt.Println("🚀 Pilot Task Execution")
 			fmt.Println("───────────────────────────────────────")
-			fmt.Printf("   Task ID:  %s\n", taskID)
-			fmt.Printf("   Project:  %s\n", projectPath)
-			fmt.Printf("   Branch:   %s\n", branchName)
+			fmt.Printf("   Task ID:   %s\n", taskID)
+			fmt.Printf("   Project:   %s\n", projectPath)
+			if noBranch {
+				fmt.Printf("   Branch:    (current)\n")
+			} else {
+				fmt.Printf("   Branch:    %s\n", branchName)
+			}
+			if hasNavigator {
+				fmt.Printf("   Navigator: ✓ enabled\n")
+			}
 			fmt.Println()
 			fmt.Println("📋 Task:")
 			fmt.Printf("   %s\n", taskDesc)
 			fmt.Println("───────────────────────────────────────")
 			fmt.Println()
+
+			// Build the task early so we can show prompt in dry-run
+			task := &executor.Task{
+				ID:          taskID,
+				Title:       taskDesc,
+				Description: taskDesc,
+				ProjectPath: projectPath,
+				Branch:      branchName,
+				Verbose:     verbose,
+			}
+
+			if noBranch {
+				task.Branch = ""
+			}
 
 			// Dry run mode - just show what would happen
 			if dryRun {
@@ -264,11 +293,12 @@ Examples:
 				fmt.Println("Command: claude -p \"<prompt>\"")
 				fmt.Println("Working directory:", projectPath)
 				fmt.Println()
-				fmt.Println("Prompt preview:")
+				fmt.Println("Prompt:")
 				fmt.Println("─────────────────────────────────────")
-				fmt.Printf("Start my Navigator session and implement:\n\n")
-				fmt.Printf("Task ID: %s\n", taskID)
-				fmt.Printf("Description: %s\n", taskDesc)
+				// Build actual prompt using a temporary runner
+				runner := executor.NewRunner()
+				prompt := runner.BuildPrompt(task)
+				fmt.Println(prompt)
 				fmt.Println("─────────────────────────────────────")
 				return nil
 			}
@@ -276,37 +306,19 @@ Examples:
 			// Create the executor runner
 			runner := executor.NewRunner()
 
-			// Set up progress callback
-			runner.OnProgress(func(taskID, phase string, progress int, message string) {
-				progressBar := ""
-				filled := progress / 5
-				for i := 0; i < 20; i++ {
-					if i < filled {
-						progressBar += "█"
-					} else {
-						progressBar += "░"
+			// Set up progress callback (for non-verbose mode)
+			if !verbose {
+				runner.OnProgress(func(taskID, phase string, progress int, message string) {
+					if progress == 0 || progress == 100 {
+						fmt.Printf("   %s: %s\n", phase, message)
 					}
-				}
-				fmt.Printf("\r   [%s] %3d%% %s: %s", progressBar, progress, phase, message)
-				if progress == 100 {
-					fmt.Println()
-				}
-			})
-
-			// Build the task
-			task := &executor.Task{
-				ID:          taskID,
-				Title:       taskDesc,
-				Description: taskDesc,
-				ProjectPath: projectPath,
-				Branch:      branchName,
-			}
-
-			if noBranch {
-				task.Branch = ""
+				})
 			}
 
 			fmt.Println("⏳ Executing task with Claude Code...")
+			if verbose {
+				fmt.Println("   (streaming output)")
+			}
 			fmt.Println()
 
 			// Create context with cancellation on SIGINT
@@ -355,6 +367,7 @@ Examples:
 	cmd.Flags().StringVarP(&projectPath, "project", "p", "", "Project path (default: current directory)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be executed without running")
 	cmd.Flags().BoolVar(&noBranch, "no-branch", false, "Don't create a new git branch")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Stream Claude Code output")
 
 	return cmd
 }

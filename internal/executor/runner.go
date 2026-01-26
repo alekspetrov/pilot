@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,7 @@ type Task struct {
 	Priority    int
 	ProjectPath string
 	Branch      string
+	Verbose     bool // Stream Claude Code output to console
 }
 
 // ExecutionResult represents the result of task execution
@@ -58,7 +61,7 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 	start := time.Now()
 
 	// Build the prompt for Claude Code
-	prompt := r.buildPrompt(task)
+	prompt := r.BuildPrompt(task)
 
 	// Create the Claude Code command
 	cmd := exec.CommandContext(ctx, "claude", "-p", prompt)
@@ -107,6 +110,9 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 		for scanner.Scan() {
 			line := scanner.Text()
 			outputBuilder.WriteString(line + "\n")
+			if task.Verbose {
+				fmt.Printf("   %s\n", line)
+			}
 			r.parseProgressFromOutput(task.ID, line)
 		}
 	}()
@@ -117,7 +123,11 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 		defer wg.Done()
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			errorBuilder.WriteString(scanner.Text() + "\n")
+			line := scanner.Text()
+			errorBuilder.WriteString(line + "\n")
+			if task.Verbose {
+				fmt.Printf("   [err] %s\n", line)
+			}
 		}
 	}()
 
@@ -170,31 +180,32 @@ func (r *Runner) IsRunning(taskID string) bool {
 	return ok
 }
 
-// buildPrompt builds the prompt for Claude Code
-func (r *Runner) buildPrompt(task *Task) string {
-	var branchInstr string
-	if task.Branch != "" {
-		branchInstr = fmt.Sprintf("1. Create a new git branch: %s\n", task.Branch)
-	} else {
-		branchInstr = "1. Work on the current branch (no new branch)\n"
+// BuildPrompt builds the prompt for Claude Code (exported for dry-run preview)
+func (r *Runner) BuildPrompt(task *Task) string {
+	var sb strings.Builder
+
+	// Check if project has Navigator initialized
+	agentDir := filepath.Join(task.ProjectPath, ".agent")
+	if _, err := os.Stat(agentDir); err == nil {
+		sb.WriteString("Start my Navigator session.\n\n")
 	}
 
-	prompt := fmt.Sprintf(`Implement the following task:
+	sb.WriteString(fmt.Sprintf("## Task: %s\n\n", task.ID))
+	sb.WriteString(fmt.Sprintf("%s\n\n", task.Description))
 
-Task ID: %s
+	sb.WriteString("## Instructions\n\n")
 
-Description:
-%s
+	if task.Branch != "" {
+		sb.WriteString(fmt.Sprintf("1. Create git branch: `%s`\n", task.Branch))
+	} else {
+		sb.WriteString("1. Work on current branch (no new branch)\n")
+	}
 
-Instructions:
-%s2. Implement the feature following project patterns
-3. Write tests if appropriate
-4. Commit changes with conventional commit format: type(scope): description
+	sb.WriteString("2. Implement exactly what is requested - nothing more\n")
+	sb.WriteString("3. Commit with format: `type(scope): description`\n")
+	sb.WriteString("\nWork autonomously. Do not ask for confirmation.\n")
 
-Work autonomously - implement and commit without prompting for confirmation.
-`, task.ID, task.Description, branchInstr)
-
-	return prompt
+	return sb.String()
 }
 
 // parseProgressFromOutput attempts to parse progress from Claude Code output
