@@ -103,19 +103,25 @@ func TestParseStreamEvent(t *testing.T) {
 			name:          "system init",
 			json:          `{"type":"system","subtype":"init","session_id":"abc"}`,
 			wantProgress:  true,
-			expectedPhase: "Initialized",
+			expectedPhase: "🚀 Started",
 		},
 		{
-			name:          "tool use Write",
+			name:          "tool use Write triggers Implementing phase",
 			json:          `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/tmp/test.go"}}]}}`,
 			wantProgress:  true,
-			expectedPhase: "Write",
+			expectedPhase: "Implementing",
 		},
 		{
-			name:          "tool use Bash",
-			json:          `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go build"}}]}}`,
+			name:          "tool use Read triggers Exploring phase",
+			json:          `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/test.go"}}]}}`,
 			wantProgress:  true,
-			expectedPhase: "Bash",
+			expectedPhase: "Exploring",
+		},
+		{
+			name:          "git commit triggers Committing phase",
+			json:          `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git commit -m 'test'"}}]}}`,
+			wantProgress:  true,
+			expectedPhase: "Committing",
 		},
 		{
 			name:       "result success",
@@ -137,9 +143,9 @@ func TestParseStreamEvent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			progressCalls = nil
-			toolCount := 0
+			state := &progressState{phase: "Starting"}
 
-			result, errMsg := runner.parseStreamEvent("TASK-1", tt.json, &toolCount)
+			result, errMsg := runner.parseStreamEvent("TASK-1", tt.json, state)
 
 			if result != tt.wantResult {
 				t.Errorf("result = %q, want %q", result, tt.wantResult)
