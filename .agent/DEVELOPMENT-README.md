@@ -69,6 +69,9 @@ if _, err := os.Stat(agentDir); err == nil {
 - [x] Phase-based progress (Exploring → Implementing → Testing → Committing)
 - [x] Visual progress bar with lipgloss styling
 - [x] Autonomous execution with `--dangerously-skip-permissions`
+- [x] **Navigator deep integration** - parse Navigator phases, status blocks, exit signals
+- [x] Navigator skill detection (nav-start, nav-loop, nav-task, etc.)
+- [x] File-based progress (.agent/ writes → Checkpoint/Documenting phases)
 - [ ] End-to-end testing with real Linear webhook
 - [ ] Git operations in executor (branch, commit, PR)
 - [ ] PR creation workflow
@@ -176,7 +179,7 @@ Required environment variables:
    Duration: 52s
 ```
 
-### Phases
+### Phases (Standard)
 | Phase | Triggers | Progress |
 |-------|----------|----------|
 | Starting | Init | 0-5% |
@@ -187,6 +190,22 @@ Required environment variables:
 | Testing | pytest/jest/go test | 75% |
 | Committing | git commit | 90% |
 | Completed | result event | 100% |
+
+### Navigator Phases (Auto-detected)
+| Phase | Detection | Progress |
+|-------|-----------|----------|
+| Navigator | `Navigator Session Started` | 10% |
+| Analyzing | `WORKFLOW CHECK` | 12% |
+| Task Mode | `TASK MODE ACTIVATED` | 15% |
+| Loop Mode | `nav-loop` skill | 20% |
+| Research | `PHASE: → RESEARCH` | 25% |
+| Implement | `PHASE: → IMPL` | 50% |
+| Verify | `PHASE: → VERIFY` | 80% |
+| Checkpoint | `.agent/.context-markers/` write | 88% |
+| Completing | `EXIT_SIGNAL: true` | 92% |
+| Complete | `LOOP COMPLETE` / `TASK MODE COMPLETE` | 95% |
+
+Navigator status blocks provide real progress via `Progress: N%` field.
 
 ## Documentation Loading Strategy
 
