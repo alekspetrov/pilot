@@ -306,13 +306,20 @@ Examples:
 			// Create the executor runner
 			runner := executor.NewRunner()
 
-			// Always set up progress callback for real-time updates
-			runner.OnProgress(func(taskID, phase string, progress int, message string) {
-				timestamp := time.Now().Format("15:04:05")
-				if message != "" {
-					fmt.Printf("   [%s] %s (%d%%): %s\n", timestamp, phase, progress, message)
+			// Create progress display (disabled in verbose mode - show raw JSON instead)
+			progress := executor.NewProgressDisplay(task.ID, taskDesc, !verbose)
+
+			// Set up progress callback
+			runner.OnProgress(func(taskID, phase string, pct int, message string) {
+				if verbose {
+					// Verbose mode: simple line output
+					timestamp := time.Now().Format("15:04:05")
+					if message != "" {
+						fmt.Printf("   [%s] %s (%d%%): %s\n", timestamp, phase, pct, message)
+					}
 				} else {
-					fmt.Printf("   [%s] %s (%d%%)\n", timestamp, phase, progress)
+					// Normal mode: visual progress display
+					progress.Update(phase, pct, message)
 				}
 			})
 
@@ -321,6 +328,9 @@ Examples:
 				fmt.Println("   (streaming raw JSON)")
 			}
 			fmt.Println()
+
+			// Start progress display
+			progress.Start()
 
 			// Create context with cancellation on SIGINT
 			ctx, cancel := context.WithCancel(context.Background())
@@ -340,6 +350,9 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("execution failed: %w", err)
 			}
+
+			// Finish progress display with result
+			progress.Finish(result.Success, result.Output)
 
 			fmt.Println()
 			fmt.Println("───────────────────────────────────────")
