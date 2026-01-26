@@ -43,7 +43,8 @@ if _, err := os.Stat(agentDir); err == nil {
 | Config System | ✅ Complete | `internal/config/` |
 | TUI Dashboard | ✅ Complete | `internal/dashboard/` |
 | Orchestrator (Python) | ✅ Complete | `orchestrator/` |
-| CLI Commands | ⚠️ Basic | `cmd/pilot/` |
+| CLI Commands | ✅ Complete | `cmd/pilot/` |
+| **Progress Display** | ✅ Complete | `internal/executor/progress.go` |
 
 ### Week 1-2 Progress ✅
 
@@ -62,11 +63,14 @@ if _, err := os.Stat(agentDir); err == nil {
 - [x] Pilot core integration
 - [x] Tests (24 passing)
 
-### Next Steps (Week 5-6)
+### Week 5-6 Progress ✅
 
+- [x] Real-time progress via `--output-format stream-json`
+- [x] Phase-based progress (Exploring → Implementing → Testing → Committing)
+- [x] Visual progress bar with lipgloss styling
+- [x] Autonomous execution with `--dangerously-skip-permissions`
 - [ ] End-to-end testing with real Linear webhook
-- [ ] TUI dashboard integration
-- [ ] Git operations in executor
+- [ ] Git operations in executor (branch, commit, PR)
 - [ ] PR creation workflow
 
 ## Project Structure
@@ -100,9 +104,10 @@ pilot/
 - `internal/adapters/slack/notifier.go` - Slack notifications
 
 ### Executor
-- `internal/executor/runner.go` - Claude Code process spawner
-- `internal/executor/git.go` - Git operations
-- `internal/executor/monitor.go` - Progress tracking
+- `internal/executor/runner.go` - Claude Code process spawner with stream-json parsing
+- `internal/executor/progress.go` - Visual progress bar display (lipgloss)
+- `internal/executor/monitor.go` - Task state tracking
+- `internal/executor/git.go` - Git operations (planned)
 
 ### Memory
 - `internal/memory/store.go` - SQLite storage
@@ -142,12 +147,46 @@ Required environment variables:
 
 ### Claude Code
 - Spawned by: `internal/executor/runner.go`
-- Command: `claude -p "task prompt"`
+- Command: `claude -p "prompt" --verbose --output-format stream-json --dangerously-skip-permissions`
 - Working dir: Project path from config
+- Progress: Phase-based updates parsed from stream-json events
+- Phases: Starting → Exploring → Implementing → Testing → Committing → Completed
 
 ### Slack
 - Notifications: Task started, progress, completed, failed
 - Handler: `internal/adapters/slack/notifier.go`
+
+## Progress Display
+
+`pilot task` shows real-time visual progress:
+
+```
+⏳ Executing task with Claude Code...
+
+   Implementing   [████████████░░░░░░░░] 60%  TASK-34473  45s
+
+   [14:35:15] Claude Code initialized
+   [14:35:18] Analyzing codebase...
+   [14:35:25] Creating App.tsx
+   [14:35:40] Installing dependencies...
+   [14:35:55] Committing changes...
+
+───────────────────────────────────────
+✅ Task completed successfully!
+   Duration: 52s
+```
+
+### Phases
+| Phase | Triggers | Progress |
+|-------|----------|----------|
+| Starting | Init | 0-5% |
+| Branching | git checkout/branch | 10% |
+| Exploring | Read/Glob/Grep | 15% |
+| Installing | npm/pip install | 30% |
+| Implementing | Write/Edit | 40-70% |
+| Testing | pytest/jest/go test | 75% |
+| Committing | git commit | 90% |
+| Completed | result event | 100% |
 
 ## Documentation Loading Strategy
 
