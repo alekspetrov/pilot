@@ -2,7 +2,11 @@
 
 > AI that ships your tickets.
 
-**Navigator guides. Pilot executes.**
+**[Navigator](https://github.com/anthropics/navigator) guides. Pilot executes.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Go Version](https://img.shields.io/badge/Go-1.22+-blue.svg)](https://golang.org)
+[![Tests](https://img.shields.io/badge/Tests-24%20passing-green.svg)]()
 
 Pilot is an autonomous AI development pipeline that receives tickets from Linear/Jira/Asana, implements features using Claude Code, and creates PRs for review.
 
