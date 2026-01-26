@@ -21,7 +21,8 @@ Pilot is an autonomous AI development pipeline that receives tickets from Linear
 
 ```bash
 # Install with Homebrew
-brew install alekspetrov/pilot/pilot
+brew tap alekspetrov/pilot
+brew install pilot
 
 # Configure
 pilot init
@@ -67,7 +68,8 @@ Manager creates ticket → Pilot ships code → Engineer reviews PR
 ### Homebrew (macOS/Linux)
 
 ```bash
-brew install alekspetrov/pilot/pilot
+brew tap alekspetrov/pilot
+brew install pilot
 ```
 
 ### From Source
