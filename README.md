@@ -1,6 +1,13 @@
-# Pilot
+```
+   ██████╗ ██╗██╗      ██████╗ ████████╗
+   ██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝
+   ██████╔╝██║██║     ██║   ██║   ██║
+   ██╔═══╝ ██║██║     ██║   ██║   ██║
+   ██║     ██║███████╗╚██████╔╝   ██║
+   ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝
 
-> AI that ships your tickets.
+   AI That Ships Your Tickets
+```
 
 **[Navigator](https://github.com/anthropics/navigator) guides. Pilot executes.**
 
