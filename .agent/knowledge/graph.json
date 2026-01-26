@@ -85,10 +85,12 @@
       },
       "mem-004": {
         "type": "pitfall",
-        "summary": "CRITICAL: Never remove Navigator integration from executor prompt when refactoring. The 'Start my Navigator session' prefix is core to Pilot's value proposition - context-efficient AI development. When simplifying code, preserve this integration.",
+        "summary": "CRITICAL: Navigator integration in executor prompt is THE CORE VALUE of Pilot. When refactoring BuildPrompt(), ALWAYS preserve 'Start my Navigator session' prefix. This was accidentally removed during 'simplification' - broke the entire system. Pilot without Navigator = just another Claude Code wrapper with no value.",
         "concepts": ["executor", "navigator-integration", "claude-code-integration"],
         "confidence": 1.0,
-        "created": "2026-01-26"
+        "severity": "critical",
+        "created": "2026-01-26",
+        "incident": "2026-01-26: Refactored buildPrompt to 'simplify', accidentally removed Navigator. User caught it after deployment."
       },
       "mem-005": {
         "type": "pattern",

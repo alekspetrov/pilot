@@ -2,6 +2,24 @@
 
 **AI that ships your tickets.**
 
+## ⚠️ CRITICAL: Core Architecture Constraint
+
+**NEVER remove Navigator integration from `internal/executor/runner.go`**
+
+The `BuildPrompt()` function MUST include `"Start my Navigator session"` prefix when `.agent/` exists. This is Pilot's core value proposition:
+
+```go
+// Check if project has Navigator initialized
+agentDir := filepath.Join(task.ProjectPath, ".agent")
+if _, err := os.Stat(agentDir); err == nil {
+    sb.WriteString("Start my Navigator session.\n\n")  // ← NEVER REMOVE
+}
+```
+
+**Incident 2026-01-26**: This was accidentally removed during "simplification" refactor. Pilot without Navigator = just another Claude Code wrapper with zero value.
+
+---
+
 ## Quick Navigation
 
 | Document | When to Read |
