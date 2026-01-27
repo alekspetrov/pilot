@@ -15,6 +15,7 @@ import (
 
 func newSetupCmd() *cobra.Command {
 	var skipOptional bool
+	var setupTunnel bool
 
 	cmd := &cobra.Command{
 		Use:   "setup",
@@ -27,11 +28,19 @@ Sets up:
   - Voice transcription
   - Daily briefs
   - Alerts
+  - Cloudflare Tunnel (with --tunnel flag)
 
 Examples:
   pilot setup              # Full interactive setup
-  pilot setup --skip-optional  # Skip optional features`,
+  pilot setup --skip-optional  # Skip optional features
+  pilot setup --tunnel     # Set up Cloudflare Tunnel for webhooks`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// If --tunnel flag, redirect to tunnel setup
+			if setupTunnel {
+				tunnelCmd := newTunnelSetupCmd()
+				return tunnelCmd.RunE(tunnelCmd, args)
+			}
+
 			reader := bufio.NewReader(os.Stdin)
 
 			// Load existing config or create new
@@ -162,6 +171,7 @@ Examples:
 	}
 
 	cmd.Flags().BoolVar(&skipOptional, "skip-optional", false, "Skip optional feature setup")
+	cmd.Flags().BoolVar(&setupTunnel, "tunnel", false, "Set up Cloudflare Tunnel for webhooks (runs pilot tunnel setup)")
 
 	return cmd
 }

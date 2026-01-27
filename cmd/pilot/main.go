@@ -59,6 +59,7 @@ func main() {
 		newDoctorCmd(),
 		newSetupCmd(),
 		newReplayCmd(),
+		newTunnelCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {

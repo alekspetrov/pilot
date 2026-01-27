@@ -19,6 +19,7 @@ import (
 	"github.com/alekspetrov/pilot/internal/gateway"
 	"github.com/alekspetrov/pilot/internal/logging"
 	"github.com/alekspetrov/pilot/internal/quality"
+	"github.com/alekspetrov/pilot/internal/tunnel"
 )
 
 // Config represents the main configuration
@@ -37,6 +38,7 @@ type Config struct {
 	Logging        *logging.Config     `yaml:"logging"`
 	Approval       *approval.Config    `yaml:"approval"`
 	Quality        *quality.Config     `yaml:"quality"`
+	Tunnel         *tunnel.Config      `yaml:"tunnel"`
 }
 
 // AdaptersConfig holds adapter configurations
@@ -256,6 +258,7 @@ func DefaultConfig() *Config {
 		Logging:  logging.DefaultConfig(),
 		Approval: approval.DefaultConfig(),
 		Quality:  quality.DefaultConfig(),
+		Tunnel:   tunnel.DefaultConfig(),
 	}
 }
 
