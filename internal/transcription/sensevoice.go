@@ -101,6 +101,12 @@ func (s *SenseVoice) Transcribe(ctx context.Context, audioPath string) (*Result,
 		return nil, fmt.Errorf("SenseVoice failed: %w\nOutput: %s", err, string(output))
 	}
 
+	// Extract JSON from output (funasr dumps logs to stdout)
+	jsonData := extractJSON(string(output))
+	if jsonData == "" {
+		return nil, fmt.Errorf("no JSON found in SenseVoice script output: %s", string(output))
+	}
+
 	// Parse JSON output
 	var result struct {
 		Text       string  `json:"text"`
@@ -109,8 +115,8 @@ func (s *SenseVoice) Transcribe(ctx context.Context, audioPath string) (*Result,
 		Duration   float64 `json:"duration"`
 	}
 
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse SenseVoice output: %w\nOutput: %s", err, string(output))
+	if err := json.Unmarshal([]byte(jsonData), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse SenseVoice output: %w\nJSON: %s", err, jsonData)
 	}
 
 	return &Result{
