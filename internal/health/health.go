@@ -466,24 +466,6 @@ func commandExists(cmd string) bool {
 	return err == nil
 }
 
-// checkPythonModule checks if a Python module is installed
-func checkPythonModule(module string) bool {
-	pythonPath := getPythonPath()
-	cmd := exec.Command(pythonPath, "-c", fmt.Sprintf("import %s", module))
-	return cmd.Run() == nil
-}
-
-// getPythonPath returns the path to Python, preferring ~/.pilot/venv if it exists
-func getPythonPath() string {
-	if home, err := os.UserHomeDir(); err == nil {
-		venvPython := filepath.Join(home, ".pilot", "venv", "bin", "python3")
-		if _, err := os.Stat(venvPython); err == nil {
-			return venvPython
-		}
-	}
-	return "python3"
-}
-
 // expandPath expands ~ to home directory
 func expandPath(path string) string {
 	if strings.HasPrefix(path, "~") {
@@ -582,17 +564,6 @@ func (r *HealthReport) ReadyToStart() bool {
 		}
 	}
 	return true
-}
-
-// pythonInstallHint returns the best pip/uv install command
-func pythonInstallHint(packages string) string {
-	if commandExists("uv") {
-		return "uv pip install " + packages
-	}
-	if commandExists("pip3") {
-		return "pip3 install " + packages
-	}
-	return "pip install " + packages
 }
 
 // commandExists checks if a command is available

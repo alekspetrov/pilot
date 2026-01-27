@@ -1659,35 +1659,3 @@ func (h *Handler) sendVoiceSetupPrompt(ctx context.Context, chatID string) {
 	}
 }
 
-// handleVoiceInstall handles voice dependency installation
-func (h *Handler) handleVoiceInstall(ctx context.Context, chatID, component string) {
-	var msg string
-	var err error
-
-	switch component {
-	case "ffmpeg":
-		_, _ = h.client.SendMessage(ctx, chatID, "📦 Installing ffmpeg... (this may take a minute)", "")
-		err = transcription.InstallFFmpeg(ctx)
-		if err != nil {
-			msg = fmt.Sprintf("❌ ffmpeg installation failed:\n%v\n\nTry installing manually.", err)
-		} else {
-			msg = "✅ ffmpeg installed!\n\nNow set openai_api_key in config and restart."
-			buttons := [][]InlineKeyboardButton{
-				{{Text: "🔍 Check Status", CallbackData: "voice_check_status"}},
-			}
-			_, _ = h.client.SendMessageWithKeyboard(ctx, chatID, msg, "", buttons)
-			return
-		}
-	}
-	_, _ = h.client.SendMessage(ctx, chatID, msg, "")
-}
-
-// handleVoiceStatus checks and reports voice setup status
-func (h *Handler) handleVoiceStatus(ctx context.Context, chatID string) {
-	status := transcription.CheckSetup(nil)
-	msg := transcription.FormatStatusMessage(status)
-	if len(status.Missing) == 0 && status.OpenAIKeySet {
-		msg += "\n\n🔄 Restart the bot to enable voice."
-	}
-	_, _ = h.client.SendMessage(ctx, chatID, msg, "")
-}
