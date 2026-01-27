@@ -270,7 +270,7 @@ internal/
 ├── logging/         Structured logging
 ├── memory/          Cross-project memory store
 ├── metrics/         Execution analytics
-└── transcription/   Voice-to-text (SenseVoice/Whisper)
+└── transcription/   Voice-to-text (Whisper API)
 ```
 
 ## Documentation
