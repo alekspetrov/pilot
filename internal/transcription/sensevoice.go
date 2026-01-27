@@ -10,6 +10,19 @@ import (
 	"strings"
 )
 
+// extractJSON finds and returns the first valid JSON object in the output
+// This is needed because funasr dumps logs/progress to stdout before the JSON
+func extractJSON(output string) string {
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "{") && strings.HasSuffix(line, "}") {
+			return line
+		}
+	}
+	return ""
+}
+
 // getPythonPath returns the path to Python, preferring ~/.pilot/venv if it exists
 func getPythonPath() string {
 	if home, err := os.UserHomeDir(); err == nil {
@@ -159,6 +172,12 @@ except Exception as e:
 		return nil, fmt.Errorf("SenseVoice inline failed: %w\nOutput: %s", err, string(output))
 	}
 
+	// Extract JSON from output (funasr dumps logs to stdout)
+	jsonData := extractJSON(string(output))
+	if jsonData == "" {
+		return nil, fmt.Errorf("no JSON found in SenseVoice output: %s", string(output))
+	}
+
 	// Parse JSON output
 	var result struct {
 		Text       string  `json:"text"`
@@ -168,8 +187,8 @@ except Exception as e:
 		Error      string  `json:"error,omitempty"`
 	}
 
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse SenseVoice output: %w\nOutput: %s", err, string(output))
+	if err := json.Unmarshal([]byte(jsonData), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse SenseVoice output: %w\nJSON: %s", err, jsonData)
 	}
 
 	if result.Error != "" {
