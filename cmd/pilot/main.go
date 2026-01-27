@@ -510,10 +510,32 @@ Example:
 						if err := killExistingTelegramBot(); err != nil {
 							return fmt.Errorf("failed to stop existing instance: %w", err)
 						}
-						// Wait for the process to fully terminate
-						time.Sleep(500 * time.Millisecond)
-						fmt.Println("   ✓ Existing instance stopped")
-						fmt.Println()
+
+						// Retry singleton check with exponential backoff
+						// Telegram API needs time to release the connection
+						fmt.Print("   Waiting for Telegram to release connection")
+						maxRetries := 10
+						var lastErr error
+						for i := 0; i < maxRetries; i++ {
+							// Exponential backoff: 500ms, 1s, 1.5s, 2s...
+							delay := time.Duration(500+i*500) * time.Millisecond
+							time.Sleep(delay)
+							fmt.Print(".")
+
+							if err := handler.CheckSingleton(ctx); err == nil {
+								fmt.Println(" ✓")
+								fmt.Println("   ✓ Existing instance stopped")
+								fmt.Println()
+								lastErr = nil
+								break
+							} else {
+								lastErr = err
+							}
+						}
+						if lastErr != nil {
+							fmt.Println(" ✗")
+							return fmt.Errorf("timeout waiting for Telegram to release connection after %d retries", maxRetries)
+						}
 					} else {
 						fmt.Println()
 						fmt.Println("❌ Another bot instance is already running")
