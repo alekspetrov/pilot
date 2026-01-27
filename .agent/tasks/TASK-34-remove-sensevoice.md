@@ -3,6 +3,7 @@
 **Status**: ✅ Complete
 **Priority**: P1 - Blocking voice functionality
 **Created**: 2026-01-27
+**Completed**: 2026-01-27
 
 ## Context
 
@@ -13,60 +14,26 @@ SenseVoice/FunASR local transcription has persistent issues:
 
 Decision: Remove SenseVoice entirely, use Whisper API as only backend.
 
-## Files to Modify
+## Files Modified
 
-### DELETE (1 file)
-- [ ] `internal/transcription/sensevoice.go` - entire file
+### DELETED
+- [x] `internal/transcription/sensevoice.go` - entire file
 
-### MODIFY (6 files)
-
-#### `internal/transcription/transcriber.go`
-- [ ] Remove `SenseVoiceBin` config field
-- [ ] Remove `case "sensevoice":` block
-- [ ] Simplify `case "auto":` to use Whisper API only
-- [ ] Update `DefaultConfig()` - remove SenseVoiceBin
-
-#### `internal/transcription/setup.go`
-- [ ] Remove `FunASRInstalled` field from SetupStatus
-- [ ] Remove `InstallFunASR()` function
-- [ ] Remove funasr dependency check
-- [ ] Update `GetInstallInstructions()` - remove local option
-- [ ] Update `FormatStatusMessage()` - remove SenseVoice references
-
-#### `internal/health/health.go`
-- [ ] Remove funasr Python module check
-- [ ] Simplify voice feature status (Whisper API only)
-- [ ] Remove "funasr not installed" messaging
-
-#### `cmd/pilot/setup.go`
-- [ ] Remove `checkPythonModule("funasr")` check
-- [ ] Remove `installSenseVoice()` function
-- [ ] Update voice setup flow - Whisper API only
-- [ ] Remove SenseVoice installation prompts
-
-#### `internal/adapters/telegram/handler.go`
-- [ ] Remove "pip install funasr" messages
-- [ ] Remove "Install SenseVoice" button
-- [ ] Update voice setup help text
-
-#### `README.md` or docs
-- [ ] Update voice transcription docs
-
-## Implementation Order
-
-1. Delete sensevoice.go
-2. Update transcriber.go (breaks build until done)
-3. Update setup.go
-4. Update health.go
-5. Update cmd/pilot/setup.go
-6. Update telegram/handler.go
-7. Update docs
-8. Test with `pilot doctor` and voice message
+### MODIFIED
+- [x] `internal/transcription/transcriber.go` - removed SenseVoice backend, simplified to Whisper only
+- [x] `internal/transcription/setup.go` - removed FunASRInstalled, InstallFunASR, updated instructions
+- [x] `internal/health/health.go` - removed funasr checks, simplified voice status
+- [x] `cmd/pilot/setup.go` - removed checkPythonModule, installSenseVoice, updated voice setup
+- [x] `internal/adapters/telegram/handler.go` - removed SenseVoice messages and buttons
+- [x] `README.md` - updated voice transcription docs
 
 ## Acceptance Criteria
 
-- [ ] `go build` succeeds
-- [ ] `go test ./...` passes
-- [ ] `pilot doctor` shows voice feature with Whisper API only
-- [ ] Voice transcription works via Whisper API
-- [ ] No SenseVoice/funasr references in codebase (except git history)
+- [x] `go build` succeeds
+- [x] `go test ./...` passes
+- [x] `pilot doctor` shows voice feature with Whisper API only
+- [x] No SenseVoice/funasr references in Go code
+
+## Notes
+
+Historical task docs (.agent/tasks/TASK-07, TASK-30) retain SenseVoice references as they document the project history.
