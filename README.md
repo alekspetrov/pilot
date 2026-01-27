@@ -32,7 +32,7 @@ Autonomous AI development pipeline. Receives tickets, implements features, creat
 | **Alerting** | ✅ | Task failures, cost thresholds, stuck detection |
 | **Cross-Project Memory** | ✅ | Shared context across repositories |
 | **Execution Metrics** | ✅ | Token usage, cost tracking, performance analytics |
-| **Voice Transcription** | ✅ | SenseVoice (local) + Whisper API fallback |
+| **Voice Transcription** | ✅ | Whisper API (OpenAI) |
 | **Image Analysis** | ✅ | Multimodal input via Telegram |
 | **Structured Logging** | ✅ | JSON logs with correlation IDs |
 | **Usage Metering** | ✅ | Billing foundation for Pilot Cloud |

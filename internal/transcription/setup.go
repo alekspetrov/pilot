@@ -19,7 +19,6 @@ type Dependency struct {
 // SetupStatus represents the voice transcription setup status
 type SetupStatus struct {
 	FFmpegInstalled    bool
-	FunASRInstalled    bool
 	OpenAIKeySet       bool
 	Platform           string
 	Missing            []Dependency
@@ -44,29 +43,23 @@ func CheckSetup(config *Config) *SetupStatus {
 		})
 	}
 
-	// Check funasr (SenseVoice)
-	status.FunASRInstalled = checkPythonModule("funasr")
-	if !status.FunASRInstalled {
-		status.Missing = append(status.Missing, Dependency{
-			Name:        "funasr",
-			Description: "Local transcription (free, private)",
-			InstallCmd:  "pip3 install funasr torch torchaudio torchcodec",
-			Required:    false,
-		})
-	}
-
 	// Check OpenAI key
 	if config != nil && config.OpenAIAPIKey != "" {
 		status.OpenAIKeySet = true
+	} else {
+		status.Missing = append(status.Missing, Dependency{
+			Name:        "OPENAI_API_KEY",
+			Description: "Whisper API transcription",
+			InstallCmd:  "Set openai_api_key in ~/.pilot/config.yaml",
+			Required:    true,
+		})
 	}
 
 	// Determine if we can auto-install
 	status.CanAutoInstall = canAutoInstall()
 
 	// Recommend backend
-	if status.FunASRInstalled {
-		status.RecommendedBackend = "sensevoice"
-	} else if status.OpenAIKeySet {
+	if status.OpenAIKeySet {
 		status.RecommendedBackend = "whisper-api"
 	} else {
 		status.RecommendedBackend = "none"
@@ -83,35 +76,6 @@ func InstallFFmpeg(ctx context.Context) error {
 	}
 
 	return runInstallCmd(ctx, cmd)
-}
-
-// InstallFunASR attempts to install funasr and dependencies
-func InstallFunASR(ctx context.Context) error {
-	// Prefer uv (faster), fall back to pip3
-	if commandExists("uv") {
-		return runInstallCmd(ctx, "uv pip install funasr torch torchaudio torchcodec")
-	}
-	if commandExists("pip3") {
-		return runInstallCmd(ctx, "pip3 install funasr torch torchaudio torchcodec")
-	}
-	if commandExists("pip") {
-		return runInstallCmd(ctx, "pip install funasr torch torchaudio torchcodec")
-	}
-	return fmt.Errorf("no pip or uv found - install Python first")
-}
-
-// pythonInstallCmd returns the best available Python package installer command
-func pythonInstallCmd() string {
-	if commandExists("uv") {
-		return "uv pip install"
-	}
-	if commandExists("pip3") {
-		return "pip3 install"
-	}
-	if commandExists("pip") {
-		return "pip install"
-	}
-	return ""
 }
 
 // ffmpegInstallCmd returns the platform-specific ffmpeg install command
@@ -202,12 +166,6 @@ func commandExists(cmd string) bool {
 	return err == nil
 }
 
-// checkPythonModule checks if a Python module is installed
-func checkPythonModule(module string) bool {
-	cmd := exec.Command(getPythonPath(), "-c", fmt.Sprintf("import %s", module))
-	return cmd.Run() == nil
-}
-
 // GetInstallInstructions returns human-readable install instructions
 func GetInstallInstructions() string {
 	var sb strings.Builder
@@ -227,12 +185,12 @@ func GetInstallInstructions() string {
 		sb.WriteString("   or: choco install ffmpeg\n")
 	}
 
-	sb.WriteString("\n2. Choose transcription backend:\n\n")
-	sb.WriteString("   Option A - Local (free, private):\n")
-	sb.WriteString("   pip3 install funasr torch torchaudio torchcodec\n")
-	sb.WriteString("   (downloads ~2GB model on first use)\n\n")
-	sb.WriteString("   Option B - Cloud (faster, paid):\n")
-	sb.WriteString("   Set OPENAI_API_KEY in your config\n")
+	sb.WriteString("\n2. Set OpenAI API key:\n")
+	sb.WriteString("   Add to ~/.pilot/config.yaml:\n")
+	sb.WriteString("   adapters:\n")
+	sb.WriteString("     telegram:\n")
+	sb.WriteString("       transcription:\n")
+	sb.WriteString("         openai_api_key: \"sk-...\"\n")
 
 	sb.WriteString("\n3. Restart the bot\n")
 
@@ -243,9 +201,9 @@ func GetInstallInstructions() string {
 func FormatStatusMessage(status *SetupStatus) string {
 	var sb strings.Builder
 
-	if len(status.Missing) == 0 && (status.FunASRInstalled || status.OpenAIKeySet) {
-		sb.WriteString("Voice transcription is ready!\n")
-		sb.WriteString("Backend: " + status.RecommendedBackend)
+	if status.FFmpegInstalled && status.OpenAIKeySet {
+		sb.WriteString("✅ Voice transcription is ready!\n")
+		sb.WriteString("Backend: Whisper API")
 		return sb.String()
 	}
 
@@ -254,17 +212,15 @@ func FormatStatusMessage(status *SetupStatus) string {
 
 	// Show what's installed
 	if status.FFmpegInstalled {
-		sb.WriteString("ffmpeg: installed\n")
+		sb.WriteString("✓ ffmpeg: installed\n")
 	} else {
-		sb.WriteString("ffmpeg: missing (required)\n")
+		sb.WriteString("✗ ffmpeg: missing (required)\n")
 	}
 
-	if status.FunASRInstalled {
-		sb.WriteString("SenseVoice: installed\n")
-	} else if status.OpenAIKeySet {
-		sb.WriteString("Whisper API: configured\n")
+	if status.OpenAIKeySet {
+		sb.WriteString("✓ Whisper API: configured\n")
 	} else {
-		sb.WriteString("Backend: none configured\n")
+		sb.WriteString("✗ OpenAI API key: not set\n")
 	}
 
 	// Show what's needed

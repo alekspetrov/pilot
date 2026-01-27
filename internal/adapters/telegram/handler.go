@@ -1034,10 +1034,8 @@ func (h *Handler) voiceNotAvailableMessage() string {
 			return sb.String()
 		}
 		if strings.Contains(errStr, "no backend") || strings.Contains(errStr, "API key") {
-			sb.WriteString("Missing: transcription backend\n\n")
-			sb.WriteString("Options:\n")
-			sb.WriteString("• pip install funasr torch torchaudio torchcodec (local, free)\n")
-			sb.WriteString("• Set OPENAI_API_KEY (cloud, paid)\n\n")
+			sb.WriteString("Missing: OpenAI API key\n\n")
+			sb.WriteString("Set openai_api_key in ~/.pilot/config.yaml\n")
 			sb.WriteString("Then restart bot.")
 			return sb.String()
 		}
@@ -1046,9 +1044,7 @@ func (h *Handler) voiceNotAvailableMessage() string {
 	// Generic guidance
 	sb.WriteString("To enable voice:\n")
 	sb.WriteString("1. Install ffmpeg: brew install ffmpeg\n")
-	sb.WriteString("2. Set up transcription backend:\n")
-	sb.WriteString("   • pip install funasr (local)\n")
-	sb.WriteString("   • or set OPENAI_API_KEY (cloud)\n")
+	sb.WriteString("2. Set openai_api_key in ~/.pilot/config.yaml\n")
 	sb.WriteString("3. Restart bot\n\n")
 	sb.WriteString("Run 'pilot doctor' to check setup.")
 	return sb.String()
@@ -1646,14 +1642,9 @@ func (h *Handler) sendVoiceSetupPrompt(ctx context.Context, chatID string) {
 		}
 	}
 
-	if !status.FunASRInstalled && !status.OpenAIKeySet {
-		sb.WriteString("\nMissing: transcription backend\n")
-		sb.WriteString("Options:\n")
-		sb.WriteString("• SenseVoice (local, free, private)\n")
-		sb.WriteString("• Whisper API (cloud, fast, paid)\n")
-		buttons = append(buttons, []InlineKeyboardButton{
-			{Text: "📦 Install SenseVoice", CallbackData: "voice_install_funasr"},
-		})
+	if !status.OpenAIKeySet {
+		sb.WriteString("\nMissing: OpenAI API key for Whisper\n")
+		sb.WriteString("Set openai_api_key in ~/.pilot/config.yaml\n")
 	}
 
 	buttons = append(buttons, []InlineKeyboardButton{
@@ -1680,21 +1671,12 @@ func (h *Handler) handleVoiceInstall(ctx context.Context, chatID, component stri
 		if err != nil {
 			msg = fmt.Sprintf("❌ ffmpeg installation failed:\n%v\n\nTry installing manually.", err)
 		} else {
-			msg = "✅ ffmpeg installed!\n\nNow you need a transcription backend."
+			msg = "✅ ffmpeg installed!\n\nNow set openai_api_key in config and restart."
 			buttons := [][]InlineKeyboardButton{
-				{{Text: "📦 Install SenseVoice", CallbackData: "voice_install_funasr"}},
 				{{Text: "🔍 Check Status", CallbackData: "voice_check_status"}},
 			}
 			_, _ = h.client.SendMessageWithKeyboard(ctx, chatID, msg, "", buttons)
 			return
-		}
-	case "funasr":
-		_, _ = h.client.SendMessage(ctx, chatID, "📦 Installing SenseVoice...\n\nThis may take several minutes.", "")
-		err = transcription.InstallFunASR(ctx)
-		if err != nil {
-			msg = fmt.Sprintf("❌ Installation failed:\n%v\n\nTry: pip3 install funasr torch torchaudio torchcodec", err)
-		} else {
-			msg = "✅ SenseVoice installed!\n\n🔄 Restart the bot to enable voice."
 		}
 	}
 	_, _ = h.client.SendMessage(ctx, chatID, msg, "")
@@ -1704,7 +1686,7 @@ func (h *Handler) handleVoiceInstall(ctx context.Context, chatID, component stri
 func (h *Handler) handleVoiceStatus(ctx context.Context, chatID string) {
 	status := transcription.CheckSetup(nil)
 	msg := transcription.FormatStatusMessage(status)
-	if len(status.Missing) == 0 && (status.FunASRInstalled || status.OpenAIKeySet) {
+	if len(status.Missing) == 0 && status.OpenAIKeySet {
 		msg += "\n\n🔄 Restart the bot to enable voice."
 	}
 	_, _ = h.client.SendMessage(ctx, chatID, msg, "")

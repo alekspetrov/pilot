@@ -28,18 +28,16 @@ type Transcriber interface {
 
 // Config holds transcription configuration
 type Config struct {
-	Backend       string `yaml:"backend"`        // "sensevoice", "whisper-api", "auto"
-	OpenAIAPIKey  string `yaml:"openai_api_key"` // For Whisper API fallback
-	SenseVoiceBin string `yaml:"sensevoice_bin"` // Path to SenseVoice Python script
-	FFmpegPath    string `yaml:"ffmpeg_path"`    // Path to ffmpeg binary
+	Backend      string `yaml:"backend"`        // "whisper-api" or "auto"
+	OpenAIAPIKey string `yaml:"openai_api_key"` // OpenAI API key for Whisper
+	FFmpegPath   string `yaml:"ffmpeg_path"`    // Path to ffmpeg binary
 }
 
 // DefaultConfig returns default transcription configuration
 func DefaultConfig() *Config {
 	return &Config{
-		Backend:       "auto",
-		FFmpegPath:    "ffmpeg",
-		SenseVoiceBin: "", // Will use bundled script
+		Backend:    "auto",
+		FFmpegPath: "ffmpeg",
 	}
 }
 
@@ -66,35 +64,11 @@ func NewService(config *Config) (*Service, error) {
 		s.ffmpegPath = "ffmpeg"
 	}
 
-	// Initialize backends based on config
-	switch config.Backend {
-	case "sensevoice":
-		s.primary = NewSenseVoice(config.SenseVoiceBin)
-		if config.OpenAIAPIKey != "" {
-			s.fallback = NewWhisperAPI(config.OpenAIAPIKey)
-		}
-	case "whisper-api":
-		if config.OpenAIAPIKey == "" {
-			return nil, fmt.Errorf("OpenAI API key required for whisper-api backend")
-		}
-		s.primary = NewWhisperAPI(config.OpenAIAPIKey)
-	case "auto":
-		// Try SenseVoice first, fall back to Whisper API
-		sv := NewSenseVoice(config.SenseVoiceBin)
-		if sv.Available() {
-			s.primary = sv
-		}
-		if config.OpenAIAPIKey != "" {
-			wa := NewWhisperAPI(config.OpenAIAPIKey)
-			if s.primary == nil {
-				s.primary = wa
-			} else {
-				s.fallback = wa
-			}
-		}
-	default:
-		return nil, fmt.Errorf("unknown transcription backend: %s", config.Backend)
+	// Initialize Whisper API backend
+	if config.OpenAIAPIKey == "" {
+		return nil, fmt.Errorf("OpenAI API key required for transcription (set openai_api_key in config)")
 	}
+	s.primary = NewWhisperAPI(config.OpenAIAPIKey)
 
 	if s.primary == nil {
 		return nil, fmt.Errorf("no transcription backend available")

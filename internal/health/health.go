@@ -152,32 +152,6 @@ func checkDependencies() []Check {
 		})
 	}
 
-	// Check Python (optional, for SenseVoice)
-	if version := getCommandVersion("python3", "--version"); version != "" {
-		// Check if funasr is installed
-		hasFunasr := checkPythonModule("funasr")
-		if hasFunasr {
-			checks = append(checks, Check{
-				Name:    "python3",
-				Status:  StatusOK,
-				Message: version + " + funasr",
-			})
-		} else {
-			checks = append(checks, Check{
-				Name:    "python3",
-				Status:  StatusWarning,
-				Message: version + " (funasr not installed)",
-				Fix:     pythonInstallHint("funasr torch torchaudio torchcodec"),
-			})
-		}
-	} else {
-		checks = append(checks, Check{
-			Name:    "python3",
-			Status:  StatusWarning,
-			Message: "not found (SenseVoice unavailable)",
-			Fix:     "brew install python@3",
-		})
-	}
 
 	// Check gh CLI (optional, for PRs)
 	if version := getCommandVersion("gh", "--version"); version != "" {
@@ -384,7 +358,6 @@ func checkFeatures(cfg *config.Config) []FeatureStatus {
 
 	// Voice transcription
 	hasFFmpeg := commandExists("ffmpeg")
-	hasFunasr := checkPythonModule("funasr")
 	hasOpenAIKey := cfg.Adapters != nil &&
 		cfg.Adapters.Telegram != nil &&
 		cfg.Adapters.Telegram.Transcription != nil &&
@@ -396,24 +369,20 @@ func checkFeatures(cfg *config.Config) []FeatureStatus {
 	voiceEnabled := false
 	voiceDegraded := false
 
-	if hasFFmpeg {
+	if hasFFmpeg && hasOpenAIKey {
 		voiceEnabled = true
-		if hasFunasr {
-			voiceStatus = StatusOK
-			voiceNote = "SenseVoice"
-		} else if hasOpenAIKey {
-			voiceStatus = StatusOK
-			voiceNote = "Whisper API"
-		} else {
-			voiceStatus = StatusWarning
-			voiceNote = "no backend configured"
-			voiceDegraded = true
-			voiceMissing = append(voiceMissing, "funasr or OPENAI_API_KEY")
-		}
+		voiceStatus = StatusOK
+		voiceNote = "Whisper API"
 	} else {
 		voiceStatus = StatusWarning
-		voiceNote = "no ffmpeg"
-		voiceMissing = append(voiceMissing, "ffmpeg")
+		voiceDegraded = true
+		if !hasFFmpeg {
+			voiceMissing = append(voiceMissing, "ffmpeg")
+		}
+		if !hasOpenAIKey {
+			voiceMissing = append(voiceMissing, "OPENAI_API_KEY")
+		}
+		voiceNote = "missing: " + strings.Join(voiceMissing, ", ")
 	}
 
 	features = append(features, FeatureStatus{
