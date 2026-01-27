@@ -167,7 +167,7 @@ func checkDependencies() []Check {
 				Name:    "python3",
 				Status:  StatusWarning,
 				Message: version + " (funasr not installed)",
-				Fix:     pythonInstallHint("funasr torch torchaudio"),
+				Fix:     pythonInstallHint("funasr torch torchaudio torchcodec"),
 			})
 		}
 	} else {

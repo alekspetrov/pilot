@@ -567,10 +567,10 @@ func installSenseVoice() error {
 	fmt.Println("  Installing SenseVoice (this may take a few minutes)...")
 	var installCmd *exec.Cmd
 	if commandExists("uv") {
-		installCmd = exec.Command("uv", "pip", "install", "--python", venvPython, "funasr", "torch", "torchaudio")
+		installCmd = exec.Command("uv", "pip", "install", "--python", venvPython, "funasr", "torch", "torchaudio", "torchcodec")
 	} else {
 		pipPath := filepath.Join(venvPath, "bin", "pip")
-		installCmd = exec.Command(pipPath, "install", "funasr", "torch", "torchaudio")
+		installCmd = exec.Command(pipPath, "install", "funasr", "torch", "torchaudio", "torchcodec")
 	}
 	installCmd.Stdout = os.Stdout
 	installCmd.Stderr = os.Stderr

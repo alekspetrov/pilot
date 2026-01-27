@@ -1036,7 +1036,7 @@ func (h *Handler) voiceNotAvailableMessage() string {
 		if strings.Contains(errStr, "no backend") || strings.Contains(errStr, "API key") {
 			sb.WriteString("Missing: transcription backend\n\n")
 			sb.WriteString("Options:\n")
-			sb.WriteString("• pip install funasr torch torchaudio (local, free)\n")
+			sb.WriteString("• pip install funasr torch torchaudio torchcodec (local, free)\n")
 			sb.WriteString("• Set OPENAI_API_KEY (cloud, paid)\n\n")
 			sb.WriteString("Then restart bot.")
 			return sb.String()
@@ -1692,7 +1692,7 @@ func (h *Handler) handleVoiceInstall(ctx context.Context, chatID, component stri
 		_, _ = h.client.SendMessage(ctx, chatID, "📦 Installing SenseVoice...\n\nThis may take several minutes.", "")
 		err = transcription.InstallFunASR(ctx)
 		if err != nil {
-			msg = fmt.Sprintf("❌ Installation failed:\n%v\n\nTry: pip3 install funasr torch torchaudio", err)
+			msg = fmt.Sprintf("❌ Installation failed:\n%v\n\nTry: pip3 install funasr torch torchaudio torchcodec", err)
 		} else {
 			msg = "✅ SenseVoice installed!\n\n🔄 Restart the bot to enable voice."
 		}

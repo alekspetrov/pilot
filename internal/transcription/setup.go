@@ -50,7 +50,7 @@ func CheckSetup(config *Config) *SetupStatus {
 		status.Missing = append(status.Missing, Dependency{
 			Name:        "funasr",
 			Description: "Local transcription (free, private)",
-			InstallCmd:  "pip3 install funasr torch torchaudio",
+			InstallCmd:  "pip3 install funasr torch torchaudio torchcodec",
 			Required:    false,
 		})
 	}
@@ -89,13 +89,13 @@ func InstallFFmpeg(ctx context.Context) error {
 func InstallFunASR(ctx context.Context) error {
 	// Prefer uv (faster), fall back to pip3
 	if commandExists("uv") {
-		return runInstallCmd(ctx, "uv pip install funasr torch torchaudio")
+		return runInstallCmd(ctx, "uv pip install funasr torch torchaudio torchcodec")
 	}
 	if commandExists("pip3") {
-		return runInstallCmd(ctx, "pip3 install funasr torch torchaudio")
+		return runInstallCmd(ctx, "pip3 install funasr torch torchaudio torchcodec")
 	}
 	if commandExists("pip") {
-		return runInstallCmd(ctx, "pip install funasr torch torchaudio")
+		return runInstallCmd(ctx, "pip install funasr torch torchaudio torchcodec")
 	}
 	return fmt.Errorf("no pip or uv found - install Python first")
 }
@@ -229,7 +229,7 @@ func GetInstallInstructions() string {
 
 	sb.WriteString("\n2. Choose transcription backend:\n\n")
 	sb.WriteString("   Option A - Local (free, private):\n")
-	sb.WriteString("   pip3 install funasr torch torchaudio\n")
+	sb.WriteString("   pip3 install funasr torch torchaudio torchcodec\n")
 	sb.WriteString("   (downloads ~2GB model on first use)\n\n")
 	sb.WriteString("   Option B - Cloud (faster, paid):\n")
 	sb.WriteString("   Set OPENAI_API_KEY in your config\n")
