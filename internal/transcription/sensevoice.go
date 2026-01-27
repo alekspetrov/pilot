@@ -132,6 +132,15 @@ func (s *SenseVoice) transcribeInline(ctx context.Context, audioPath string) (*R
 	pythonCode := fmt.Sprintf(`
 import json
 import sys
+import os
+import warnings
+
+# Suppress all logging and warnings
+os.environ["MODELSCOPE_LOG_LEVEL"] = "ERROR"
+os.environ["FUNASR_LOG_LEVEL"] = "ERROR"
+warnings.filterwarnings("ignore")
+import logging
+logging.disable(logging.CRITICAL)
 
 try:
     from funasr import AutoModel
