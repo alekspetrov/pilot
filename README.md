@@ -73,7 +73,7 @@ brew reinstall pilot
 
 - Go 1.22+ (build only)
 - [Claude Code CLI](https://github.com/anthropics/claude-code) 2.1.17+
-- ffmpeg (optional, for voice)
+- OpenAI API key (optional, for voice transcription)
 
 ## Quick Start
 

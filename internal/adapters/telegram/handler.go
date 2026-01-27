@@ -925,8 +925,6 @@ func (h *Handler) handleVoice(ctx context.Context, chatID string, msg *Message) 
 	}
 	defer func() {
 		_ = os.Remove(audioPath)
-		// Also cleanup any converted WAV file
-		transcription.CleanupWav(audioPath)
 	}()
 
 	// Transcribe the audio
@@ -1025,14 +1023,6 @@ func (h *Handler) voiceNotAvailableMessage() string {
 	// Check what's missing based on the error
 	if h.transcriptionErr != nil {
 		errStr := h.transcriptionErr.Error()
-		if strings.Contains(errStr, "ffmpeg") {
-			sb.WriteString("Missing: ffmpeg\n\n")
-			sb.WriteString("To enable voice messages:\n")
-			sb.WriteString("1. brew install ffmpeg\n")
-			sb.WriteString("2. Restart bot\n\n")
-			sb.WriteString("Or set OPENAI_API_KEY for cloud fallback.")
-			return sb.String()
-		}
 		if strings.Contains(errStr, "no backend") || strings.Contains(errStr, "API key") {
 			sb.WriteString("Missing: OpenAI API key\n\n")
 			sb.WriteString("Set openai_api_key in ~/.pilot/config.yaml\n")
@@ -1043,9 +1033,8 @@ func (h *Handler) voiceNotAvailableMessage() string {
 
 	// Generic guidance
 	sb.WriteString("To enable voice:\n")
-	sb.WriteString("1. Install ffmpeg: brew install ffmpeg\n")
-	sb.WriteString("2. Set openai_api_key in ~/.pilot/config.yaml\n")
-	sb.WriteString("3. Restart bot\n\n")
+	sb.WriteString("1. Set openai_api_key in ~/.pilot/config.yaml\n")
+	sb.WriteString("2. Restart bot\n\n")
 	sb.WriteString("Run 'pilot doctor' to check setup.")
 	return sb.String()
 }
@@ -1627,35 +1616,23 @@ func (h *Handler) sendVoiceSetupPrompt(ctx context.Context, chatID string) {
 	status := transcription.CheckSetup(nil)
 
 	var sb strings.Builder
+
+	if status.OpenAIKeySet {
+		sb.WriteString("✅ Voice transcription is ready!\n")
+		sb.WriteString("Backend: Whisper API")
+		_, _ = h.client.SendMessage(ctx, chatID, sb.String(), "")
+		return
+	}
+
 	sb.WriteString("🎤 Voice transcription not available\n\n")
+	sb.WriteString("Missing: OpenAI API key for Whisper\n")
+	sb.WriteString("Set openai_api_key in ~/.pilot/config.yaml\n")
 
 	var buttons [][]InlineKeyboardButton
-
-	if !status.FFmpegInstalled {
-		sb.WriteString("Missing: ffmpeg (required for audio)\n")
-		if status.CanAutoInstall {
-			buttons = append(buttons, []InlineKeyboardButton{
-				{Text: "📦 Install ffmpeg", CallbackData: "voice_install_ffmpeg"},
-			})
-		} else {
-			sb.WriteString(fmt.Sprintf("→ %s\n", transcription.GetInstallInstructions()))
-		}
-	}
-
-	if !status.OpenAIKeySet {
-		sb.WriteString("\nMissing: OpenAI API key for Whisper\n")
-		sb.WriteString("Set openai_api_key in ~/.pilot/config.yaml\n")
-	}
-
 	buttons = append(buttons, []InlineKeyboardButton{
 		{Text: "🔍 Check Status", CallbackData: "voice_check_status"},
 	})
 
-	if len(buttons) > 0 {
-		_, _ = h.client.SendMessageWithKeyboard(ctx, chatID, sb.String(), "", buttons)
-	} else {
-		sb.WriteString("\nRun 'pilot doctor' for full diagnostics.")
-		_, _ = h.client.SendMessage(ctx, chatID, sb.String(), "")
-	}
+	_, _ = h.client.SendMessageWithKeyboard(ctx, chatID, sb.String(), "", buttons)
 }
 

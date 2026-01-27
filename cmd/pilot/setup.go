@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -294,31 +293,6 @@ func setupProjects(reader *bufio.Reader, cfg *config.Config) error {
 }
 
 func setupVoice(reader *bufio.Reader, cfg *config.Config) error {
-	// Check ffmpeg
-	hasFFmpeg := commandExists("ffmpeg")
-	if !hasFFmpeg {
-		fmt.Println("  ffmpeg not found (required for voice)")
-		fmt.Print("  Install ffmpeg now? [Y/n]: ")
-		if readYesNo(reader, true) {
-			fmt.Print("  Installing... ")
-			if err := installFFmpeg(); err != nil {
-				fmt.Println("✗")
-				fmt.Printf("  ⚠️  Install failed: %v\n", err)
-				fmt.Println("  → Install manually: brew install ffmpeg")
-			} else {
-				fmt.Println("✓")
-				hasFFmpeg = true
-			}
-		}
-	} else {
-		fmt.Println("  ✓ ffmpeg found")
-	}
-
-	if !hasFFmpeg {
-		fmt.Println("  ○ Voice transcription not available")
-		return nil
-	}
-
 	// Initialize transcription config
 	if cfg.Adapters.Telegram == nil {
 		cfg.Adapters.Telegram = telegram.DefaultConfig()
@@ -467,11 +441,6 @@ func expandPath(path string) string {
 	return path
 }
 
-func commandExists(cmd string) bool {
-	_, err := exec.LookPath(cmd)
-	return err == nil
-}
-
 func validateTelegramToken(token string) error {
 	// Simple validation - check format
 	if !strings.Contains(token, ":") {
@@ -481,10 +450,3 @@ func validateTelegramToken(token string) error {
 	return nil
 }
 
-func installFFmpeg() error {
-	// Try homebrew on macOS
-	cmd := exec.Command("brew", "install", "ffmpeg")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
