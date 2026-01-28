@@ -640,6 +640,16 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 				log.Info("Recording saved", slog.String("recording_id", recorder.GetRecordingID()))
 			}
 		}
+
+		// Sync Navigator index if project has Navigator (GH-57)
+		if state.hasNavigator {
+			navSync := NewNavigatorIndexSync(task.ProjectPath)
+			if syncErr := navSync.SyncTaskCompleted(task.ID); syncErr != nil {
+				log.Warn("Failed to sync Navigator index", slog.Any("error", syncErr))
+			} else {
+				log.Debug("Navigator index synced", slog.String("task_id", task.ID))
+			}
+		}
 	}
 
 	return result, nil
