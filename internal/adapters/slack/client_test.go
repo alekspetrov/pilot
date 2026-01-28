@@ -20,7 +20,7 @@ func TestNewClient(t *testing.T) {
 	}{
 		{
 			name:     "valid token",
-			botToken: "xoxb-123456789012-1234567890123-abcdefghijklmnopqrstuvwx",
+			botToken: "xoxb-test-fake-token-for-testing",
 		},
 		{
 			name:     "empty token",

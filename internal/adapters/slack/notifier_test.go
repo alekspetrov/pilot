@@ -82,15 +82,15 @@ func TestDefaultConfig(t *testing.T) {
 func TestConfigFields(t *testing.T) {
 	config := &Config{
 		Enabled:  true,
-		BotToken: "xoxb-123-456-abc",
+		BotToken: "test-slack-token",
 		Channel:  "#pilot-notifications",
 	}
 
 	if !config.Enabled {
 		t.Error("Enabled should be true")
 	}
-	if config.BotToken != "xoxb-123-456-abc" {
-		t.Errorf("BotToken = %q, want xoxb-123-456-abc", config.BotToken)
+	if config.BotToken != "test-slack-token" {
+		t.Errorf("BotToken = %q, want test-slack-token", config.BotToken)
 	}
 	if config.Channel != "#pilot-notifications" {
 		t.Errorf("Channel = %q, want #pilot-notifications", config.Channel)

@@ -22,7 +22,9 @@ func (m *mockHandler) Name() string {
 }
 
 func (m *mockHandler) SendApprovalRequest(ctx context.Context, req *Request) (<-chan *Response, error) {
+	m.mu.Lock()
 	m.sentReqs = append(m.sentReqs, req)
+	m.mu.Unlock()
 	ch := make(chan *Response, 1)
 	if m.respondWith != nil {
 		go func() {
