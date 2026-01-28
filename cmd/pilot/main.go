@@ -27,6 +27,7 @@ import (
 	"github.com/alekspetrov/pilot/internal/executor"
 	"github.com/alekspetrov/pilot/internal/memory"
 	"github.com/alekspetrov/pilot/internal/pilot"
+	"github.com/alekspetrov/pilot/internal/quality"
 	"github.com/alekspetrov/pilot/internal/replay"
 	"github.com/alekspetrov/pilot/internal/upgrade"
 )
@@ -487,6 +488,27 @@ Examples:
 
 			// Create the executor runner
 			runner := executor.NewRunner()
+
+			// Set up quality gates if configured
+			{
+				configPath := cfgFile
+				if configPath == "" {
+					configPath = config.DefaultConfigPath()
+				}
+				cfg, err := config.Load(configPath)
+				if err == nil && cfg.Quality != nil && cfg.Quality.Enabled {
+					runner.SetQualityCheckerFactory(func(taskID, projectPath string) executor.QualityChecker {
+						return &qualityCheckerWrapper{
+							executor: quality.NewExecutor(&quality.ExecutorConfig{
+								Config:      cfg.Quality,
+								ProjectPath: projectPath,
+								TaskID:      taskID,
+							}),
+						}
+					})
+					fmt.Println("   Quality:   ✓ gates enabled")
+				}
+			}
 
 			// Create progress display (disabled in verbose mode - show raw JSON instead)
 			progress := executor.NewProgressDisplay(task.ID, taskDesc, !verbose)
@@ -2192,4 +2214,24 @@ func getAlertsConfig(cfg *config.Config) *alerts.AlertConfig {
 	}
 
 	return alerts.FromConfigAlerts(alertsCfg.Enabled, channels, rules, defaults)
+}
+
+// qualityCheckerWrapper adapts quality.Executor to executor.QualityChecker interface
+type qualityCheckerWrapper struct {
+	executor *quality.Executor
+}
+
+// Check implements executor.QualityChecker by delegating to quality.Executor
+// and converting the result type
+func (w *qualityCheckerWrapper) Check(ctx context.Context) (*executor.QualityOutcome, error) {
+	outcome, err := w.executor.Check(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &executor.QualityOutcome{
+		Passed:        outcome.Passed,
+		ShouldRetry:   outcome.ShouldRetry,
+		RetryFeedback: outcome.RetryFeedback,
+		Attempt:       outcome.Attempt,
+	}, nil
 }
