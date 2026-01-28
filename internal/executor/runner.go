@@ -120,6 +120,8 @@ type ExecutionResult struct {
 	Duration time.Duration
 	// PRUrl is the URL of the created pull request (if CreatePR was enabled).
 	PRUrl string
+	// PRNumber is the pull request number (extracted from PRUrl).
+	PRNumber int
 	// CommitSHA is the git commit SHA of the last commit made during execution.
 	CommitSHA string
 	// TokensInput is the number of input tokens consumed.
@@ -601,7 +603,8 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 			}
 
 			result.PRUrl = prURL
-			log.Info("Pull request created", slog.String("pr_url", prURL))
+			result.PRNumber = extractPRNumber(prURL)
+			log.Info("Pull request created", slog.String("pr_url", prURL), slog.Int("pr_number", result.PRNumber))
 			r.reportProgress(task.ID, "Completed", 100, fmt.Sprintf("PR created: %s", prURL))
 
 			// Update recording with PR info
@@ -1254,6 +1257,24 @@ func isValidSHA(s string) bool {
 		}
 	}
 	return true
+}
+
+// extractPRNumber extracts the PR number from a GitHub PR URL.
+// Example: "https://github.com/owner/repo/pull/123" returns 123.
+// Returns 0 if the URL format is invalid.
+func extractPRNumber(prURL string) int {
+	// URL format: https://github.com/owner/repo/pull/123
+	parts := strings.Split(prURL, "/")
+	if len(parts) < 2 {
+		return 0
+	}
+	// The PR number is the last part
+	numStr := parts[len(parts)-1]
+	num, err := strconv.Atoi(numStr)
+	if err != nil {
+		return 0
+	}
+	return num
 }
 
 // estimateCost calculates estimated cost from token usage (TASK-13)

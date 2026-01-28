@@ -63,6 +63,37 @@ type OrchestratorConfig struct {
 	Model         string            `yaml:"model"`
 	MaxConcurrent int               `yaml:"max_concurrent"`
 	DailyBrief    *DailyBriefConfig `yaml:"daily_brief"`
+	Execution     *ExecutionConfig  `yaml:"execution"`
+}
+
+// ExecutionConfig controls how tasks are executed.
+// Sequential mode waits for PR merge before starting next task.
+// Parallel mode executes tasks concurrently (legacy behavior).
+type ExecutionConfig struct {
+	// Mode is either "sequential" or "parallel" (default: sequential)
+	Mode string `yaml:"mode"`
+	// WaitForMerge waits for PR to be merged before next task (only in sequential mode)
+	WaitForMerge bool `yaml:"wait_for_merge"`
+	// PollInterval is how often to check PR status (default: 30s)
+	PollInterval time.Duration `yaml:"poll_interval"`
+	// PRTimeout is max time to wait for PR merge (default: 1h, 0 = no timeout)
+	PRTimeout time.Duration `yaml:"pr_timeout"`
+}
+
+// ExecutionMode constants
+const (
+	ExecutionModeSequential = "sequential"
+	ExecutionModeParallel   = "parallel"
+)
+
+// DefaultExecutionConfig returns default execution settings.
+func DefaultExecutionConfig() *ExecutionConfig {
+	return &ExecutionConfig{
+		Mode:         ExecutionModeSequential,
+		WaitForMerge: true,
+		PollInterval: 30 * time.Second,
+		PRTimeout:    1 * time.Hour,
+	}
 }
 
 // DailyBriefConfig holds settings for automated daily summary reports
@@ -247,6 +278,7 @@ func DefaultConfig() *Config {
 					Projects: []string{},
 				},
 			},
+			Execution: DefaultExecutionConfig(),
 		},
 		Executor: executor.DefaultBackendConfig(),
 		Memory: &MemoryConfig{

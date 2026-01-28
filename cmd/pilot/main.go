@@ -649,6 +649,8 @@ Examples:
 func newTelegramCmd() *cobra.Command {
 	var projectPath string
 	var replace bool
+	var sequentialMode bool
+	var parallelMode bool
 
 	cmd := &cobra.Command{
 		Use:   "telegram",
@@ -662,9 +664,15 @@ Commands:
   /help   - Show help message
   /status - Check bot status
 
+Execution Mode Flags:
+  --sequential  Wait for PR merge before starting next issue (default)
+  --parallel    Process multiple issues concurrently (legacy behavior)
+
 Example:
   pilot telegram --project /path/to/project
-  pilot telegram --replace  # Kill existing instance first`,
+  pilot telegram --replace  # Kill existing instance first
+  pilot telegram --sequential  # Wait for PR merge (default)
+  pilot telegram --parallel    # Concurrent execution`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Load config
 			configPath := cfgFile
@@ -675,6 +683,18 @@ Example:
 			cfg, err := config.Load(configPath)
 			if err != nil {
 				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			// Override execution mode from CLI flags (GH-92)
+			if sequentialMode || parallelMode {
+				if cfg.Orchestrator.Execution == nil {
+					cfg.Orchestrator.Execution = config.DefaultExecutionConfig()
+				}
+				if sequentialMode {
+					cfg.Orchestrator.Execution.Mode = config.ExecutionModeSequential
+				} else if parallelMode {
+					cfg.Orchestrator.Execution.Mode = config.ExecutionModeParallel
+				}
 			}
 
 			// Check Telegram config
@@ -817,9 +837,50 @@ Example:
 						interval = 30 * time.Second
 					}
 
-					var err error
-					ghPoller, err = github.NewPoller(client, cfg.Adapters.Github.Repo, label, interval,
-						github.WithOnIssue(func(issueCtx context.Context, issue *github.Issue) error {
+					// Determine execution mode (CLI flags override config)
+					execMode := github.ExecutionModeSequential // Default
+					var seqConfig *github.SequentialConfig
+
+					if cfg.Orchestrator != nil && cfg.Orchestrator.Execution != nil {
+						execCfg := cfg.Orchestrator.Execution
+						if execCfg.Mode == config.ExecutionModeParallel {
+							execMode = github.ExecutionModeParallel
+						}
+						if execCfg.WaitForMerge {
+							seqConfig = &github.SequentialConfig{
+								WaitForMerge: execCfg.WaitForMerge,
+								PollInterval: execCfg.PollInterval,
+								PRTimeout:    execCfg.PRTimeout,
+							}
+						}
+					}
+
+					// CLI flags override config
+					if parallelMode {
+						execMode = github.ExecutionModeParallel
+						seqConfig = nil
+					} else if sequentialMode {
+						execMode = github.ExecutionModeSequential
+						if seqConfig == nil {
+							seqConfig = &github.SequentialConfig{
+								WaitForMerge: true,
+								PollInterval: 30 * time.Second,
+								PRTimeout:    1 * time.Hour,
+							}
+						}
+					}
+
+					pollerOpts := []github.PollerOption{
+						github.WithExecutionMode(execMode),
+						github.WithOnPRStatus(func(prNumber int, status *github.PRStatus) {
+							fmt.Printf("   🔄 PR #%d: %s\n", prNumber, status.State)
+						}),
+					}
+					if seqConfig != nil {
+						pollerOpts = append(pollerOpts, github.WithSequentialConfig(seqConfig))
+					}
+
+					pollerOpts = append(pollerOpts, github.WithOnIssue(func(issueCtx context.Context, issue *github.Issue) error {
 							// Execute issue as task via dispatcher (GH-46)
 							fmt.Printf("\n📥 GitHub Issue #%d: %s\n", issue.Number, issue.Title)
 
@@ -896,16 +957,53 @@ Example:
 										comment += fmt.Sprintf("\n**PR:** %s", result.PRUrl)
 									}
 									_, _ = client.AddComment(issueCtx, parts[0], parts[1], issue.Number, comment)
+
+									// Sequential mode: Wait for PR merge before next issue (GH-92)
+									execCfg := cfg.Orchestrator.Execution
+									if execCfg != nil && execCfg.Mode == config.ExecutionModeSequential && execCfg.WaitForMerge && result.PRNumber > 0 {
+										fmt.Printf("   ⏳ Sequential mode: Waiting for PR #%d to be merged...\n", result.PRNumber)
+										waiterCfg := &github.MergeWaiterConfig{
+											PollInterval: execCfg.PollInterval,
+											Timeout:      execCfg.PRTimeout,
+										}
+										mergeWaiter := github.NewMergeWaiter(client, parts[0], parts[1], waiterCfg)
+										waitResult, waitErr := mergeWaiter.WaitForMerge(issueCtx, result.PRNumber)
+										if waitErr != nil {
+											switch {
+											case errors.Is(waitErr, github.ErrPRClosed):
+												fmt.Printf("   ⚠️  PR #%d closed without merge. Issue remains open.\n", result.PRNumber)
+												_ = client.RemoveLabel(issueCtx, parts[0], parts[1], issue.Number, github.LabelDone)
+												_, _ = client.AddComment(issueCtx, parts[0], parts[1], issue.Number, "⚠️ PR was closed without merge. Re-add `pilot` label to retry.")
+											case errors.Is(waitErr, github.ErrPRConflict):
+												fmt.Printf("   ⚠️  PR #%d has conflicts. Manual intervention needed.\n", result.PRNumber)
+												_, _ = client.AddComment(issueCtx, parts[0], parts[1], issue.Number, "⚠️ PR has merge conflicts. Please resolve and merge manually.")
+											case errors.Is(waitErr, github.ErrPRTimeout):
+												fmt.Printf("   ⚠️  Timeout waiting for PR #%d. Will continue.\n", result.PRNumber)
+											default:
+												fmt.Printf("   ⚠️  Error waiting for PR: %v\n", waitErr)
+											}
+										} else if waitResult.Merged {
+											fmt.Printf("   ✅ PR #%d merged. Ready for next issue.\n", result.PRNumber)
+											// Close the issue since PR was merged
+											_ = client.UpdateIssueState(issueCtx, parts[0], parts[1], issue.Number, github.StateClosed)
+										}
+									}
 								}
 							}
 
 							return execErr
-						}),
-					)
+						}))
+
+					var err error
+					ghPoller, err = github.NewPoller(client, cfg.Adapters.Github.Repo, label, interval, pollerOpts...)
 					if err != nil {
 						fmt.Printf("⚠️  GitHub polling disabled: %v\n", err)
 					} else {
-						fmt.Printf("🐙 GitHub polling enabled: %s (every %s)\n", cfg.Adapters.Github.Repo, interval)
+						modeLabel := "sequential"
+						if execMode == github.ExecutionModeParallel {
+							modeLabel = "parallel"
+						}
+						fmt.Printf("🐙 GitHub polling enabled: %s (every %s, mode: %s)\n", cfg.Adapters.Github.Repo, interval, modeLabel)
 						go ghPoller.Start(ctx)
 					}
 				}
@@ -938,6 +1036,9 @@ Example:
 
 	cmd.Flags().StringVarP(&projectPath, "project", "p", "", "Project path (default: current directory)")
 	cmd.Flags().BoolVar(&replace, "replace", false, "Kill existing bot instance before starting")
+	cmd.Flags().BoolVar(&sequentialMode, "sequential", false, "Force sequential mode (wait for PR merge before next issue)")
+	cmd.Flags().BoolVar(&parallelMode, "parallel", false, "Force parallel mode (process issues concurrently)")
+	cmd.MarkFlagsMutuallyExclusive("sequential", "parallel")
 
 	return cmd
 }

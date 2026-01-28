@@ -29,10 +29,28 @@ adapters:
     bot_token: "${SLACK_BOT_TOKEN}"
     channel: "#dev-notifications"
 
+  # GitHub - Issue polling and PR creation
+  github:
+    enabled: false
+    token: "${GITHUB_TOKEN}"
+    repo: "owner/repo"           # Repository to poll for issues
+    pilot_label: "pilot"         # Issues with this label are picked up
+    polling:
+      enabled: true
+      interval: 30s              # How often to check for new issues
+      label: "pilot"             # Label to watch for
+
 # Orchestrator settings
 orchestrator:
   model: "claude-sonnet-4-20250514"
   max_concurrent: 2          # Max parallel tasks
+
+  # Execution mode settings (GH-92)
+  execution:
+    mode: "sequential"       # "sequential" (default) or "parallel"
+    wait_for_merge: true     # Wait for PR merge before next task (sequential only)
+    poll_interval: 30s       # How often to check PR status
+    pr_timeout: 1h           # Max time to wait for PR merge (0 = no timeout)
 
   # Daily brief
   daily_brief:

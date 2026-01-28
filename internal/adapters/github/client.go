@@ -308,3 +308,71 @@ func HasLabel(issue *Issue, labelName string) bool {
 	}
 	return false
 }
+
+// PRState represents the state of a PR for merge waiting
+type PRState string
+
+const (
+	PRStateOpen       PRState = "open"
+	PRStateMerged     PRState = "merged"
+	PRStateClosed     PRState = "closed"
+	PRStateConflict   PRState = "conflict"
+	PRStateUnknown    PRState = "unknown"
+)
+
+// PRStatus contains current PR status for polling
+type PRStatus struct {
+	State       PRState
+	Number      int
+	Title       string
+	Merged      bool
+	Mergeable   *bool
+	MergeCommit string
+}
+
+// GetPRStatus fetches the current status of a PR
+func (c *Client) GetPRStatus(ctx context.Context, owner, repo string, number int) (*PRStatus, error) {
+	pr, err := c.GetPullRequest(ctx, owner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+
+	status := &PRStatus{
+		Number:    pr.Number,
+		Title:     pr.Title,
+		Merged:    pr.Merged,
+		Mergeable: pr.Mergeable,
+	}
+
+	// Determine state
+	if pr.Merged {
+		status.State = PRStateMerged
+		// Extract merge commit from merged_at field (simplified)
+		if pr.MergedAt != "" {
+			status.MergeCommit = "merged"
+		}
+	} else if pr.State == "closed" {
+		status.State = PRStateClosed
+	} else if pr.Mergeable != nil && !*pr.Mergeable {
+		status.State = PRStateConflict
+	} else if pr.State == "open" {
+		status.State = PRStateOpen
+	} else {
+		status.State = PRStateUnknown
+	}
+
+	return status, nil
+}
+
+// FindPRByBranch finds a PR by its head branch name
+func (c *Client) FindPRByBranch(ctx context.Context, owner, repo, branch string) (*PullRequest, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls?head=%s:%s&state=all", owner, repo, owner, branch)
+	var prs []PullRequest
+	if err := c.doRequest(ctx, http.MethodGet, path, nil, &prs); err != nil {
+		return nil, err
+	}
+	if len(prs) == 0 {
+		return nil, nil // No PR found
+	}
+	return &prs[0], nil
+}
