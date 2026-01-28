@@ -71,6 +71,7 @@ func main() {
 		newSetupCmd(),
 		newReplayCmd(),
 		newTunnelCmd(),
+		newWebhooksCmd(),
 		newConfigCmd(),
 		newLogsCmd(),
 		newCompletionCmd(),
