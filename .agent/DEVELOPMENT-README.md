@@ -66,7 +66,8 @@ if _, err := os.Stat(agentDir); err == nil {
 | CLAUDE.md | Every session (auto-loaded) |
 | This file | Every session (navigator index) |
 | `.agent/tasks/TASK-XX.md` | When working on specific task |
-| `.agent/system/ARCHITECTURE.md` | When modifying core components |
+| `.agent/system/ARCHITECTURE.md` | **NEW** System architecture, package map |
+| `.agent/system/FEATURE-MATRIX.md` | **NEW** Feature status, CLI → package mapping |
 | `.agent/sops/*.md` | Before modifying integrations (Telegram, Linear, etc.) |
 | `.agent/product/AUDIENCE.md` | GTM strategy, personas, messaging |
 | `.agent/product/PRICING.md` | Tier structure, competitor comparison |
@@ -135,37 +136,40 @@ if _, err := os.Stat(agentDir); err == nil {
 
 **Pick tasks in order. Higher = more user value.**
 
+> **GH-52 Audit (2026-01-28):** Many previously "planned" tasks are now implemented.
+> See `.agent/system/FEATURE-MATRIX.md` for complete feature status.
+
 ### 🔴 P1: Critical (Blocking User Success)
 
-| # | Task | File | Why |
-|---|------|------|-----|
-| 1 | **TASK-18**: Cost Controls | `TASK-18-cost-controls.md` | Budget protection |
-| 2 | **TASK-45**: Wire testutil | `TASK-45-wire-testutil.md` | Test reliability |
+| # | Task | File | Status | Notes |
+|---|------|------|--------|-------|
+| 1 | **TASK-18**: Cost Controls | `TASK-18-cost-controls.md` | 🚧 Partial | `budget/` exists, needs wiring |
+| 2 | **TASK-28**: Speed Optimization | `TASK-28-speed-optimization.md` | 📋 Planned | Performance profiling needed |
 
 ### 🟡 P2: High (Significant Value)
 
-| # | Task | File | Why |
-|---|------|------|-----|
-| 3 | **TASK-28**: Speed Optimization | `TASK-28-speed-optimization.md` | Slow = abandoned |
-| 4 | **TASK-26**: Hot Version Upgrade | `TASK-26-hot-version-upgrade.md` | Friction-free updates |
-| 5 | **TASK-29**: Multi-Project Support | `TASK-29-multi-project-support.md` | Scale to teams |
+| # | Task | File | Status | Notes |
+|---|------|------|--------|-------|
+| 3 | **TASK-25**: Telegram Commands | `TASK-25-telegram-commands.md` | 📋 Planned | `/help`, `/status` only |
+| 4 | **TASK-35**: Remove ffmpeg | `TASK-35-remove-ffmpeg.md` | 📋 Planned | Voice uses OpenAI API directly |
+| 5 | **TASK-24**: Tech Debt | `TASK-24-tech-debt-cleanup.md` | 📋 Planned | Code cleanup |
 
 ### 🟢 P3: Medium (Enterprise/Polish)
 
-| # | Task | File | Why |
-|---|------|------|-----|
-| 6 | **TASK-25**: Telegram Commands | `TASK-25-telegram-commands.md` | Power user UX |
-| 7 | **TASK-35**: Remove ffmpeg | `TASK-35-remove-ffmpeg.md` | Reduce dependencies |
-| 8 | **TASK-38**: Polling PR Config | `TASK-38-polling-pr-config.md` | GitHub workflow polish |
+| # | Task | File | Status | Notes |
+|---|------|------|--------|-------|
+| 6 | **TASK-32**: Nav Index Sync | `TASK-32-nav-index-sync.md` | 📋 Planned | Doc automation |
 
-### ⚪ P4: Low (Internal/Nice-to-Have)
+### ✅ Recently Verified Complete (GH-52 audit)
 
-| # | Task | File | Why |
-|---|------|------|-----|
-| 9 | **TASK-32**: Nav Index Sync | `TASK-32-nav-index-sync.md` | Internal workflow |
-| 10 | **TASK-21**: Execution Replay | `TASK-21-execution-replay.md` | Debug aid (partial impl exists) |
-| 11 | **TASK-22**: Webhooks API | `TASK-22-webhooks-api.md` | Integration feature |
-| 12 | **TASK-24**: Tech Debt | `TASK-24-tech-debt-cleanup.md` | Internal cleanup |
+| Task | Implementation | CLI |
+|------|---------------|-----|
+| **TASK-21**: Execution Replay | `internal/replay/` (9 files) | `pilot replay` |
+| **TASK-22**: Webhooks API | `internal/webhooks/` (4 files) | `pilot webhooks` |
+| **TASK-26**: Hot Version Upgrade | `internal/upgrade/` | `pilot upgrade` |
+| **TASK-29**: Multi-Project Support | `config.Projects[]` | Multi-project config |
+| **TASK-38**: Polling PR Config | `adapters.github.polling` | GitHub polling mode |
+| **TASK-45**: Wire testutil | `internal/testutil/` | 159 usages in tests |
 
 ---
 
