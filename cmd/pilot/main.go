@@ -151,8 +151,8 @@ Examples:
 
 			// Determine mode based on what's enabled
 			hasTelegram := cfg.Adapters.Telegram != nil && cfg.Adapters.Telegram.Enabled
-			hasGithubPolling := cfg.Adapters.Github != nil && cfg.Adapters.Github.Enabled &&
-				cfg.Adapters.Github.Polling != nil && cfg.Adapters.Github.Polling.Enabled
+			hasGithubPolling := cfg.Adapters.GitHub != nil && cfg.Adapters.GitHub.Enabled &&
+				cfg.Adapters.GitHub.Polling != nil && cfg.Adapters.GitHub.Polling.Enabled
 			hasLinear := cfg.Adapters.Linear != nil && cfg.Adapters.Linear.Enabled
 			hasJira := cfg.Adapters.Jira != nil && cfg.Adapters.Jira.Enabled
 
@@ -256,14 +256,14 @@ func applyInputOverrides(cfg *config.Config, telegramFlag, githubFlag, linearFla
 		cfg.Adapters.Telegram.Polling = *telegramFlag
 	}
 	if githubFlag != nil {
-		if cfg.Adapters.Github == nil {
-			cfg.Adapters.Github = github.DefaultConfig()
+		if cfg.Adapters.GitHub == nil {
+			cfg.Adapters.GitHub = github.DefaultConfig()
 		}
-		cfg.Adapters.Github.Enabled = *githubFlag
-		if cfg.Adapters.Github.Polling == nil {
-			cfg.Adapters.Github.Polling = &github.PollingConfig{}
+		cfg.Adapters.GitHub.Enabled = *githubFlag
+		if cfg.Adapters.GitHub.Polling == nil {
+			cfg.Adapters.GitHub.Polling = &github.PollingConfig{}
 		}
-		cfg.Adapters.Github.Polling.Enabled = *githubFlag
+		cfg.Adapters.GitHub.Polling.Enabled = *githubFlag
 	}
 	if linearFlag != nil {
 		if cfg.Adapters.Linear == nil {
@@ -375,27 +375,27 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 
 	// Start GitHub polling if enabled
 	var ghPoller *github.Poller
-	if cfg.Adapters.Github != nil && cfg.Adapters.Github.Enabled &&
-		cfg.Adapters.Github.Polling != nil && cfg.Adapters.Github.Polling.Enabled {
+	if cfg.Adapters.GitHub != nil && cfg.Adapters.GitHub.Enabled &&
+		cfg.Adapters.GitHub.Polling != nil && cfg.Adapters.GitHub.Polling.Enabled {
 
-		token := cfg.Adapters.Github.Token
+		token := cfg.Adapters.GitHub.Token
 		if token == "" {
 			token = os.Getenv("GITHUB_TOKEN")
 		}
 
-		if token != "" && cfg.Adapters.Github.Repo != "" {
+		if token != "" && cfg.Adapters.GitHub.Repo != "" {
 			client := github.NewClient(token)
-			label := cfg.Adapters.Github.Polling.Label
+			label := cfg.Adapters.GitHub.Polling.Label
 			if label == "" {
-				label = cfg.Adapters.Github.PilotLabel
+				label = cfg.Adapters.GitHub.PilotLabel
 			}
-			interval := cfg.Adapters.Github.Polling.Interval
+			interval := cfg.Adapters.GitHub.Polling.Interval
 			if interval == 0 {
 				interval = 30 * time.Second
 			}
 
 			var err error
-			ghPoller, err = github.NewPoller(client, cfg.Adapters.Github.Repo, label, interval,
+			ghPoller, err = github.NewPoller(client, cfg.Adapters.GitHub.Repo, label, interval,
 				github.WithOnIssue(func(issueCtx context.Context, issue *github.Issue) error {
 					return handleGitHubIssue(issueCtx, cfg, client, issue, projectPath, dispatcher, runner)
 				}),
@@ -403,7 +403,7 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 			if err != nil {
 				fmt.Printf("⚠️  GitHub polling disabled: %v\n", err)
 			} else {
-				fmt.Printf("🐙 GitHub polling enabled: %s (every %s)\n", cfg.Adapters.Github.Repo, interval)
+				fmt.Printf("🐙 GitHub polling enabled: %s (every %s)\n", cfg.Adapters.GitHub.Repo, interval)
 				go ghPoller.Start(ctx)
 			}
 		}
@@ -439,7 +439,7 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 func handleGitHubIssue(ctx context.Context, cfg *config.Config, client *github.Client, issue *github.Issue, projectPath string, dispatcher *executor.Dispatcher, runner *executor.Runner) error {
 	fmt.Printf("\n📥 GitHub Issue #%d: %s\n", issue.Number, issue.Title)
 
-	parts := strings.Split(cfg.Adapters.Github.Repo, "/")
+	parts := strings.Split(cfg.Adapters.GitHub.Repo, "/")
 	if len(parts) == 2 {
 		if err := client.AddLabels(ctx, parts[0], parts[1], issue.Number, []string{github.LabelInProgress}); err != nil {
 			slog.Warn("failed to add in-progress label", slog.Int("issue", issue.Number), slog.Any("error", err))
@@ -559,7 +559,7 @@ func newStatusCmd() *cobra.Command {
 						"linear":   cfg.Adapters.Linear != nil && cfg.Adapters.Linear.Enabled,
 						"slack":    cfg.Adapters.Slack != nil && cfg.Adapters.Slack.Enabled,
 						"telegram": cfg.Adapters.Telegram != nil && cfg.Adapters.Telegram.Enabled,
-						"github":   cfg.Adapters.Github != nil && cfg.Adapters.Github.Enabled,
+						"github":   cfg.Adapters.GitHub != nil && cfg.Adapters.GitHub.Enabled,
 						"jira":     cfg.Adapters.Jira != nil && cfg.Adapters.Jira.Enabled,
 					},
 					"projects": cfg.Projects,
@@ -595,7 +595,7 @@ func newStatusCmd() *cobra.Command {
 			} else {
 				fmt.Println("  ○ Telegram (disabled)")
 			}
-			if cfg.Adapters.Github != nil && cfg.Adapters.Github.Enabled {
+			if cfg.Adapters.GitHub != nil && cfg.Adapters.GitHub.Enabled {
 				fmt.Println("  ✓ GitHub (enabled)")
 			} else {
 				fmt.Println("  ○ GitHub (disabled)")
@@ -1131,11 +1131,11 @@ Examples:
 			}
 
 			// Check GitHub is configured
-			if cfg.Adapters == nil || cfg.Adapters.Github == nil || !cfg.Adapters.Github.Enabled {
+			if cfg.Adapters == nil || cfg.Adapters.GitHub == nil || !cfg.Adapters.GitHub.Enabled {
 				return fmt.Errorf("GitHub adapter not enabled. Run 'pilot setup' or edit ~/.pilot/config.yaml")
 			}
 
-			token := cfg.Adapters.Github.Token
+			token := cfg.Adapters.GitHub.Token
 			if token == "" {
 				token = os.Getenv("GITHUB_TOKEN")
 			}
@@ -1145,7 +1145,7 @@ Examples:
 
 			// Determine repo
 			if repo == "" {
-				repo = cfg.Adapters.Github.Repo
+				repo = cfg.Adapters.GitHub.Repo
 			}
 			if repo == "" {
 				return fmt.Errorf("no repository specified. Use --repo owner/repo or set in config")
