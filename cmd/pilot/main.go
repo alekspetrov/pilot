@@ -2302,74 +2302,7 @@ func getAlertsConfig(cfg *config.Config) *alerts.AlertConfig {
 	if cfg.Alerts == nil {
 		return nil
 	}
-
-	alertsCfg := cfg.Alerts
-
-	// Convert to alerts package types
-	channels := make([]alerts.ChannelConfigInput, 0, len(alertsCfg.Channels))
-	for _, ch := range alertsCfg.Channels {
-		input := alerts.ChannelConfigInput{
-			Name:       ch.Name,
-			Type:       ch.Type,
-			Enabled:    ch.Enabled,
-			Severities: ch.Severities,
-		}
-		if ch.Slack != nil {
-			input.Slack = &alerts.SlackConfigInput{Channel: ch.Slack.Channel}
-		}
-		if ch.Telegram != nil {
-			input.Telegram = &alerts.TelegramConfigInput{ChatID: ch.Telegram.ChatID}
-		}
-		if ch.Email != nil {
-			input.Email = &alerts.EmailConfigInput{To: ch.Email.To, Subject: ch.Email.Subject}
-		}
-		if ch.Webhook != nil {
-			input.Webhook = &alerts.WebhookConfigInput{
-				URL:     ch.Webhook.URL,
-				Method:  ch.Webhook.Method,
-				Headers: ch.Webhook.Headers,
-				Secret:  ch.Webhook.Secret,
-			}
-		}
-		if ch.PagerDuty != nil {
-			input.PagerDuty = &alerts.PagerDutyConfigInput{
-				RoutingKey: ch.PagerDuty.RoutingKey,
-				ServiceID:  ch.PagerDuty.ServiceID,
-			}
-		}
-		channels = append(channels, input)
-	}
-
-	rules := make([]alerts.RuleConfigInput, 0, len(alertsCfg.Rules))
-	for _, r := range alertsCfg.Rules {
-		rules = append(rules, alerts.RuleConfigInput{
-			Name:        r.Name,
-			Type:        r.Type,
-			Enabled:     r.Enabled,
-			Severity:    r.Severity,
-			Channels:    r.Channels,
-			Cooldown:    r.Cooldown,
-			Description: r.Description,
-			Condition: alerts.ConditionConfigInput{
-				ProgressUnchangedFor: r.Condition.ProgressUnchangedFor,
-				ConsecutiveFailures:  r.Condition.ConsecutiveFailures,
-				DailySpendThreshold:  r.Condition.DailySpendThreshold,
-				BudgetLimit:          r.Condition.BudgetLimit,
-				UsageSpikePercent:    r.Condition.UsageSpikePercent,
-				Pattern:              r.Condition.Pattern,
-				FilePattern:          r.Condition.FilePattern,
-				Paths:                r.Condition.Paths,
-			},
-		})
-	}
-
-	defaults := alerts.DefaultsConfigInput{
-		Cooldown:           alertsCfg.Defaults.Cooldown,
-		DefaultSeverity:    alertsCfg.Defaults.DefaultSeverity,
-		SuppressDuplicates: alertsCfg.Defaults.SuppressDuplicates,
-	}
-
-	return alerts.FromConfigAlerts(alertsCfg.Enabled, channels, rules, defaults)
+	return alerts.FromConfigAlerts(cfg.Alerts)
 }
 
 // qualityCheckerWrapper adapts quality.Executor to executor.QualityChecker interface

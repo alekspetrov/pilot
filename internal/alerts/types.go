@@ -1,6 +1,10 @@
 package alerts
 
-import "time"
+import (
+	"time"
+
+	"github.com/alekspetrov/pilot/internal/config"
+)
 
 // Severity levels for alerts
 type Severity string
@@ -99,42 +103,12 @@ type ChannelConfig struct {
 	Enabled    bool       `yaml:"enabled"`
 	Severities []Severity `yaml:"severities"` // Which severities to receive
 
-	// Channel-specific config
-	Slack     *SlackChannelConfig     `yaml:"slack,omitempty"`
-	Telegram  *TelegramChannelConfig  `yaml:"telegram,omitempty"`
-	Email     *EmailChannelConfig     `yaml:"email,omitempty"`
-	Webhook   *WebhookChannelConfig   `yaml:"webhook,omitempty"`
-	PagerDuty *PagerDutyChannelConfig `yaml:"pagerduty,omitempty"`
-}
-
-// SlackChannelConfig for Slack alerts
-type SlackChannelConfig struct {
-	Channel string `yaml:"channel"` // #channel-name
-}
-
-// TelegramChannelConfig for Telegram alerts
-type TelegramChannelConfig struct {
-	ChatID int64 `yaml:"chat_id"`
-}
-
-// EmailChannelConfig for email alerts
-type EmailChannelConfig struct {
-	To      []string `yaml:"to"`
-	Subject string   `yaml:"subject"` // Optional custom subject template
-}
-
-// WebhookChannelConfig for webhook alerts
-type WebhookChannelConfig struct {
-	URL     string            `yaml:"url"`
-	Method  string            `yaml:"method"` // POST, PUT
-	Headers map[string]string `yaml:"headers"`
-	Secret  string            `yaml:"secret"` // For HMAC signing
-}
-
-// PagerDutyChannelConfig for PagerDuty alerts
-type PagerDutyChannelConfig struct {
-	RoutingKey string `yaml:"routing_key"` // Integration key
-	ServiceID  string `yaml:"service_id"`
+	// Channel-specific config (reusing types from config package)
+	Slack     *config.AlertSlackConfig     `yaml:"slack,omitempty"`
+	Telegram  *config.AlertTelegramConfig  `yaml:"telegram,omitempty"`
+	Email     *config.AlertEmailConfig     `yaml:"email,omitempty"`
+	Webhook   *config.AlertWebhookConfig   `yaml:"webhook,omitempty"`
+	PagerDuty *config.AlertPagerDutyConfig `yaml:"pagerduty,omitempty"`
 }
 
 // DeliveryResult represents the result of sending an alert

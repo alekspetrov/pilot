@@ -3,6 +3,8 @@ package alerts
 import (
 	"testing"
 	"time"
+
+	"github.com/alekspetrov/pilot/internal/config"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -321,7 +323,7 @@ func TestChannelConfig_AllTypes(t *testing.T) {
 				Name:    "my-slack",
 				Type:    "slack",
 				Enabled: true,
-				Slack: &SlackChannelConfig{
+				Slack: &config.AlertSlackConfig{
 					Channel: "#alerts",
 				},
 			},
@@ -333,7 +335,7 @@ func TestChannelConfig_AllTypes(t *testing.T) {
 				Name:    "my-telegram",
 				Type:    "telegram",
 				Enabled: true,
-				Telegram: &TelegramChannelConfig{
+				Telegram: &config.AlertTelegramConfig{
 					ChatID: 123456789,
 				},
 			},
@@ -345,7 +347,7 @@ func TestChannelConfig_AllTypes(t *testing.T) {
 				Name:    "my-email",
 				Type:    "email",
 				Enabled: true,
-				Email: &EmailChannelConfig{
+				Email: &config.AlertEmailConfig{
 					To:      []string{"test@example.com"},
 					Subject: "Alert: {{title}}",
 				},
@@ -358,7 +360,7 @@ func TestChannelConfig_AllTypes(t *testing.T) {
 				Name:    "my-webhook",
 				Type:    "webhook",
 				Enabled: true,
-				Webhook: &WebhookChannelConfig{
+				Webhook: &config.AlertWebhookConfig{
 					URL:    "https://example.com/webhook",
 					Method: "POST",
 					Headers: map[string]string{
@@ -375,7 +377,7 @@ func TestChannelConfig_AllTypes(t *testing.T) {
 				Name:    "my-pagerduty",
 				Type:    "pagerduty",
 				Enabled: true,
-				PagerDuty: &PagerDutyChannelConfig{
+				PagerDuty: &config.AlertPagerDutyConfig{
 					RoutingKey: "routing-key-123",
 					ServiceID:  "service-456",
 				},

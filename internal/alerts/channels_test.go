@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alekspetrov/pilot/internal/config"
 	"github.com/alekspetrov/pilot/internal/testutil"
 )
 
@@ -17,12 +18,12 @@ import (
 func TestNewWebhookChannel(t *testing.T) {
 	tests := []struct {
 		name         string
-		config       *WebhookChannelConfig
+		config       *config.AlertWebhookConfig
 		expectMethod string
 	}{
 		{
 			name: "default method POST",
-			config: &WebhookChannelConfig{
+			config: &config.AlertWebhookConfig{
 				URL:    "https://example.com/webhook",
 				Method: "",
 			},
@@ -30,7 +31,7 @@ func TestNewWebhookChannel(t *testing.T) {
 		},
 		{
 			name: "explicit POST",
-			config: &WebhookChannelConfig{
+			config: &config.AlertWebhookConfig{
 				URL:    "https://example.com/webhook",
 				Method: "POST",
 			},
@@ -38,7 +39,7 @@ func TestNewWebhookChannel(t *testing.T) {
 		},
 		{
 			name: "explicit PUT",
-			config: &WebhookChannelConfig{
+			config: &config.AlertWebhookConfig{
 				URL:    "https://example.com/webhook",
 				Method: "PUT",
 			},
@@ -75,7 +76,7 @@ func TestWebhookChannel_Send(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := &WebhookChannelConfig{
+	config := &config.AlertWebhookConfig{
 		URL:    server.URL,
 		Method: "POST",
 		Headers: map[string]string{
@@ -119,7 +120,7 @@ func TestWebhookChannel_Send_WithSignature(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := &WebhookChannelConfig{
+	config := &config.AlertWebhookConfig{
 		URL:    server.URL,
 		Secret: "my-secret-key",
 	}
@@ -154,7 +155,7 @@ func TestWebhookChannel_Send_ErrorStatus(t *testing.T) {
 			}))
 			defer server.Close()
 
-			config := &WebhookChannelConfig{URL: server.URL}
+			config := &config.AlertWebhookConfig{URL: server.URL}
 			ch := NewWebhookChannel("test", config)
 
 			alert := &Alert{ID: "test"}
@@ -168,7 +169,7 @@ func TestWebhookChannel_Send_ErrorStatus(t *testing.T) {
 }
 
 func TestWebhookChannel_Send_NetworkError(t *testing.T) {
-	config := &WebhookChannelConfig{
+	config := &config.AlertWebhookConfig{
 		URL: "http://localhost:99999", // Invalid port
 	}
 
@@ -183,7 +184,7 @@ func TestWebhookChannel_Send_NetworkError(t *testing.T) {
 }
 
 func TestWebhookChannel_Sign(t *testing.T) {
-	config := &WebhookChannelConfig{
+	config := &config.AlertWebhookConfig{
 		URL:    "https://example.com",
 		Secret: testutil.FakeWebhookSecret,
 	}
@@ -230,7 +231,7 @@ func (m *mockEmailSender) Send(ctx context.Context, to []string, subject, htmlBo
 
 func TestNewEmailChannel(t *testing.T) {
 	sender := &mockEmailSender{}
-	config := &EmailChannelConfig{
+	config := &config.AlertEmailConfig{
 		To:      []string{"admin@example.com"},
 		Subject: "Custom: {{title}}",
 	}
@@ -247,7 +248,7 @@ func TestNewEmailChannel(t *testing.T) {
 
 func TestEmailChannel_Send(t *testing.T) {
 	sender := &mockEmailSender{}
-	config := &EmailChannelConfig{
+	config := &config.AlertEmailConfig{
 		To: []string{"admin@example.com", "ops@example.com"},
 	}
 
@@ -325,7 +326,7 @@ func TestEmailChannel_FormatSubject(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := &EmailChannelConfig{
+			config := &config.AlertEmailConfig{
 				To:      []string{"test@example.com"},
 				Subject: tt.customSubject,
 			}
@@ -340,7 +341,7 @@ func TestEmailChannel_FormatSubject(t *testing.T) {
 }
 
 func TestEmailChannel_FormatBody(t *testing.T) {
-	config := &EmailChannelConfig{
+	config := &config.AlertEmailConfig{
 		To: []string{"test@example.com"},
 	}
 	ch := NewEmailChannel("test", &mockEmailSender{}, config)
@@ -569,7 +570,7 @@ func TestTelegramChannel_FormatMessage(t *testing.T) {
 // =============================================================================
 
 func TestPagerDutyChannel_Name(t *testing.T) {
-	config := &PagerDutyChannelConfig{
+	config := &config.AlertPagerDutyConfig{
 		RoutingKey: "routing-key",
 		ServiceID:  "service-id",
 	}

@@ -3,6 +3,8 @@ package alerts
 import (
 	"testing"
 	"time"
+
+	"github.com/alekspetrov/pilot/internal/config"
 )
 
 func TestParseSeverity(t *testing.T) {
@@ -59,12 +61,12 @@ func TestParseAlertType(t *testing.T) {
 func TestConvertChannel(t *testing.T) {
 	tests := []struct {
 		name   string
-		input  ChannelConfigInput
+		input  config.AlertChannelConfig
 		verify func(t *testing.T, ch ChannelConfig)
 	}{
 		{
 			name: "basic channel",
-			input: ChannelConfigInput{
+			input: config.AlertChannelConfig{
 				Name:       "test-channel",
 				Type:       "webhook",
 				Enabled:    true,
@@ -90,11 +92,11 @@ func TestConvertChannel(t *testing.T) {
 		},
 		{
 			name: "slack channel",
-			input: ChannelConfigInput{
+			input: config.AlertChannelConfig{
 				Name:    "slack-alerts",
 				Type:    "slack",
 				Enabled: true,
-				Slack: &SlackConfigInput{
+				Slack: &config.AlertSlackConfig{
 					Channel: "#ops-alerts",
 				},
 			},
@@ -109,11 +111,11 @@ func TestConvertChannel(t *testing.T) {
 		},
 		{
 			name: "telegram channel",
-			input: ChannelConfigInput{
+			input: config.AlertChannelConfig{
 				Name:    "telegram-alerts",
 				Type:    "telegram",
 				Enabled: true,
-				Telegram: &TelegramConfigInput{
+				Telegram: &config.AlertTelegramConfig{
 					ChatID: 123456789,
 				},
 			},
@@ -128,11 +130,11 @@ func TestConvertChannel(t *testing.T) {
 		},
 		{
 			name: "email channel",
-			input: ChannelConfigInput{
+			input: config.AlertChannelConfig{
 				Name:    "email-alerts",
 				Type:    "email",
 				Enabled: true,
-				Email: &EmailConfigInput{
+				Email: &config.AlertEmailConfig{
 					To:      []string{"admin@example.com", "ops@example.com"},
 					Subject: "[ALERT] {{title}}",
 				},
@@ -151,11 +153,11 @@ func TestConvertChannel(t *testing.T) {
 		},
 		{
 			name: "webhook channel",
-			input: ChannelConfigInput{
+			input: config.AlertChannelConfig{
 				Name:    "webhook-alerts",
 				Type:    "webhook",
 				Enabled: true,
-				Webhook: &WebhookConfigInput{
+				Webhook: &config.AlertWebhookConfig{
 					URL:    "https://hooks.example.com/alert",
 					Method: "POST",
 					Headers: map[string]string{
@@ -184,11 +186,11 @@ func TestConvertChannel(t *testing.T) {
 		},
 		{
 			name: "pagerduty channel",
-			input: ChannelConfigInput{
+			input: config.AlertChannelConfig{
 				Name:    "pagerduty-alerts",
 				Type:    "pagerduty",
 				Enabled: true,
-				PagerDuty: &PagerDutyConfigInput{
+				PagerDuty: &config.AlertPagerDutyConfig{
 					RoutingKey: "routing-key-abc",
 					ServiceID:  "service-xyz",
 				},
@@ -218,12 +220,12 @@ func TestConvertChannel(t *testing.T) {
 func TestConvertRule(t *testing.T) {
 	tests := []struct {
 		name   string
-		input  RuleConfigInput
+		input  config.AlertRuleConfig
 		verify func(t *testing.T, rule AlertRule)
 	}{
 		{
 			name: "basic rule",
-			input: RuleConfigInput{
+			input: config.AlertRuleConfig{
 				Name:        "my-rule",
 				Type:        "task_failed",
 				Enabled:     true,
@@ -255,11 +257,11 @@ func TestConvertRule(t *testing.T) {
 		},
 		{
 			name: "rule with condition",
-			input: RuleConfigInput{
+			input: config.AlertRuleConfig{
 				Name:    "stuck-task-rule",
 				Type:    "task_stuck",
 				Enabled: true,
-				Condition: ConditionConfigInput{
+				Condition: config.AlertConditionConfig{
 					ProgressUnchangedFor: 15 * time.Minute,
 				},
 				Severity: "warning",
@@ -272,11 +274,11 @@ func TestConvertRule(t *testing.T) {
 		},
 		{
 			name: "rule with all condition fields",
-			input: RuleConfigInput{
+			input: config.AlertRuleConfig{
 				Name:    "complex-rule",
 				Type:    "task_failed",
 				Enabled: true,
-				Condition: ConditionConfigInput{
+				Condition: config.AlertConditionConfig{
 					ProgressUnchangedFor: 20 * time.Minute,
 					ConsecutiveFailures:  5,
 					DailySpendThreshold:  100.0,
@@ -323,65 +325,66 @@ func TestConvertRule(t *testing.T) {
 }
 
 func TestFromConfigAlerts(t *testing.T) {
-	channels := []ChannelConfigInput{
-		{
-			Name:       "slack-channel",
-			Type:       "slack",
-			Enabled:    true,
-			Severities: []string{"critical"},
-			Slack:      &SlackConfigInput{Channel: "#alerts"},
-		},
-		{
-			Name:    "webhook-channel",
-			Type:    "webhook",
-			Enabled: true,
-			Webhook: &WebhookConfigInput{URL: "https://example.com"},
-		},
-	}
-
-	rules := []RuleConfigInput{
-		{
-			Name:     "task-failed",
-			Type:     "task_failed",
-			Enabled:  true,
-			Severity: "warning",
-			Channels: []string{"slack-channel"},
-			Cooldown: 5 * time.Minute,
-		},
-		{
-			Name:    "consecutive",
-			Type:    "consecutive_failures",
-			Enabled: true,
-			Condition: ConditionConfigInput{
-				ConsecutiveFailures: 3,
+	cfg := &config.AlertsConfig{
+		Enabled: true,
+		Channels: []config.AlertChannelConfig{
+			{
+				Name:       "slack-channel",
+				Type:       "slack",
+				Enabled:    true,
+				Severities: []string{"critical"},
+				Slack:      &config.AlertSlackConfig{Channel: "#alerts"},
 			},
-			Severity: "critical",
+			{
+				Name:    "webhook-channel",
+				Type:    "webhook",
+				Enabled: true,
+				Webhook: &config.AlertWebhookConfig{URL: "https://example.com"},
+			},
+		},
+		Rules: []config.AlertRuleConfig{
+			{
+				Name:     "task-failed",
+				Type:     "task_failed",
+				Enabled:  true,
+				Severity: "warning",
+				Channels: []string{"slack-channel"},
+				Cooldown: 5 * time.Minute,
+			},
+			{
+				Name:    "consecutive",
+				Type:    "consecutive_failures",
+				Enabled: true,
+				Condition: config.AlertConditionConfig{
+					ConsecutiveFailures: 3,
+				},
+				Severity: "critical",
+			},
+		},
+		Defaults: config.AlertDefaultsConfig{
+			Cooldown:           10 * time.Minute,
+			DefaultSeverity:    "warning",
+			SuppressDuplicates: true,
 		},
 	}
 
-	defaults := DefaultsConfigInput{
-		Cooldown:           10 * time.Minute,
-		DefaultSeverity:    "warning",
-		SuppressDuplicates: true,
-	}
-
-	config := FromConfigAlerts(true, channels, rules, defaults)
+	alertCfg := FromConfigAlerts(cfg)
 
 	// Verify enabled
-	if !config.Enabled {
+	if !alertCfg.Enabled {
 		t.Error("expected config to be enabled")
 	}
 
 	// Verify channels
-	if len(config.Channels) != 2 {
-		t.Errorf("expected 2 channels, got %d", len(config.Channels))
+	if len(alertCfg.Channels) != 2 {
+		t.Errorf("expected 2 channels, got %d", len(alertCfg.Channels))
 	}
 
 	// Find and verify slack channel
 	var slackCh *ChannelConfig
-	for i := range config.Channels {
-		if config.Channels[i].Name == "slack-channel" {
-			slackCh = &config.Channels[i]
+	for i := range alertCfg.Channels {
+		if alertCfg.Channels[i].Name == "slack-channel" {
+			slackCh = &alertCfg.Channels[i]
 			break
 		}
 	}
@@ -393,15 +396,15 @@ func TestFromConfigAlerts(t *testing.T) {
 	}
 
 	// Verify rules
-	if len(config.Rules) != 2 {
-		t.Errorf("expected 2 rules, got %d", len(config.Rules))
+	if len(alertCfg.Rules) != 2 {
+		t.Errorf("expected 2 rules, got %d", len(alertCfg.Rules))
 	}
 
 	// Find and verify task-failed rule
 	var taskFailedRule *AlertRule
-	for i := range config.Rules {
-		if config.Rules[i].Name == "task-failed" {
-			taskFailedRule = &config.Rules[i]
+	for i := range alertCfg.Rules {
+		if alertCfg.Rules[i].Name == "task-failed" {
+			taskFailedRule = &alertCfg.Rules[i]
 			break
 		}
 	}
@@ -413,34 +416,41 @@ func TestFromConfigAlerts(t *testing.T) {
 	}
 
 	// Verify defaults
-	if config.Defaults.Cooldown != 10*time.Minute {
-		t.Errorf("expected default cooldown 10m, got %v", config.Defaults.Cooldown)
+	if alertCfg.Defaults.Cooldown != 10*time.Minute {
+		t.Errorf("expected default cooldown 10m, got %v", alertCfg.Defaults.Cooldown)
 	}
-	if config.Defaults.DefaultSeverity != SeverityWarning {
-		t.Errorf("expected default severity Warning, got %s", config.Defaults.DefaultSeverity)
+	if alertCfg.Defaults.DefaultSeverity != SeverityWarning {
+		t.Errorf("expected default severity Warning, got %s", alertCfg.Defaults.DefaultSeverity)
 	}
-	if !config.Defaults.SuppressDuplicates {
+	if !alertCfg.Defaults.SuppressDuplicates {
 		t.Error("expected SuppressDuplicates to be true")
 	}
 }
 
 func TestFromConfigAlerts_Empty(t *testing.T) {
-	config := FromConfigAlerts(false, nil, nil, DefaultsConfigInput{})
+	cfg := &config.AlertsConfig{
+		Enabled:  false,
+		Channels: nil,
+		Rules:    nil,
+		Defaults: config.AlertDefaultsConfig{},
+	}
 
-	if config.Enabled {
+	alertCfg := FromConfigAlerts(cfg)
+
+	if alertCfg.Enabled {
 		t.Error("expected config to be disabled")
 	}
-	if len(config.Channels) != 0 {
-		t.Errorf("expected 0 channels, got %d", len(config.Channels))
+	if len(alertCfg.Channels) != 0 {
+		t.Errorf("expected 0 channels, got %d", len(alertCfg.Channels))
 	}
-	if len(config.Rules) != 0 {
-		t.Errorf("expected 0 rules, got %d", len(config.Rules))
+	if len(alertCfg.Rules) != 0 {
+		t.Errorf("expected 0 rules, got %d", len(alertCfg.Rules))
 	}
 }
 
-func TestChannelConfigInput_NilSubConfigs(t *testing.T) {
+func TestChannelConfig_NilSubConfigs(t *testing.T) {
 	// Test that nil sub-configs don't cause issues
-	input := ChannelConfigInput{
+	input := config.AlertChannelConfig{
 		Name:      "test",
 		Type:      "webhook",
 		Enabled:   true,
@@ -470,12 +480,12 @@ func TestChannelConfigInput_NilSubConfigs(t *testing.T) {
 	}
 }
 
-func TestConditionConfigInput_ZeroValues(t *testing.T) {
-	input := RuleConfigInput{
+func TestConditionConfig_ZeroValues(t *testing.T) {
+	input := config.AlertRuleConfig{
 		Name:      "zero-condition",
 		Type:      "task_failed",
 		Enabled:   true,
-		Condition: ConditionConfigInput{}, // All zero values
+		Condition: config.AlertConditionConfig{}, // All zero values
 		Severity:  "warning",
 	}
 

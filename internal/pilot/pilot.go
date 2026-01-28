@@ -380,12 +380,7 @@ func (p *Pilot) initAlerts(cfg *config.Config) {
 	// Register webhook channels
 	for _, ch := range cfg.Alerts.Channels {
 		if ch.Type == "webhook" && ch.Enabled && ch.Webhook != nil {
-			webhookChannel := alerts.NewWebhookChannel(ch.Name, &alerts.WebhookChannelConfig{
-				URL:     ch.Webhook.URL,
-				Method:  ch.Webhook.Method,
-				Headers: ch.Webhook.Headers,
-				Secret:  ch.Webhook.Secret,
-			})
+			webhookChannel := alerts.NewWebhookChannel(ch.Name, ch.Webhook)
 			dispatcher.RegisterChannel(webhookChannel)
 			log.Info("Registered webhook alert channel",
 				slog.String("name", ch.Name),
@@ -410,70 +405,5 @@ func (p *Pilot) initAlerts(cfg *config.Config) {
 
 // convertAlertsConfig converts config.AlertsConfig to alerts.AlertConfig
 func (p *Pilot) convertAlertsConfig(cfg *config.AlertsConfig) *alerts.AlertConfig {
-	// Build channel configs
-	channels := make([]alerts.ChannelConfigInput, len(cfg.Channels))
-	for i, ch := range cfg.Channels {
-		channels[i] = alerts.ChannelConfigInput{
-			Name:       ch.Name,
-			Type:       ch.Type,
-			Enabled:    ch.Enabled,
-			Severities: ch.Severities,
-		}
-		if ch.Slack != nil {
-			channels[i].Slack = &alerts.SlackConfigInput{Channel: ch.Slack.Channel}
-		}
-		if ch.Telegram != nil {
-			channels[i].Telegram = &alerts.TelegramConfigInput{ChatID: ch.Telegram.ChatID}
-		}
-		if ch.Email != nil {
-			channels[i].Email = &alerts.EmailConfigInput{To: ch.Email.To, Subject: ch.Email.Subject}
-		}
-		if ch.Webhook != nil {
-			channels[i].Webhook = &alerts.WebhookConfigInput{
-				URL:     ch.Webhook.URL,
-				Method:  ch.Webhook.Method,
-				Headers: ch.Webhook.Headers,
-				Secret:  ch.Webhook.Secret,
-			}
-		}
-		if ch.PagerDuty != nil {
-			channels[i].PagerDuty = &alerts.PagerDutyConfigInput{
-				RoutingKey: ch.PagerDuty.RoutingKey,
-				ServiceID:  ch.PagerDuty.ServiceID,
-			}
-		}
-	}
-
-	// Build rule configs
-	rules := make([]alerts.RuleConfigInput, len(cfg.Rules))
-	for i, r := range cfg.Rules {
-		rules[i] = alerts.RuleConfigInput{
-			Name:        r.Name,
-			Type:        r.Type,
-			Enabled:     r.Enabled,
-			Severity:    r.Severity,
-			Channels:    r.Channels,
-			Cooldown:    r.Cooldown,
-			Description: r.Description,
-			Condition: alerts.ConditionConfigInput{
-				ProgressUnchangedFor: r.Condition.ProgressUnchangedFor,
-				ConsecutiveFailures:  r.Condition.ConsecutiveFailures,
-				DailySpendThreshold:  r.Condition.DailySpendThreshold,
-				BudgetLimit:          r.Condition.BudgetLimit,
-				UsageSpikePercent:    r.Condition.UsageSpikePercent,
-				Pattern:              r.Condition.Pattern,
-				FilePattern:          r.Condition.FilePattern,
-				Paths:                r.Condition.Paths,
-			},
-		}
-	}
-
-	// Build defaults
-	defaults := alerts.DefaultsConfigInput{
-		Cooldown:           cfg.Defaults.Cooldown,
-		DefaultSeverity:    cfg.Defaults.DefaultSeverity,
-		SuppressDuplicates: cfg.Defaults.SuppressDuplicates,
-	}
-
-	return alerts.FromConfigAlerts(cfg.Enabled, channels, rules, defaults)
+	return alerts.FromConfigAlerts(cfg)
 }

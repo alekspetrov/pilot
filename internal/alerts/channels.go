@@ -14,6 +14,7 @@ import (
 
 	"github.com/alekspetrov/pilot/internal/adapters/slack"
 	"github.com/alekspetrov/pilot/internal/adapters/telegram"
+	"github.com/alekspetrov/pilot/internal/config"
 )
 
 // SlackChannel sends alerts to Slack
@@ -222,18 +223,18 @@ type WebhookChannel struct {
 }
 
 // NewWebhookChannel creates a new webhook alert channel
-func NewWebhookChannel(name string, config *WebhookChannelConfig) *WebhookChannel {
-	method := config.Method
+func NewWebhookChannel(name string, cfg *config.AlertWebhookConfig) *WebhookChannel {
+	method := cfg.Method
 	if method == "" {
 		method = http.MethodPost
 	}
 
 	return &WebhookChannel{
 		name:    name,
-		url:     config.URL,
+		url:     cfg.URL,
 		method:  method,
-		headers: config.Headers,
-		secret:  config.Secret,
+		headers: cfg.Headers,
+		secret:  cfg.Secret,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -300,12 +301,12 @@ type EmailSender interface {
 }
 
 // NewEmailChannel creates a new email alert channel
-func NewEmailChannel(name string, sender EmailSender, config *EmailChannelConfig) *EmailChannel {
+func NewEmailChannel(name string, sender EmailSender, cfg *config.AlertEmailConfig) *EmailChannel {
 	return &EmailChannel{
 		name:    name,
 		sender:  sender,
-		to:      config.To,
-		subject: config.Subject,
+		to:      cfg.To,
+		subject: cfg.Subject,
 	}
 }
 
@@ -412,11 +413,11 @@ type PagerDutyChannel struct {
 const pagerDutyEventsAPI = "https://events.pagerduty.com/v2/enqueue"
 
 // NewPagerDutyChannel creates a new PagerDuty alert channel
-func NewPagerDutyChannel(name string, config *PagerDutyChannelConfig) *PagerDutyChannel {
+func NewPagerDutyChannel(name string, cfg *config.AlertPagerDutyConfig) *PagerDutyChannel {
 	return &PagerDutyChannel{
 		name:       name,
-		routingKey: config.RoutingKey,
-		serviceID:  config.ServiceID,
+		routingKey: cfg.RoutingKey,
+		serviceID:  cfg.ServiceID,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
