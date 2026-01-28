@@ -206,6 +206,145 @@ func TestPatternFeedback(t *testing.T) {
 	}
 }
 
+// TestRecordPatternFeedbackClamping verifies that confidence is properly bounded
+// to [0.1, 0.95] when recording feedback, regardless of delta size.
+// This tests the fix for GH-81 where SQLite MIN/MAX aggregate functions
+// were incorrectly used instead of scalar min/max functions.
+func TestRecordPatternFeedbackClamping(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "pilot-test-clamping-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, err := NewStore(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	tests := []struct {
+		name           string
+		initialConf    float64
+		outcome        string
+		delta          float64
+		expectedConf   float64
+		description    string
+	}{
+		{
+			name:         "success clamps at upper bound",
+			initialConf:  0.90,
+			outcome:      "success",
+			delta:        0.10,
+			expectedConf: 0.95,
+			description:  "0.90 + 0.10 = 1.00 should clamp to 0.95",
+		},
+		{
+			name:         "success with large delta clamps at upper bound",
+			initialConf:  0.50,
+			outcome:      "success",
+			delta:        0.60,
+			expectedConf: 0.95,
+			description:  "0.50 + 0.60 = 1.10 should clamp to 0.95",
+		},
+		{
+			name:         "failure clamps at lower bound",
+			initialConf:  0.15,
+			outcome:      "failure",
+			delta:        0.10,
+			expectedConf: 0.10,
+			description:  "0.15 - 0.10 = 0.05 should clamp to 0.10",
+		},
+		{
+			name:         "failure with large delta clamps at lower bound",
+			initialConf:  0.50,
+			outcome:      "failure",
+			delta:        0.60,
+			expectedConf: 0.10,
+			description:  "0.50 - 0.60 = -0.10 should clamp to 0.10",
+		},
+		{
+			name:         "success within bounds stays within bounds",
+			initialConf:  0.50,
+			outcome:      "success",
+			delta:        0.10,
+			expectedConf: 0.60,
+			description:  "0.50 + 0.10 = 0.60 should remain 0.60",
+		},
+		{
+			name:         "failure within bounds stays within bounds",
+			initialConf:  0.50,
+			outcome:      "failure",
+			delta:        0.10,
+			expectedConf: 0.40,
+			description:  "0.50 - 0.10 = 0.40 should remain 0.40",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			patternID := "clamp_test_" + tt.name
+
+			// Create pattern with initial confidence
+			pattern := &CrossPattern{
+				ID:         patternID,
+				Type:       "code",
+				Title:      "Clamping Test Pattern",
+				Confidence: tt.initialConf,
+				Scope:      "org",
+			}
+			if err := store.SaveCrossPattern(pattern); err != nil {
+				t.Fatalf("SaveCrossPattern failed: %v", err)
+			}
+
+			// Link to project
+			if err := store.LinkPatternToProject(patternID, "/test/project"); err != nil {
+				t.Fatalf("LinkPatternToProject failed: %v", err)
+			}
+
+			// Create execution
+			exec := &Execution{
+				ID:          "exec_" + patternID,
+				TaskID:      "task_clamp",
+				ProjectPath: "/test/project",
+				Status:      "completed",
+			}
+			if err := store.SaveExecution(exec); err != nil {
+				t.Fatalf("SaveExecution failed: %v", err)
+			}
+
+			// Record feedback
+			feedback := &PatternFeedback{
+				PatternID:       patternID,
+				ExecutionID:     exec.ID,
+				ProjectPath:     "/test/project",
+				Outcome:         tt.outcome,
+				ConfidenceDelta: tt.delta,
+			}
+			if err := store.RecordPatternFeedback(feedback); err != nil {
+				t.Fatalf("RecordPatternFeedback failed: %v", err)
+			}
+
+			// Verify confidence is properly clamped
+			updated, err := store.GetCrossPattern(patternID)
+			if err != nil {
+				t.Fatalf("GetCrossPattern failed: %v", err)
+			}
+
+			// Allow small floating point tolerance
+			tolerance := 0.001
+			if updated.Confidence < tt.expectedConf-tolerance || updated.Confidence > tt.expectedConf+tolerance {
+				t.Errorf("%s: got confidence %f, want %f", tt.description, updated.Confidence, tt.expectedConf)
+			}
+
+			// Verify confidence is always within valid bounds
+			if updated.Confidence < 0.1 || updated.Confidence > 0.95 {
+				t.Errorf("confidence %f is outside valid bounds [0.1, 0.95]", updated.Confidence)
+			}
+		})
+	}
+}
+
 func TestCrossPatternStats(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "pilot-test-stats-*")
 	if err != nil {
