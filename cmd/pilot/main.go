@@ -76,6 +76,7 @@ func main() {
 		newConfigCmd(),
 		newLogsCmd(),
 		newWebhooksCmd(),
+		newUpgradeCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
