@@ -438,7 +438,9 @@ func handleGitHubIssue(ctx context.Context, cfg *config.Config, client *github.C
 
 	parts := strings.Split(cfg.Adapters.Github.Repo, "/")
 	if len(parts) == 2 {
-		_ = client.AddLabels(ctx, parts[0], parts[1], issue.Number, []string{github.LabelInProgress})
+		if err := client.AddLabels(ctx, parts[0], parts[1], issue.Number, []string{github.LabelInProgress}); err != nil {
+			slog.Warn("failed to add in-progress label", slog.Int("issue", issue.Number), slog.Any("error", err))
+		}
 	}
 
 	taskDesc := fmt.Sprintf("GitHub Issue #%d: %s\n\n%s", issue.Number, issue.Title, issue.Body)
@@ -485,20 +487,30 @@ func handleGitHubIssue(ctx context.Context, cfg *config.Config, client *github.C
 	}
 
 	if len(parts) == 2 {
-		_ = client.RemoveLabel(ctx, parts[0], parts[1], issue.Number, github.LabelInProgress)
+		if err := client.RemoveLabel(ctx, parts[0], parts[1], issue.Number, github.LabelInProgress); err != nil {
+			slog.Warn("failed to remove in-progress label", slog.Int("issue", issue.Number), slog.Any("error", err))
+		}
 
 		if execErr != nil {
-			_ = client.AddLabels(ctx, parts[0], parts[1], issue.Number, []string{github.LabelFailed})
+			if err := client.AddLabels(ctx, parts[0], parts[1], issue.Number, []string{github.LabelFailed}); err != nil {
+				slog.Warn("failed to add failed label", slog.Int("issue", issue.Number), slog.Any("error", err))
+			}
 			comment := fmt.Sprintf("❌ Pilot execution failed:\n\n```\n%s\n```", execErr.Error())
-			_, _ = client.AddComment(ctx, parts[0], parts[1], issue.Number, comment)
+			if _, err := client.AddComment(ctx, parts[0], parts[1], issue.Number, comment); err != nil {
+				slog.Warn("failed to add failure comment", slog.Int("issue", issue.Number), slog.Any("error", err))
+			}
 		} else if result != nil {
-			_ = client.AddLabels(ctx, parts[0], parts[1], issue.Number, []string{github.LabelDone})
+			if err := client.AddLabels(ctx, parts[0], parts[1], issue.Number, []string{github.LabelDone}); err != nil {
+				slog.Warn("failed to add done label", slog.Int("issue", issue.Number), slog.Any("error", err))
+			}
 			comment := fmt.Sprintf("✅ Pilot completed!\n\n**Duration:** %s\n**Branch:** `%s`",
 				result.Duration, branchName)
 			if result.PRUrl != "" {
 				comment += fmt.Sprintf("\n**PR:** %s", result.PRUrl)
 			}
-			_, _ = client.AddComment(ctx, parts[0], parts[1], issue.Number, comment)
+			if _, err := client.AddComment(ctx, parts[0], parts[1], issue.Number, comment); err != nil {
+				slog.Warn("failed to add completion comment", slog.Int("issue", issue.Number), slog.Any("error", err))
+			}
 		}
 	}
 
@@ -1235,7 +1247,9 @@ Examples:
 
 			// Add in-progress label
 			fmt.Println("🏷️  Adding in-progress label...")
-			_ = client.AddLabels(ctx, owner, repoName, int(issueNum), []string{"pilot-in-progress"})
+			if err := client.AddLabels(ctx, owner, repoName, int(issueNum), []string{"pilot-in-progress"}); err != nil {
+				slog.Warn("failed to add in-progress label", slog.Int64("issue", issueNum), slog.Any("error", err))
+			}
 
 			// Execute the task
 			runner := executor.NewRunner()
@@ -1246,25 +1260,37 @@ Examples:
 			result, err := runner.Execute(ctx, task)
 			if err != nil {
 				// Add failed label
-				_ = client.AddLabels(ctx, owner, repoName, int(issueNum), []string{"pilot-failed"})
-				_ = client.RemoveLabel(ctx, owner, repoName, int(issueNum), "pilot-in-progress")
+				if labelErr := client.AddLabels(ctx, owner, repoName, int(issueNum), []string{"pilot-failed"}); labelErr != nil {
+					slog.Warn("failed to add failed label", slog.Int64("issue", issueNum), slog.Any("error", labelErr))
+				}
+				if labelErr := client.RemoveLabel(ctx, owner, repoName, int(issueNum), "pilot-in-progress"); labelErr != nil {
+					slog.Warn("failed to remove in-progress label", slog.Int64("issue", issueNum), slog.Any("error", labelErr))
+				}
 
 				comment := fmt.Sprintf("❌ Pilot execution failed:\n\n```\n%s\n```", err.Error())
-				_, _ = client.AddComment(ctx, owner, repoName, int(issueNum), comment)
+				if _, commentErr := client.AddComment(ctx, owner, repoName, int(issueNum), comment); commentErr != nil {
+					slog.Warn("failed to add failure comment", slog.Int64("issue", issueNum), slog.Any("error", commentErr))
+				}
 
 				return fmt.Errorf("task execution failed: %w", err)
 			}
 
 			// Success - update labels and add comment
-			_ = client.RemoveLabel(ctx, owner, repoName, int(issueNum), "pilot-in-progress")
-			_ = client.AddLabels(ctx, owner, repoName, int(issueNum), []string{"pilot-done"})
+			if labelErr := client.RemoveLabel(ctx, owner, repoName, int(issueNum), "pilot-in-progress"); labelErr != nil {
+				slog.Warn("failed to remove in-progress label", slog.Int64("issue", issueNum), slog.Any("error", labelErr))
+			}
+			if labelErr := client.AddLabels(ctx, owner, repoName, int(issueNum), []string{"pilot-done"}); labelErr != nil {
+				slog.Warn("failed to add done label", slog.Int64("issue", issueNum), slog.Any("error", labelErr))
+			}
 
 			comment := fmt.Sprintf("✅ Pilot completed successfully!\n\n**Duration:** %s\n**Branch:** `%s`",
 				result.Duration, branchName)
 			if result.PRUrl != "" {
 				comment += fmt.Sprintf("\n**PR:** %s", result.PRUrl)
 			}
-			_, _ = client.AddComment(ctx, owner, repoName, int(issueNum), comment)
+			if _, commentErr := client.AddComment(ctx, owner, repoName, int(issueNum), comment); commentErr != nil {
+				slog.Warn("failed to add completion comment", slog.Int64("issue", issueNum), slog.Any("error", commentErr))
+			}
 
 			fmt.Println()
 			fmt.Println("───────────────────────────────────────")
