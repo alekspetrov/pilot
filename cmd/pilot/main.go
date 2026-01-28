@@ -826,7 +826,9 @@ Example:
 							// Add in-progress label
 							parts := strings.Split(cfg.Adapters.Github.Repo, "/")
 							if len(parts) == 2 {
-								_ = client.AddLabels(issueCtx, parts[0], parts[1], issue.Number, []string{github.LabelInProgress})
+								if err := client.AddLabels(issueCtx, parts[0], parts[1], issue.Number, []string{github.LabelInProgress}); err != nil {
+									slog.Warn("Failed to add in-progress label", slog.Int("issue", issue.Number), slog.Any("error", err))
+								}
 							}
 
 							// Build task description
@@ -882,20 +884,30 @@ Example:
 
 							// Update issue with result
 							if len(parts) == 2 {
-								_ = client.RemoveLabel(issueCtx, parts[0], parts[1], issue.Number, github.LabelInProgress)
+								if err := client.RemoveLabel(issueCtx, parts[0], parts[1], issue.Number, github.LabelInProgress); err != nil {
+									slog.Warn("Failed to remove in-progress label", slog.Int("issue", issue.Number), slog.Any("error", err))
+								}
 
 								if execErr != nil {
-									_ = client.AddLabels(issueCtx, parts[0], parts[1], issue.Number, []string{github.LabelFailed})
+									if err := client.AddLabels(issueCtx, parts[0], parts[1], issue.Number, []string{github.LabelFailed}); err != nil {
+										slog.Warn("Failed to add failed label", slog.Int("issue", issue.Number), slog.Any("error", err))
+									}
 									comment := fmt.Sprintf("❌ Pilot execution failed:\n\n```\n%s\n```", execErr.Error())
-									_, _ = client.AddComment(issueCtx, parts[0], parts[1], issue.Number, comment)
+									if _, err := client.AddComment(issueCtx, parts[0], parts[1], issue.Number, comment); err != nil {
+										slog.Warn("Failed to add failure comment", slog.Int("issue", issue.Number), slog.Any("error", err))
+									}
 								} else if result != nil {
-									_ = client.AddLabels(issueCtx, parts[0], parts[1], issue.Number, []string{github.LabelDone})
+									if err := client.AddLabels(issueCtx, parts[0], parts[1], issue.Number, []string{github.LabelDone}); err != nil {
+										slog.Warn("Failed to add done label", slog.Int("issue", issue.Number), slog.Any("error", err))
+									}
 									comment := fmt.Sprintf("✅ Pilot completed!\n\n**Duration:** %s\n**Branch:** `%s`",
 										result.Duration, branchName)
 									if result.PRUrl != "" {
 										comment += fmt.Sprintf("\n**PR:** %s", result.PRUrl)
 									}
-									_, _ = client.AddComment(issueCtx, parts[0], parts[1], issue.Number, comment)
+									if _, err := client.AddComment(issueCtx, parts[0], parts[1], issue.Number, comment); err != nil {
+										slog.Warn("Failed to add completion comment", slog.Int("issue", issue.Number), slog.Any("error", err))
+									}
 								}
 							}
 
