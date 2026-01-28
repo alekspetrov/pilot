@@ -137,28 +137,4 @@ func (n *Notifier) SendTaskBlocked(ctx context.Context, taskID, reason string) e
 	return err
 }
 
-// SendTaskQueued notifies that a task was queued due to rate limit
-func (n *Notifier) SendTaskQueued(ctx context.Context, taskID, title, resetTime, waitDuration string, attempt int) error {
-	text := fmt.Sprintf("⏸️ *Task Queued (Rate Limited)*\n`%s` %s\n\n⏰ Resets at: *%s*\n⏳ Wait time: ~%s\n🔄 Attempt: %d/3",
-		taskID, escapeMarkdown(title), resetTime, waitDuration, attempt)
-	_, err := n.client.SendMessage(ctx, n.chatID, text, "Markdown")
-	return err
-}
-
-// SendTaskRetrying notifies that a queued task is being retried
-func (n *Notifier) SendTaskRetrying(ctx context.Context, taskID, title string, attempt int) error {
-	text := fmt.Sprintf("🔄 *Retrying Task*\n`%s` %s\n\nAttempt %d/3",
-		taskID, escapeMarkdown(title), attempt)
-	_, err := n.client.SendMessage(ctx, n.chatID, text, "Markdown")
-	return err
-}
-
-// SendTaskMaxRetries notifies that a task exceeded maximum retries
-func (n *Notifier) SendTaskMaxRetries(ctx context.Context, taskID, title string, attempts int) error {
-	text := fmt.Sprintf("❌ *Task Abandoned*\n`%s` %s\n\nExceeded max retries (%d attempts)\nRate limit persisted too long",
-		taskID, escapeMarkdown(title), attempts)
-	_, err := n.client.SendMessage(ctx, n.chatID, text, "Markdown")
-	return err
-}
-
 // Note: escapeMarkdown is defined in formatter.go
