@@ -71,6 +71,9 @@ func main() {
 		newSetupCmd(),
 		newReplayCmd(),
 		newTunnelCmd(),
+		newCompletionCmd(),
+		newConfigCmd(),
+		newLogsCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
