@@ -20,7 +20,6 @@ import (
 	"github.com/alekspetrov/pilot/internal/logging"
 	"github.com/alekspetrov/pilot/internal/quality"
 	"github.com/alekspetrov/pilot/internal/tunnel"
-	"github.com/alekspetrov/pilot/internal/webhooks"
 )
 
 // Config represents the main Pilot configuration loaded from YAML.
@@ -42,7 +41,6 @@ type Config struct {
 	Approval       *approval.Config    `yaml:"approval"`
 	Quality        *quality.Config     `yaml:"quality"`
 	Tunnel         *tunnel.Config      `yaml:"tunnel"`
-	Webhooks       *webhooks.Config    `yaml:"webhooks"`
 }
 
 // AdaptersConfig holds configuration for external service adapters.
@@ -270,7 +268,6 @@ func DefaultConfig() *Config {
 		Approval: approval.DefaultConfig(),
 		Quality:  quality.DefaultConfig(),
 		Tunnel:   tunnel.DefaultConfig(),
-		Webhooks: webhooks.DefaultConfig(),
 	}
 }
 
