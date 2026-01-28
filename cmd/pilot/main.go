@@ -71,10 +71,6 @@ func main() {
 		newSetupCmd(),
 		newReplayCmd(),
 		newTunnelCmd(),
-		newWebhooksCmd(),
-		newConfigCmd(),
-		newLogsCmd(),
-		newCompletionCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
