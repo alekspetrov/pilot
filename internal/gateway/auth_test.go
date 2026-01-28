@@ -489,3 +489,89 @@ func TestAuthTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthenticatorMiddleware(t *testing.T) {
+	tests := []struct {
+		name           string
+		authConfig     *AuthConfig
+		authHeader     string
+		remoteAddr     string
+		expectedStatus int
+	}{
+		{
+			name: "valid API token passes",
+			authConfig: &AuthConfig{
+				Type:  AuthTypeAPIToken,
+				Token: testutil.FakeBearerToken,
+			},
+			authHeader:     "Bearer " + testutil.FakeBearerToken,
+			remoteAddr:     "192.168.1.1:8080",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name: "invalid API token returns 401",
+			authConfig: &AuthConfig{
+				Type:  AuthTypeAPIToken,
+				Token: testutil.FakeBearerToken,
+			},
+			authHeader:     "Bearer wrong-token",
+			remoteAddr:     "192.168.1.1:8080",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name: "missing authorization header returns 401",
+			authConfig: &AuthConfig{
+				Type:  AuthTypeAPIToken,
+				Token: testutil.FakeBearerToken,
+			},
+			authHeader:     "",
+			remoteAddr:     "192.168.1.1:8080",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name: "claude-code auth allows localhost",
+			authConfig: &AuthConfig{
+				Type: AuthTypeClaudeCode,
+			},
+			authHeader:     "",
+			remoteAddr:     "127.0.0.1:8080",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name: "claude-code auth blocks external",
+			authConfig: &AuthConfig{
+				Type: AuthTypeClaudeCode,
+			},
+			authHeader:     "",
+			remoteAddr:     "192.168.1.1:8080",
+			expectedStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth := NewAuthenticator(tt.authConfig)
+
+			// Create a simple handler that returns 200
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+
+			// Wrap with middleware
+			protected := auth.Middleware(handler)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+			req.RemoteAddr = tt.remoteAddr
+
+			w := httptest.NewRecorder()
+			protected.ServeHTTP(w, req)
+
+			if w.Code != tt.expectedStatus {
+				t.Errorf("Middleware() status = %d, want %d", w.Code, tt.expectedStatus)
+			}
+		})
+	}
+}

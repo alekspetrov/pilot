@@ -19,13 +19,14 @@ import (
 // from external services (Linear, GitHub, Jira), and exposes REST APIs for status
 // and task management. Server is safe for concurrent use.
 type Server struct {
-	config   *Config
-	sessions *SessionManager
-	router   *Router
-	upgrader websocket.Upgrader
-	server   *http.Server
-	mu       sync.RWMutex
-	running  bool
+	config     *Config
+	authConfig *AuthConfig
+	sessions   *SessionManager
+	router     *Router
+	upgrader   websocket.Upgrader
+	server     *http.Server
+	mu         sync.RWMutex
+	running    bool
 }
 
 // Config holds gateway server configuration including network binding options.
@@ -38,7 +39,8 @@ type Config struct {
 
 // NewServer creates a new gateway server with the given configuration.
 // The server is not started until Start is called.
-func NewServer(config *Config) *Server {
+// Use WithAuthConfig to configure authentication for API endpoints.
+func NewServer(config *Config, opts ...ServerOption) *Server {
 	s := &Server{
 		config:   config,
 		sessions: NewSessionManager(),
@@ -66,7 +68,21 @@ func NewServer(config *Config) *Server {
 			},
 		},
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
 	return s
+}
+
+// ServerOption is a functional option for configuring Server.
+type ServerOption func(*Server)
+
+// WithAuthConfig sets the authentication configuration for the server.
+// When set, API endpoints under /api/v1/* will require authentication.
+func WithAuthConfig(auth *AuthConfig) ServerOption {
+	return func(s *Server) {
+		s.authConfig = auth
+	}
 }
 
 // Start starts the gateway server and blocks until the context is cancelled
@@ -86,12 +102,21 @@ func (s *Server) Start(ctx context.Context) error {
 	// WebSocket endpoint for control plane
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
-	// HTTP endpoints
+	// Public endpoints (no auth required)
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/api/v1/status", s.handleStatus)
-	mux.HandleFunc("/api/v1/tasks", s.handleTasks)
 
-	// Webhook endpoints for adapters
+	// Protected API endpoints
+	if s.authConfig != nil {
+		auth := NewAuthenticator(s.authConfig)
+		mux.Handle("/api/v1/status", auth.Middleware(http.HandlerFunc(s.handleStatus)))
+		mux.Handle("/api/v1/tasks", auth.Middleware(http.HandlerFunc(s.handleTasks)))
+	} else {
+		// No auth configured - allow unrestricted access (development mode)
+		mux.HandleFunc("/api/v1/status", s.handleStatus)
+		mux.HandleFunc("/api/v1/tasks", s.handleTasks)
+	}
+
+	// Webhook endpoints for adapters (use signature validation, not bearer auth)
 	mux.HandleFunc("/webhooks/linear", s.handleLinearWebhook)
 	mux.HandleFunc("/webhooks/github", s.handleGithubWebhook)
 	mux.HandleFunc("/webhooks/jira", s.handleJiraWebhook)

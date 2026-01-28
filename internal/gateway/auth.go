@@ -117,3 +117,15 @@ func (t *Token) HasScope(scope string) bool {
 	}
 	return false
 }
+
+// Middleware returns an HTTP middleware that enforces authentication.
+// It wraps the provided handler and returns 401 Unauthorized if authentication fails.
+func (a *Authenticator) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := a.Authenticate(r); err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

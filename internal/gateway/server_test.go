@@ -704,3 +704,161 @@ func TestServerShutdownNotRunning(t *testing.T) {
 		t.Errorf("Shutdown on non-running server should not error: %v", err)
 	}
 }
+
+func TestServerWithAuthConfig(t *testing.T) {
+	config := &Config{Host: "127.0.0.1", Port: 9090}
+	authConfig := &AuthConfig{
+		Type:  AuthTypeAPIToken,
+		Token: "test-api-token",
+	}
+
+	server := NewServer(config, WithAuthConfig(authConfig))
+
+	if server.authConfig == nil {
+		t.Error("Expected authConfig to be set")
+	}
+	if server.authConfig.Token != "test-api-token" {
+		t.Errorf("Expected token 'test-api-token', got '%s'", server.authConfig.Token)
+	}
+}
+
+func TestServerAuthMiddlewareIntegration(t *testing.T) {
+	config := &Config{Host: "127.0.0.1", Port: 29090}
+	authConfig := &AuthConfig{
+		Type:  AuthTypeAPIToken,
+		Token: "secret-test-token",
+	}
+
+	server := NewServer(config, WithAuthConfig(authConfig))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// Start server in background
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Start(ctx)
+	}()
+
+	// Wait for server to start
+	time.Sleep(50 * time.Millisecond)
+
+	baseURL := "http://127.0.0.1:29090"
+
+	tests := []struct {
+		name           string
+		path           string
+		authHeader     string
+		expectedStatus int
+	}{
+		{
+			name:           "status endpoint without auth returns 401",
+			path:           "/api/v1/status",
+			authHeader:     "",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:           "status endpoint with valid auth returns 200",
+			path:           "/api/v1/status",
+			authHeader:     "Bearer secret-test-token",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "status endpoint with invalid auth returns 401",
+			path:           "/api/v1/status",
+			authHeader:     "Bearer wrong-token",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:           "tasks endpoint without auth returns 401",
+			path:           "/api/v1/tasks",
+			authHeader:     "",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:           "tasks endpoint with valid auth returns 200",
+			path:           "/api/v1/tasks",
+			authHeader:     "Bearer secret-test-token",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "health endpoint is public (no auth required)",
+			path:           "/health",
+			authHeader:     "",
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, baseURL+tt.path, nil)
+			if err != nil {
+				t.Fatalf("Failed to create request: %v", err)
+			}
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Request failed: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != tt.expectedStatus {
+				t.Errorf("Expected status %d, got %d", tt.expectedStatus, resp.StatusCode)
+			}
+		})
+	}
+
+	// Wait for server to shut down
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Error("Server did not shut down in time")
+	}
+}
+
+func TestServerWithoutAuthConfig(t *testing.T) {
+	config := &Config{Host: "127.0.0.1", Port: 29091}
+
+	// No auth config - should allow unrestricted access
+	server := NewServer(config)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// Start server in background
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Start(ctx)
+	}()
+
+	// Wait for server to start
+	time.Sleep(50 * time.Millisecond)
+
+	baseURL := "http://127.0.0.1:29091"
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	// Without auth config, endpoints should be accessible
+	resp, err := client.Get(baseURL + "/api/v1/status")
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200 (no auth configured), got %d", resp.StatusCode)
+	}
+
+	// Wait for server to shut down
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Error("Server did not shut down in time")
+	}
+}
