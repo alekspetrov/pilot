@@ -611,6 +611,11 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 			r.reportProgress(task.ID, "Completed", 100, "Task completed successfully")
 		}
 
+		// Sync Navigator index after task completion (GH-57)
+		if syncErr := r.SyncNavigatorIndex(task, "completed"); syncErr != nil {
+			log.Warn("Failed to sync Navigator index", slog.Any("error", syncErr))
+		}
+
 		// Emit task completed event
 		r.emitAlertEvent(AlertEvent{
 			Type:      AlertEventTypeTaskCompleted,
