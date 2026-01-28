@@ -191,7 +191,7 @@ func newStatusCmd() *cobra.Command {
 						"linear":   cfg.Adapters.Linear != nil && cfg.Adapters.Linear.Enabled,
 						"slack":    cfg.Adapters.Slack != nil && cfg.Adapters.Slack.Enabled,
 						"telegram": cfg.Adapters.Telegram != nil && cfg.Adapters.Telegram.Enabled,
-						"github":   cfg.Adapters.Github != nil && cfg.Adapters.Github.Enabled,
+						"github":   cfg.Adapters.GitHub != nil && cfg.Adapters.GitHub.Enabled,
 						"jira":     cfg.Adapters.Jira != nil && cfg.Adapters.Jira.Enabled,
 					},
 					"projects": cfg.Projects,
@@ -227,7 +227,7 @@ func newStatusCmd() *cobra.Command {
 			} else {
 				fmt.Println("  ○ Telegram (disabled)")
 			}
-			if cfg.Adapters.Github != nil && cfg.Adapters.Github.Enabled {
+			if cfg.Adapters.GitHub != nil && cfg.Adapters.GitHub.Enabled {
 				fmt.Println("  ✓ GitHub (enabled)")
 			} else {
 				fmt.Println("  ○ GitHub (disabled)")
@@ -803,33 +803,33 @@ Example:
 
 			// Start GitHub polling if enabled
 			var ghPoller *github.Poller
-			if cfg.Adapters.Github != nil && cfg.Adapters.Github.Enabled &&
-				cfg.Adapters.Github.Polling != nil && cfg.Adapters.Github.Polling.Enabled {
+			if cfg.Adapters.GitHub != nil && cfg.Adapters.GitHub.Enabled &&
+				cfg.Adapters.GitHub.Polling != nil && cfg.Adapters.GitHub.Polling.Enabled {
 
-				token := cfg.Adapters.Github.Token
+				token := cfg.Adapters.GitHub.Token
 				if token == "" {
 					token = os.Getenv("GITHUB_TOKEN")
 				}
 
-				if token != "" && cfg.Adapters.Github.Repo != "" {
+				if token != "" && cfg.Adapters.GitHub.Repo != "" {
 					client := github.NewClient(token)
-					label := cfg.Adapters.Github.Polling.Label
+					label := cfg.Adapters.GitHub.Polling.Label
 					if label == "" {
-						label = cfg.Adapters.Github.PilotLabel
+						label = cfg.Adapters.GitHub.PilotLabel
 					}
-					interval := cfg.Adapters.Github.Polling.Interval
+					interval := cfg.Adapters.GitHub.Polling.Interval
 					if interval == 0 {
 						interval = 30 * time.Second
 					}
 
 					var err error
-					ghPoller, err = github.NewPoller(client, cfg.Adapters.Github.Repo, label, interval,
+					ghPoller, err = github.NewPoller(client, cfg.Adapters.GitHub.Repo, label, interval,
 						github.WithOnIssue(func(issueCtx context.Context, issue *github.Issue) error {
 							// Execute issue as task via dispatcher (GH-46)
 							fmt.Printf("\n📥 GitHub Issue #%d: %s\n", issue.Number, issue.Title)
 
 							// Add in-progress label
-							parts := strings.Split(cfg.Adapters.Github.Repo, "/")
+							parts := strings.Split(cfg.Adapters.GitHub.Repo, "/")
 							if len(parts) == 2 {
 								if err := client.AddLabels(issueCtx, parts[0], parts[1], issue.Number, []string{github.LabelInProgress}); err != nil {
 									slog.Warn("Failed to add in-progress label", slog.Int("issue", issue.Number), slog.Any("error", err))
@@ -922,7 +922,7 @@ Example:
 					if err != nil {
 						fmt.Printf("⚠️  GitHub polling disabled: %v\n", err)
 					} else {
-						fmt.Printf("🐙 GitHub polling enabled: %s (every %s)\n", cfg.Adapters.Github.Repo, interval)
+						fmt.Printf("🐙 GitHub polling enabled: %s (every %s)\n", cfg.Adapters.GitHub.Repo, interval)
 						go ghPoller.Start(ctx)
 					}
 				}
@@ -1076,11 +1076,11 @@ Examples:
 			}
 
 			// Check GitHub is configured
-			if cfg.Adapters == nil || cfg.Adapters.Github == nil || !cfg.Adapters.Github.Enabled {
+			if cfg.Adapters == nil || cfg.Adapters.GitHub == nil || !cfg.Adapters.GitHub.Enabled {
 				return fmt.Errorf("GitHub adapter not enabled. Run 'pilot setup' or edit ~/.pilot/config.yaml")
 			}
 
-			token := cfg.Adapters.Github.Token
+			token := cfg.Adapters.GitHub.Token
 			if token == "" {
 				token = os.Getenv("GITHUB_TOKEN")
 			}
@@ -1090,7 +1090,7 @@ Examples:
 
 			// Determine repo
 			if repo == "" {
-				repo = cfg.Adapters.Github.Repo
+				repo = cfg.Adapters.GitHub.Repo
 			}
 			if repo == "" {
 				return fmt.Errorf("no repository specified. Use --repo owner/repo or set in config")
