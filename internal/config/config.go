@@ -15,6 +15,7 @@ import (
 	"github.com/alekspetrov/pilot/internal/adapters/linear"
 	"github.com/alekspetrov/pilot/internal/adapters/slack"
 	"github.com/alekspetrov/pilot/internal/adapters/telegram"
+	"github.com/alekspetrov/pilot/internal/alerts"
 	"github.com/alekspetrov/pilot/internal/approval"
 	"github.com/alekspetrov/pilot/internal/budget"
 	"github.com/alekspetrov/pilot/internal/executor"
@@ -151,35 +152,14 @@ type AlertChannelConfig struct {
 	PagerDuty *AlertPagerDutyConfig `yaml:"pagerduty,omitempty"`
 }
 
-// AlertSlackConfig holds Slack-specific alert channel settings.
-type AlertSlackConfig struct {
-	Channel string `yaml:"channel"` // #channel-name
-}
-
-// AlertTelegramConfig holds Telegram-specific alert channel settings.
-type AlertTelegramConfig struct {
-	ChatID int64 `yaml:"chat_id"`
-}
-
-// AlertEmailConfig holds email-specific alert channel settings.
-type AlertEmailConfig struct {
-	To      []string `yaml:"to"`
-	Subject string   `yaml:"subject"` // Optional custom subject template
-}
-
-// AlertWebhookConfig holds webhook-specific alert channel settings.
-type AlertWebhookConfig struct {
-	URL     string            `yaml:"url"`
-	Method  string            `yaml:"method"` // POST, PUT
-	Headers map[string]string `yaml:"headers"`
-	Secret  string            `yaml:"secret"` // For HMAC signing
-}
-
-// AlertPagerDutyConfig holds PagerDuty-specific alert channel settings.
-type AlertPagerDutyConfig struct {
-	RoutingKey string `yaml:"routing_key"` // Integration key
-	ServiceID  string `yaml:"service_id"`
-}
+// Type aliases for alert channel configs - single source of truth in alerts package.
+type (
+	AlertSlackConfig     = alerts.SlackChannelConfig
+	AlertTelegramConfig  = alerts.TelegramChannelConfig
+	AlertEmailConfig     = alerts.EmailChannelConfig
+	AlertWebhookConfig   = alerts.WebhookChannelConfig
+	AlertPagerDutyConfig = alerts.PagerDutyChannelConfig
+)
 
 // AlertRuleConfig defines a rule that triggers alerts based on specific conditions.
 type AlertRuleConfig struct {

@@ -2237,39 +2237,21 @@ func getAlertsConfig(cfg *config.Config) *alerts.AlertConfig {
 
 	alertsCfg := cfg.Alerts
 
-	// Convert to alerts package types
+	// Convert to alerts package types - types are unified via aliases
 	channels := make([]alerts.ChannelConfigInput, 0, len(alertsCfg.Channels))
 	for _, ch := range alertsCfg.Channels {
-		input := alerts.ChannelConfigInput{
+		channels = append(channels, alerts.ChannelConfigInput{
 			Name:       ch.Name,
 			Type:       ch.Type,
 			Enabled:    ch.Enabled,
 			Severities: ch.Severities,
-		}
-		if ch.Slack != nil {
-			input.Slack = &alerts.SlackConfigInput{Channel: ch.Slack.Channel}
-		}
-		if ch.Telegram != nil {
-			input.Telegram = &alerts.TelegramConfigInput{ChatID: ch.Telegram.ChatID}
-		}
-		if ch.Email != nil {
-			input.Email = &alerts.EmailConfigInput{To: ch.Email.To, Subject: ch.Email.Subject}
-		}
-		if ch.Webhook != nil {
-			input.Webhook = &alerts.WebhookConfigInput{
-				URL:     ch.Webhook.URL,
-				Method:  ch.Webhook.Method,
-				Headers: ch.Webhook.Headers,
-				Secret:  ch.Webhook.Secret,
-			}
-		}
-		if ch.PagerDuty != nil {
-			input.PagerDuty = &alerts.PagerDutyConfigInput{
-				RoutingKey: ch.PagerDuty.RoutingKey,
-				ServiceID:  ch.PagerDuty.ServiceID,
-			}
-		}
-		channels = append(channels, input)
+			// Direct assignment - config types are aliases to alerts types
+			Slack:     ch.Slack,
+			Telegram:  ch.Telegram,
+			Email:     ch.Email,
+			Webhook:   ch.Webhook,
+			PagerDuty: ch.PagerDuty,
+		})
 	}
 
 	rules := make([]alerts.RuleConfigInput, 0, len(alertsCfg.Rules))

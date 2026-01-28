@@ -32,47 +32,18 @@ func FromConfigAlerts(enabled bool, channels []ChannelConfigInput, rules []RuleC
 	return alertCfg
 }
 
-// ChannelConfigInput represents channel config from config package
+// ChannelConfigInput represents channel config from config package.
+// Uses *ChannelConfig types directly - single source of truth for channel configs.
 type ChannelConfigInput struct {
 	Name       string
 	Type       string
 	Enabled    bool
 	Severities []string
-	Slack      *SlackConfigInput
-	Telegram   *TelegramConfigInput
-	Email      *EmailConfigInput
-	Webhook    *WebhookConfigInput
-	PagerDuty  *PagerDutyConfigInput
-}
-
-// SlackConfigInput represents Slack config from config package
-type SlackConfigInput struct {
-	Channel string
-}
-
-// TelegramConfigInput represents Telegram config from config package
-type TelegramConfigInput struct {
-	ChatID int64
-}
-
-// EmailConfigInput represents Email config from config package
-type EmailConfigInput struct {
-	To      []string
-	Subject string
-}
-
-// WebhookConfigInput represents Webhook config from config package
-type WebhookConfigInput struct {
-	URL     string
-	Method  string
-	Headers map[string]string
-	Secret  string
-}
-
-// PagerDutyConfigInput represents PagerDuty config from config package
-type PagerDutyConfigInput struct {
-	RoutingKey string
-	ServiceID  string
+	Slack      *SlackChannelConfig
+	Telegram   *TelegramChannelConfig
+	Email      *EmailChannelConfig
+	Webhook    *WebhookChannelConfig
+	PagerDuty  *PagerDutyChannelConfig
 }
 
 // RuleConfigInput represents rule config from config package
@@ -112,45 +83,16 @@ func convertChannel(in ChannelConfigInput) ChannelConfig {
 		Type:       in.Type,
 		Enabled:    in.Enabled,
 		Severities: make([]Severity, 0, len(in.Severities)),
+		// Direct assignment - types are now unified
+		Slack:     in.Slack,
+		Telegram:  in.Telegram,
+		Email:     in.Email,
+		Webhook:   in.Webhook,
+		PagerDuty: in.PagerDuty,
 	}
 
 	for _, s := range in.Severities {
 		ch.Severities = append(ch.Severities, parseSeverity(s))
-	}
-
-	if in.Slack != nil {
-		ch.Slack = &SlackChannelConfig{
-			Channel: in.Slack.Channel,
-		}
-	}
-
-	if in.Telegram != nil {
-		ch.Telegram = &TelegramChannelConfig{
-			ChatID: in.Telegram.ChatID,
-		}
-	}
-
-	if in.Email != nil {
-		ch.Email = &EmailChannelConfig{
-			To:      in.Email.To,
-			Subject: in.Email.Subject,
-		}
-	}
-
-	if in.Webhook != nil {
-		ch.Webhook = &WebhookChannelConfig{
-			URL:     in.Webhook.URL,
-			Method:  in.Webhook.Method,
-			Headers: in.Webhook.Headers,
-			Secret:  in.Webhook.Secret,
-		}
-	}
-
-	if in.PagerDuty != nil {
-		ch.PagerDuty = &PagerDutyChannelConfig{
-			RoutingKey: in.PagerDuty.RoutingKey,
-			ServiceID:  in.PagerDuty.ServiceID,
-		}
 	}
 
 	return ch

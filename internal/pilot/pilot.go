@@ -410,7 +410,7 @@ func (p *Pilot) initAlerts(cfg *config.Config) {
 
 // convertAlertsConfig converts config.AlertsConfig to alerts.AlertConfig
 func (p *Pilot) convertAlertsConfig(cfg *config.AlertsConfig) *alerts.AlertConfig {
-	// Build channel configs
+	// Build channel configs - types are now unified via aliases
 	channels := make([]alerts.ChannelConfigInput, len(cfg.Channels))
 	for i, ch := range cfg.Channels {
 		channels[i] = alerts.ChannelConfigInput{
@@ -418,29 +418,12 @@ func (p *Pilot) convertAlertsConfig(cfg *config.AlertsConfig) *alerts.AlertConfi
 			Type:       ch.Type,
 			Enabled:    ch.Enabled,
 			Severities: ch.Severities,
-		}
-		if ch.Slack != nil {
-			channels[i].Slack = &alerts.SlackConfigInput{Channel: ch.Slack.Channel}
-		}
-		if ch.Telegram != nil {
-			channels[i].Telegram = &alerts.TelegramConfigInput{ChatID: ch.Telegram.ChatID}
-		}
-		if ch.Email != nil {
-			channels[i].Email = &alerts.EmailConfigInput{To: ch.Email.To, Subject: ch.Email.Subject}
-		}
-		if ch.Webhook != nil {
-			channels[i].Webhook = &alerts.WebhookConfigInput{
-				URL:     ch.Webhook.URL,
-				Method:  ch.Webhook.Method,
-				Headers: ch.Webhook.Headers,
-				Secret:  ch.Webhook.Secret,
-			}
-		}
-		if ch.PagerDuty != nil {
-			channels[i].PagerDuty = &alerts.PagerDutyConfigInput{
-				RoutingKey: ch.PagerDuty.RoutingKey,
-				ServiceID:  ch.PagerDuty.ServiceID,
-			}
+			// Direct assignment - config types are aliases to alerts types
+			Slack:     ch.Slack,
+			Telegram:  ch.Telegram,
+			Email:     ch.Email,
+			Webhook:   ch.Webhook,
+			PagerDuty: ch.PagerDuty,
 		}
 	}
 
