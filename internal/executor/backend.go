@@ -140,6 +140,19 @@ type BackendConfig struct {
 
 // ModelRoutingConfig controls which model to use based on task complexity.
 // Enables cost optimization by using cheaper models for simple tasks.
+//
+// Example YAML configuration:
+//
+//	executor:
+//	  model_routing:
+//	    enabled: true
+//	    trivial: "claude-haiku"    # typos, logs, renames
+//	    simple: "claude-sonnet"    # small fixes, add field
+//	    medium: "claude-sonnet"    # standard feature work
+//	    complex: "claude-opus"     # refactors, migrations
+//
+// When enabled, the orchestrator analyzes task complexity and selects
+// the appropriate model. When disabled (default), uses the default model.
 type ModelRoutingConfig struct {
 	// Enabled controls whether model routing is active
 	Enabled bool `yaml:"enabled"`

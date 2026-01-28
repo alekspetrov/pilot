@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,8 +26,10 @@ import (
 )
 
 // Config represents the main Pilot configuration loaded from YAML.
-// It includes settings for the gateway, adapters, orchestrator, memory, projects, and more.
+// It includes settings for the gateway, adapters, orchestrator, executor, memory, projects, and more.
 // Use Load to read from a file or DefaultConfig for sensible defaults.
+//
+// See executor.ModelRoutingConfig for model routing based on task complexity.
 type Config struct {
 	Version        string                  `yaml:"version"`
 	Gateway        *gateway.Config         `yaml:"gateway"`
@@ -371,6 +374,9 @@ func Load(path string) (*Config, error) {
 		project.Path = expandPath(project.Path)
 	}
 
+	// Check for deprecated fields and log warnings
+	config.warnDeprecatedFields()
+
 	return config, nil
 }
 
@@ -407,6 +413,17 @@ func expandPath(path string) string {
 		return filepath.Join(homeDir, path[1:])
 	}
 	return path
+}
+
+// warnDeprecatedFields logs warnings for any deprecated configuration fields.
+func (c *Config) warnDeprecatedFields() {
+	if c.Orchestrator != nil && c.Orchestrator.DailyBrief != nil {
+		if c.Orchestrator.DailyBrief.Time != "" {
+			slog.Warn("config: DailyBrief.Time is deprecated, use DailyBrief.Schedule instead",
+				"time_value", c.Orchestrator.DailyBrief.Time,
+				"hint", "Schedule uses cron syntax: \"0 9 * * 1-5\" for 9 AM weekdays")
+		}
+	}
 }
 
 // Validate checks the configuration for errors and returns an error if invalid.

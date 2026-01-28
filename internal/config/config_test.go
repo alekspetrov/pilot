@@ -997,3 +997,62 @@ func findSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func TestWarnDeprecatedFields(t *testing.T) {
+	t.Run("NoWarningWhenTimeEmpty", func(t *testing.T) {
+		config := DefaultConfig()
+		// Time is empty by default, should not warn
+		config.warnDeprecatedFields() // Should not panic or cause issues
+	})
+
+	t.Run("WarningWhenTimeSet", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Orchestrator.DailyBrief.Time = "09:00"
+		// This would log a warning - we're testing it doesn't panic
+		config.warnDeprecatedFields()
+	})
+
+	t.Run("NoWarningWhenOrchestratorNil", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Orchestrator = nil
+		config.warnDeprecatedFields() // Should not panic
+	})
+
+	t.Run("NoWarningWhenDailyBriefNil", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Orchestrator.DailyBrief = nil
+		config.warnDeprecatedFields() // Should not panic
+	})
+}
+
+func TestLoadWithDeprecatedTimeField(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// Config file using deprecated Time field instead of Schedule
+	configContent := `
+version: "1.0"
+orchestrator:
+  daily_brief:
+    enabled: true
+    time: "09:00"
+    timezone: "America/New_York"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	config, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Verify the deprecated Time field was loaded
+	if config.Orchestrator.DailyBrief.Time != "09:00" {
+		t.Errorf("DailyBrief.Time = %q, want %q", config.Orchestrator.DailyBrief.Time, "09:00")
+	}
+
+	// Verify the load was successful and deprecation warning was logged
+	// (we can't easily capture slog output in tests without adding a test handler,
+	// but we verify the config loads correctly with the deprecated field)
+}
