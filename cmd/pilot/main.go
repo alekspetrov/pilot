@@ -20,6 +20,7 @@ import (
 	"github.com/alekspetrov/pilot/internal/adapters/telegram"
 	"github.com/alekspetrov/pilot/internal/banner"
 	"github.com/alekspetrov/pilot/internal/briefs"
+	"github.com/alekspetrov/pilot/internal/budget"
 	"github.com/alekspetrov/pilot/internal/config"
 	"github.com/alekspetrov/pilot/internal/executor"
 	"github.com/alekspetrov/pilot/internal/memory"
@@ -167,6 +168,20 @@ func newStatusCmd() *cobra.Command {
 				return fmt.Errorf("failed to load config: %w", err)
 			}
 
+			// Get budget status
+			var budgetStatus *budget.Status
+			budgetCfg := cfg.Budget
+			if budgetCfg == nil {
+				budgetCfg = budget.DefaultConfig()
+			}
+
+			store, storeErr := memory.NewStore(cfg.Memory.Path)
+			if storeErr == nil {
+				defer func() { _ = store.Close() }()
+				enforcer := budget.NewEnforcer(budgetCfg, store)
+				budgetStatus, _ = enforcer.GetStatus(context.Background(), "", "")
+			}
+
 			if jsonOutput {
 				status := map[string]interface{}{
 					"gateway": fmt.Sprintf("http://%s:%d", cfg.Gateway.Host, cfg.Gateway.Port),
@@ -178,6 +193,21 @@ func newStatusCmd() *cobra.Command {
 						"jira":     cfg.Adapters.Jira != nil && cfg.Adapters.Jira.Enabled,
 					},
 					"projects": cfg.Projects,
+				}
+
+				// Add budget to JSON output
+				if budgetStatus != nil {
+					status["budget"] = map[string]interface{}{
+						"enabled":         budgetCfg.Enabled,
+						"daily_spent":     budgetStatus.DailySpent,
+						"daily_limit":     budgetStatus.DailyLimit,
+						"daily_percent":   budgetStatus.DailyPercent,
+						"monthly_spent":   budgetStatus.MonthlySpent,
+						"monthly_limit":   budgetStatus.MonthlyLimit,
+						"monthly_percent": budgetStatus.MonthlyPercent,
+						"is_paused":       budgetStatus.IsPaused,
+						"blocked_tasks":   budgetStatus.BlockedTasks,
+					}
 				}
 
 				data, err := json.MarshalIndent(status, "", "  ")
@@ -214,6 +244,40 @@ func newStatusCmd() *cobra.Command {
 				fmt.Println("  ✓ GitHub (enabled)")
 			} else {
 				fmt.Println("  ○ GitHub (disabled)")
+			}
+			fmt.Println()
+
+			// Budget status
+			fmt.Println("Budget:")
+			if !budgetCfg.Enabled {
+				fmt.Println("  ○ Disabled")
+			} else if budgetStatus != nil {
+				dailyIcon := "✓"
+				if budgetStatus.DailyPercent >= 100 {
+					dailyIcon = "✗"
+				} else if budgetStatus.DailyPercent >= 80 {
+					dailyIcon = "!"
+				}
+				monthlyIcon := "✓"
+				if budgetStatus.MonthlyPercent >= 100 {
+					monthlyIcon = "✗"
+				} else if budgetStatus.MonthlyPercent >= 80 {
+					monthlyIcon = "!"
+				}
+
+				fmt.Printf("  %s Daily:   $%.2f / $%.2f (%.0f%%)\n",
+					dailyIcon, budgetStatus.DailySpent, budgetStatus.DailyLimit, budgetStatus.DailyPercent)
+				fmt.Printf("  %s Monthly: $%.2f / $%.2f (%.0f%%)\n",
+					monthlyIcon, budgetStatus.MonthlySpent, budgetStatus.MonthlyLimit, budgetStatus.MonthlyPercent)
+
+				if budgetStatus.IsPaused {
+					fmt.Printf("  🛑 PAUSED: %s\n", budgetStatus.PauseReason)
+				}
+				if budgetStatus.BlockedTasks > 0 {
+					fmt.Printf("  ⚠️  %d task(s) blocked\n", budgetStatus.BlockedTasks)
+				}
+			} else {
+				fmt.Println("  (unable to fetch status)")
 			}
 			fmt.Println()
 
