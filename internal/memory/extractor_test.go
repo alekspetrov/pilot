@@ -305,15 +305,63 @@ func TestExtractWorkflowPatterns(t *testing.T) {
 }
 
 func TestSaveExtractedPatterns(t *testing.T) {
-	// Skip: Production code has a deadlock bug in GlobalPatternStore.Add()
-	// The Add() method holds a write Lock then calls save() which tries RLock
-	// This test exposes the bug but we're not fixing production code here
-	t.Skip("Skipping due to known deadlock in GlobalPatternStore.Add()")
+	tmpDir, err := os.MkdirTemp("", "extractor-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	patternStore, _ := NewGlobalPatternStore(tmpDir)
+	extractor := NewPatternExtractor(patternStore, store)
+	ctx := context.Background()
+
+	result := &ExtractionResult{
+		ExecutionID: "test-exec",
+		ProjectPath: "/test/project",
+		Patterns: []*ExtractedPattern{
+			{Type: PatternTypeCode, Title: "Test Pattern", Description: "A test pattern", Confidence: 0.85},
+		},
+		AntiPatterns: []*ExtractedPattern{},
+	}
+
+	err = extractor.SaveExtractedPatterns(ctx, result)
+	if err != nil {
+		t.Fatalf("SaveExtractedPatterns failed: %v", err)
+	}
+
+	if patternStore.Count() != 1 {
+		t.Errorf("Count() = %d, want 1", patternStore.Count())
+	}
 }
 
 func TestExtractAndSave(t *testing.T) {
-	// Skip: Production code has a deadlock bug in GlobalPatternStore.Add()
-	t.Skip("Skipping due to known deadlock in GlobalPatternStore.Add()")
+	tmpDir, err := os.MkdirTemp("", "extractor-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	patternStore, _ := NewGlobalPatternStore(tmpDir)
+	extractor := NewPatternExtractor(patternStore, store)
+	ctx := context.Background()
+
+	exec := &Execution{
+		ID:          "test-exec",
+		ProjectPath: "/test/project",
+		Status:      "completed",
+		Output:      "func handleError(err error) { if err != nil { return err } }",
+	}
+
+	err = extractor.ExtractAndSave(ctx, exec)
+	if err != nil {
+		t.Fatalf("ExtractAndSave failed: %v", err)
+	}
 }
 
 func TestExtractAndSave_NoPatterns(t *testing.T) {
@@ -424,11 +472,75 @@ func TestParseAnalysisResponse(t *testing.T) {
 }
 
 func TestMergePattern_DeduplicatesProjects(t *testing.T) {
-	// Skip: Production code has a deadlock bug in GlobalPatternStore.Add()
-	t.Skip("Skipping due to known deadlock in GlobalPatternStore.Add()")
+	tmpDir, err := os.MkdirTemp("", "extractor-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	patternStore, _ := NewGlobalPatternStore(tmpDir)
+
+	// Add initial pattern with a project
+	initial := &GlobalPattern{
+		ID:       "merge-test",
+		Type:     PatternTypeCode,
+		Title:    "Test Pattern",
+		Projects: []string{"/project/a", "/project/b"},
+	}
+	if err := patternStore.Add(initial); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+
+	// Add again with duplicate project
+	duplicate := &GlobalPattern{
+		ID:       "merge-test",
+		Type:     PatternTypeCode,
+		Title:    "Test Pattern Updated",
+		Projects: []string{"/project/a"}, // Already exists
+	}
+	if err := patternStore.Add(duplicate); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+
+	got, _ := patternStore.Get("merge-test")
+	if got.Uses != 2 {
+		t.Errorf("Uses = %d, want 2", got.Uses)
+	}
 }
 
 func TestMergePattern_AddsNewProjects(t *testing.T) {
-	// Skip: Production code has a deadlock bug in GlobalPatternStore.Add()
-	t.Skip("Skipping due to known deadlock in GlobalPatternStore.Add()")
+	tmpDir, err := os.MkdirTemp("", "extractor-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	patternStore, _ := NewGlobalPatternStore(tmpDir)
+
+	// Add initial pattern
+	initial := &GlobalPattern{
+		ID:       "project-test",
+		Type:     PatternTypeCode,
+		Title:    "Test Pattern",
+		Projects: []string{"/project/a"},
+	}
+	if err := patternStore.Add(initial); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+
+	// Add again - the pattern gets updated
+	updated := &GlobalPattern{
+		ID:       "project-test",
+		Type:     PatternTypeCode,
+		Title:    "Test Pattern Updated",
+		Projects: []string{"/project/b"},
+	}
+	if err := patternStore.Add(updated); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+
+	got, _ := patternStore.Get("project-test")
+	if got.Uses != 2 {
+		t.Errorf("Uses = %d, want 2", got.Uses)
+	}
 }

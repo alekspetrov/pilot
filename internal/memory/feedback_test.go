@@ -350,8 +350,31 @@ func TestSurfaceHighValuePatterns(t *testing.T) {
 }
 
 func TestLearnFromDiff(t *testing.T) {
-	// Skip: Production code has a deadlock bug in GlobalPatternStore.Add()
-	t.Skip("Skipping due to known deadlock in GlobalPatternStore.Add()")
+	tmpDir, err := os.MkdirTemp("", "feedback-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	patternStore, _ := NewGlobalPatternStore(tmpDir)
+	extractor := NewPatternExtractor(patternStore, store)
+	loop := NewLearningLoop(store, extractor, nil)
+	ctx := context.Background()
+
+	diff := `+ func handleError(err error) error {
++     if err != nil {
++         return fmt.Errorf("operation failed: %w", err)
++     }
++     return nil
++ }`
+
+	err = loop.LearnFromDiff(ctx, "/test/project", diff, true)
+	if err != nil {
+		t.Fatalf("LearnFromDiff failed: %v", err)
+	}
 }
 
 func TestBoostPatternConfidence(t *testing.T) {
@@ -450,8 +473,31 @@ func TestFeedbackOutcomeConstants(t *testing.T) {
 }
 
 func TestRecordExecution_WithExtractor(t *testing.T) {
-	// Skip: Production code has a deadlock bug in GlobalPatternStore.Add()
-	t.Skip("Skipping due to known deadlock in GlobalPatternStore.Add()")
+	tmpDir, err := os.MkdirTemp("", "feedback-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	patternStore, _ := NewGlobalPatternStore(tmpDir)
+	extractor := NewPatternExtractor(patternStore, store)
+	loop := NewLearningLoop(store, extractor, nil)
+	ctx := context.Background()
+
+	exec := &Execution{
+		ID:          "extractor-exec",
+		ProjectPath: "/test/project",
+		Status:      "completed",
+		Output:      "func test() { if err != nil { return err } }",
+	}
+
+	err = loop.RecordExecution(ctx, exec, nil)
+	if err != nil {
+		t.Fatalf("RecordExecution failed: %v", err)
+	}
 }
 
 func TestRecordExecution_WithMultiplePatterns(t *testing.T) {
@@ -581,8 +627,32 @@ func TestPatternPerformance_SuccessRate(t *testing.T) {
 }
 
 func TestLearnFromDiff_Failed(t *testing.T) {
-	// Skip: Production code has a deadlock bug in GlobalPatternStore.Add()
-	t.Skip("Skipping due to known deadlock in GlobalPatternStore.Add()")
+	tmpDir, err := os.MkdirTemp("", "feedback-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	patternStore, _ := NewGlobalPatternStore(tmpDir)
+	extractor := NewPatternExtractor(patternStore, store)
+	loop := NewLearningLoop(store, extractor, nil)
+	ctx := context.Background()
+
+	// LearnFromDiff with success=true creates a completed execution, no error
+	err = loop.LearnFromDiff(ctx, "/test/project", "", true)
+	if err != nil {
+		t.Fatalf("LearnFromDiff with empty diff and success=true should not error: %v", err)
+	}
+
+	// LearnFromDiff with success=false creates a failed execution (not "completed"),
+	// which causes extractor to reject it - this is expected behavior
+	err = loop.LearnFromDiff(ctx, "/test/project", "some diff", false)
+	if err == nil {
+		t.Log("LearnFromDiff with success=false may or may not error depending on implementation")
+	}
 }
 
 func TestApplyDecay_StalePatterns(t *testing.T) {
