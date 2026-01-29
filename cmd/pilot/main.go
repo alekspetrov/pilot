@@ -1271,6 +1271,9 @@ Examples:
 			// Create progress display (disabled in verbose mode - show raw JSON instead)
 			progress := executor.NewProgressDisplay(task.ID, taskDesc, !verbose)
 
+			// Suppress slog progress output when visual display is active
+			runner.SuppressProgressLogs(!verbose)
+
 			// Track Navigator mode detection
 			var detectedNavMode string
 
