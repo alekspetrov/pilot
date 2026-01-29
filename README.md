@@ -36,6 +36,7 @@ Autonomous AI development pipeline. Receives tickets, implements features, creat
 | **Image Analysis** | ✅ | Multimodal input via Telegram |
 | **Structured Logging** | ✅ | JSON logs with correlation IDs |
 | **Usage Metering** | ✅ | Billing foundation for Pilot Cloud |
+| **BYOK Support** | ✅ | Bring Your Own Key (Anthropic, Bedrock, Vertex) |
 
 ## Installation
 
@@ -86,6 +87,33 @@ pilot telegram
 
 # 3. Send task via Telegram
 "Start TASK-07"
+```
+
+## Environment Variables
+
+Pilot uses Claude Code as its execution backend. Configure your Anthropic API access:
+
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | Custom Anthropic API key (uses your own account) |
+| `ANTHROPIC_BASE_URL` | Custom API endpoint (for proxies, enterprise deployments) |
+| `CLAUDE_CODE_USE_BEDROCK` | Set to `1` to use AWS Bedrock instead of Anthropic API |
+| `CLAUDE_CODE_USE_VERTEX` | Set to `1` to use Google Vertex AI instead |
+
+**BYOK (Bring Your Own Key)**: Pilot supports using your own Anthropic API key. Set `ANTHROPIC_API_KEY` to use your account's quota and billing.
+
+```bash
+# Use your own Anthropic API key
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Or use AWS Bedrock
+export CLAUDE_CODE_USE_BEDROCK=1
+
+# Or use Google Vertex AI
+export CLAUDE_CODE_USE_VERTEX=1
+
+# Custom API endpoint (enterprise/proxy)
+export ANTHROPIC_BASE_URL=https://your-proxy.example.com
 ```
 
 ## Configuration
