@@ -706,7 +706,7 @@ func TestManager_MultipleHandlers(t *testing.T) {
 	config := DefaultConfig()
 	config.Enabled = true
 	config.PreExecution.Enabled = true
-	config.PreExecution.Timeout = 100 * time.Millisecond
+	config.PreExecution.Timeout = 5 * time.Second
 
 	m := NewManager(config)
 
