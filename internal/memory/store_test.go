@@ -642,3 +642,161 @@ func TestGetCrossPatternsForProject(t *testing.T) {
 		})
 	}
 }
+
+func TestGetProject_InvalidJSONSettings(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	// Insert project with invalid JSON settings directly via SQL
+	_, err := store.db.Exec(`
+		INSERT INTO projects (path, name, navigator_enabled, settings)
+		VALUES (?, ?, ?, ?)
+	`, "/corrupt/project", "corrupt-project", true, "invalid json {{{")
+	if err != nil {
+		t.Fatalf("failed to insert project with invalid JSON: %v", err)
+	}
+
+	// GetProject should succeed despite invalid JSON (logs warning instead of failing)
+	project, err := store.GetProject("/corrupt/project")
+	if err != nil {
+		t.Fatalf("GetProject should not fail on invalid JSON settings: %v", err)
+	}
+
+	// Settings should be nil/empty due to unmarshal failure
+	if len(project.Settings) > 0 {
+		t.Errorf("expected nil/empty Settings for invalid JSON, got %v", project.Settings)
+	}
+
+	// Verify project data was still retrieved correctly
+	if project.Name != "corrupt-project" {
+		t.Errorf("expected name 'corrupt-project', got %q", project.Name)
+	}
+	if !project.NavigatorEnabled {
+		t.Error("expected NavigatorEnabled to be true")
+	}
+}
+
+func TestGetAllProjects_InvalidJSONSettings(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	// Insert one valid and one invalid project
+	_ = store.SaveProject(&Project{
+		Path:     "/valid/project",
+		Name:     "valid-project",
+		Settings: map[string]interface{}{"key": "value"},
+	})
+
+	_, err := store.db.Exec(`
+		INSERT INTO projects (path, name, navigator_enabled, settings)
+		VALUES (?, ?, ?, ?)
+	`, "/corrupt/project", "corrupt-project", true, "not valid json!!!")
+	if err != nil {
+		t.Fatalf("failed to insert project with invalid JSON: %v", err)
+	}
+
+	// GetAllProjects should succeed and return both projects
+	projects, err := store.GetAllProjects()
+	if err != nil {
+		t.Fatalf("GetAllProjects should not fail on invalid JSON settings: %v", err)
+	}
+
+	if len(projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(projects))
+	}
+
+	// Find the corrupt project and verify its settings are nil
+	for _, p := range projects {
+		if p.Path == "/corrupt/project" {
+			if len(p.Settings) > 0 {
+				t.Errorf("expected nil/empty Settings for corrupt project, got %v", p.Settings)
+			}
+		}
+	}
+}
+
+func TestGetCrossPattern_InvalidJSONExamples(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	// Insert pattern with invalid JSON examples directly via SQL
+	_, err := store.db.Exec(`
+		INSERT INTO cross_patterns (id, pattern_type, title, description, context, examples, confidence, scope)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, "corrupt-pattern", "code", "Corrupt Pattern", "Has invalid examples", "some context", "broken json [[[", 0.8, "org")
+	if err != nil {
+		t.Fatalf("failed to insert pattern with invalid JSON: %v", err)
+	}
+
+	// GetCrossPattern should succeed despite invalid JSON (logs warning)
+	pattern, err := store.GetCrossPattern("corrupt-pattern")
+	if err != nil {
+		t.Fatalf("GetCrossPattern should not fail on invalid JSON examples: %v", err)
+	}
+
+	// Examples should be nil due to unmarshal failure
+	if len(pattern.Examples) > 0 {
+		t.Errorf("expected nil/empty Examples for invalid JSON, got %v", pattern.Examples)
+	}
+
+	// Verify other fields were retrieved correctly
+	if pattern.Title != "Corrupt Pattern" {
+		t.Errorf("expected title 'Corrupt Pattern', got %q", pattern.Title)
+	}
+	if pattern.Confidence != 0.8 {
+		t.Errorf("expected confidence 0.8, got %f", pattern.Confidence)
+	}
+}
+
+func TestScanCrossPatterns_InvalidJSONExamples(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	// Insert one valid and one invalid pattern
+	_ = store.SaveCrossPattern(&CrossPattern{
+		ID:       "valid-pattern",
+		Type:     "code",
+		Title:    "Valid Pattern",
+		Examples: []string{"example1", "example2"},
+		Scope:    "org",
+	})
+
+	_, err := store.db.Exec(`
+		INSERT INTO cross_patterns (id, pattern_type, title, description, context, examples, confidence, scope)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, "corrupt-pattern", "code", "Corrupt Pattern", "desc", "context", "}}invalid{{", 0.5, "org")
+	if err != nil {
+		t.Fatalf("failed to insert pattern with invalid JSON: %v", err)
+	}
+
+	// GetCrossPatternsByType should succeed and return both patterns
+	patterns, err := store.GetCrossPatternsByType("code")
+	if err != nil {
+		t.Fatalf("GetCrossPatternsByType should not fail on invalid JSON examples: %v", err)
+	}
+
+	if len(patterns) != 2 {
+		t.Fatalf("expected 2 patterns, got %d", len(patterns))
+	}
+
+	// Find the corrupt pattern and verify its examples are nil
+	for _, p := range patterns {
+		if p.ID == "corrupt-pattern" {
+			if len(p.Examples) > 0 {
+				t.Errorf("expected nil/empty Examples for corrupt pattern, got %v", p.Examples)
+			}
+		}
+	}
+}
