@@ -1352,3 +1352,109 @@ func TestProcessBackendEventProgressPhase(t *testing.T) {
 		t.Errorf("phase = %q, want Implement", lastPhase)
 	}
 }
+
+// Tests for quality retry configuration (GH-75)
+
+func TestDefaultQualityRetryConfig(t *testing.T) {
+	config := DefaultQualityRetryConfig()
+
+	if config == nil {
+		t.Fatal("DefaultQualityRetryConfig returned nil")
+	}
+	if !config.Enabled {
+		t.Error("Enabled should be true by default")
+	}
+	if config.MaxRetries != 2 {
+		t.Errorf("MaxRetries = %d, want 2", config.MaxRetries)
+	}
+}
+
+func TestRunnerGetQualityRetryConfig(t *testing.T) {
+	runner := NewRunner()
+
+	// Without explicit config, should return defaults
+	config := runner.getQualityRetryConfig()
+	if config == nil {
+		t.Fatal("getQualityRetryConfig returned nil")
+	}
+	if !config.Enabled {
+		t.Error("Default config should be enabled")
+	}
+	if config.MaxRetries != 2 {
+		t.Errorf("Default MaxRetries = %d, want 2", config.MaxRetries)
+	}
+}
+
+func TestRunnerSetQualityRetryConfig(t *testing.T) {
+	runner := NewRunner()
+
+	customConfig := &QualityRetryConfig{
+		Enabled:    false,
+		MaxRetries: 5,
+	}
+	runner.SetQualityRetryConfig(customConfig)
+
+	config := runner.getQualityRetryConfig()
+	if config.Enabled {
+		t.Error("Enabled should be false after setting custom config")
+	}
+	if config.MaxRetries != 5 {
+		t.Errorf("MaxRetries = %d, want 5", config.MaxRetries)
+	}
+}
+
+func TestNewRunnerWithConfigQualityRetry(t *testing.T) {
+	backendConfig := &BackendConfig{
+		Type: BackendTypeClaudeCode,
+		QualityRetry: &QualityRetryConfig{
+			Enabled:    true,
+			MaxRetries: 3,
+		},
+	}
+
+	runner, err := NewRunnerWithConfig(backendConfig)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	config := runner.getQualityRetryConfig()
+	if config.MaxRetries != 3 {
+		t.Errorf("MaxRetries = %d, want 3", config.MaxRetries)
+	}
+}
+
+func TestBuildRetryPrompt(t *testing.T) {
+	runner := NewRunner()
+
+	task := &Task{
+		ID:          "TASK-123",
+		Title:       "Fix authentication",
+		Description: "Implement OAuth flow",
+		ProjectPath: "/path/to/project",
+	}
+
+	feedback := "## Quality Gate Failures\n\nlint: unused variable 'x'"
+	prompt := runner.buildRetryPrompt(task, feedback, 1)
+
+	// Check key elements in the retry prompt
+	expected := []string{
+		"Quality Gate Retry",
+		"Attempt 1",
+		"lint: unused variable 'x'",
+		"TASK-123",
+		"Fix the identified issues",
+	}
+
+	for _, exp := range expected {
+		if !contains(prompt, exp) {
+			t.Errorf("Retry prompt missing expected content: %s", exp)
+		}
+	}
+}
+
+func TestAlertEventTypeTaskRetry(t *testing.T) {
+	// Verify the new event type exists
+	if AlertEventTypeTaskRetry != "task_retry" {
+		t.Errorf("AlertEventTypeTaskRetry = %q, want task_retry", AlertEventTypeTaskRetry)
+	}
+}

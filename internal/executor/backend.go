@@ -136,6 +136,9 @@ type BackendConfig struct {
 
 	// Timeout contains execution timeout settings
 	Timeout *TimeoutConfig `yaml:"timeout,omitempty"`
+
+	// QualityRetry controls auto-retry with Claude when quality gates fail
+	QualityRetry *QualityRetryConfig `yaml:"quality_retry,omitempty"`
 }
 
 // ModelRoutingConfig controls which model to use based on task complexity.
@@ -193,6 +196,15 @@ type TimeoutConfig struct {
 	Complex string `yaml:"complex"`
 }
 
+// QualityRetryConfig controls auto-retry behavior when quality gates fail.
+type QualityRetryConfig struct {
+	// Enabled controls whether auto-retry is active (default: true)
+	Enabled bool `yaml:"enabled"`
+
+	// MaxRetries is the maximum number of retry attempts (default: 2)
+	MaxRetries int `yaml:"max_retries"`
+}
+
 // ClaudeCodeConfig contains Claude Code backend configuration.
 type ClaudeCodeConfig struct {
 	// Command is the path to the claude CLI (default: "claude")
@@ -236,6 +248,16 @@ func DefaultBackendConfig() *BackendConfig {
 		},
 		ModelRouting: DefaultModelRoutingConfig(),
 		Timeout:      DefaultTimeoutConfig(),
+		QualityRetry: DefaultQualityRetryConfig(),
+	}
+}
+
+// DefaultQualityRetryConfig returns default quality retry configuration.
+// Auto-retry is enabled by default with 2 max retries.
+func DefaultQualityRetryConfig() *QualityRetryConfig {
+	return &QualityRetryConfig{
+		Enabled:    true,
+		MaxRetries: 2,
 	}
 }
 

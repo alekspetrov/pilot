@@ -160,6 +160,7 @@ type Runner struct {
 	alertProcessor        AlertEventProcessor   // Optional alert processor for event emission
 	qualityCheckerFactory QualityCheckerFactory // Optional factory for creating quality checkers
 	modelRouter           *ModelRouter          // Model and timeout routing based on complexity
+	qualityRetryConfig    *QualityRetryConfig   // Config for auto-retry on quality gate failures
 }
 
 // NewRunner creates a new Runner instance with Claude Code backend by default.
@@ -196,12 +197,26 @@ func NewRunnerWithConfig(config *BackendConfig) (*Runner, error) {
 	}
 	runner := NewRunnerWithBackend(backend)
 
-	// Configure model routing and timeouts from config
+	// Configure model routing, timeouts, and quality retry from config
 	if config != nil {
 		runner.modelRouter = NewModelRouter(config.ModelRouting, config.Timeout)
+		runner.qualityRetryConfig = config.QualityRetry
 	}
 
 	return runner, nil
+}
+
+// SetQualityRetryConfig sets the quality retry configuration.
+func (r *Runner) SetQualityRetryConfig(config *QualityRetryConfig) {
+	r.qualityRetryConfig = config
+}
+
+// getQualityRetryConfig returns the quality retry config with defaults.
+func (r *Runner) getQualityRetryConfig() *QualityRetryConfig {
+	if r.qualityRetryConfig != nil {
+		return r.qualityRetryConfig
+	}
+	return DefaultQualityRetryConfig()
 }
 
 // SetBackend changes the execution backend.
@@ -489,57 +504,138 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 		)
 		r.reportProgress(task.ID, "Completed", 90, "Execution completed")
 
-		// Run quality gates if configured
+		// Run quality gates if configured (with auto-retry support - GH-75)
 		if r.qualityCheckerFactory != nil {
-			r.reportProgress(task.ID, "Quality Gates", 91, "Running quality checks...")
+			retryConfig := r.getQualityRetryConfig()
+			qualityPassed := false
+			var lastOutcome *QualityOutcome
+			retryAttempt := 0
 
-			checker := r.qualityCheckerFactory(task.ID, task.ProjectPath)
-			outcome, qErr := checker.Check(ctx)
-			if qErr != nil {
-				log.Error("Quality gate check error", slog.Any("error", qErr))
-				result.Success = false
-				result.Error = fmt.Sprintf("quality gate error: %v", qErr)
-				r.reportProgress(task.ID, "Quality Failed", 100, result.Error)
+			for !qualityPassed {
+				r.reportProgress(task.ID, "Quality Gates", 91, fmt.Sprintf("Running quality checks (attempt %d)...", retryAttempt+1))
 
-				// Emit task failed event
+				checker := r.qualityCheckerFactory(task.ID, task.ProjectPath)
+				outcome, qErr := checker.Check(ctx)
+				if qErr != nil {
+					log.Error("Quality gate check error", slog.Any("error", qErr))
+					result.Success = false
+					result.Error = fmt.Sprintf("quality gate error: %v", qErr)
+					r.reportProgress(task.ID, "Quality Failed", 100, result.Error)
+
+					// Emit task failed event
+					r.emitAlertEvent(AlertEvent{
+						Type:      AlertEventTypeTaskFailed,
+						TaskID:    task.ID,
+						TaskTitle: task.Title,
+						Project:   task.ProjectPath,
+						Error:     result.Error,
+						Timestamp: time.Now(),
+					})
+
+					if recorder != nil {
+						recorder.SetModel(result.ModelName)
+						recorder.SetNavigator(state.hasNavigator)
+						if finErr := recorder.Finish("failed"); finErr != nil {
+							log.Warn("Failed to finish recording", slog.Any("error", finErr))
+						}
+					}
+					return result, nil
+				}
+
+				lastOutcome = outcome
+
+				if outcome.Passed {
+					qualityPassed = true
+					break
+				}
+
+				// Quality gates failed - check if we should auto-retry
+				log.Warn("Quality gates failed",
+					slog.Bool("should_retry", outcome.ShouldRetry),
+					slog.Int("attempt", retryAttempt),
+					slog.Int("max_retries", retryConfig.MaxRetries),
+				)
+
+				// Check if auto-retry is enabled and we haven't exceeded max retries
+				canAutoRetry := retryConfig.Enabled &&
+					outcome.ShouldRetry &&
+					retryAttempt < retryConfig.MaxRetries
+
+				if !canAutoRetry {
+					// No more retries - fail the task
+					break
+				}
+
+				// Auto-retry: re-invoke Claude Code with feedback
+				retryAttempt++
+				r.reportProgress(task.ID, "Quality Retry", 92,
+					fmt.Sprintf("Retrying with feedback (attempt %d/%d)...", retryAttempt, retryConfig.MaxRetries))
+
+				// Emit retry event
 				r.emitAlertEvent(AlertEvent{
-					Type:      AlertEventTypeTaskFailed,
+					Type:      AlertEventTypeTaskRetry,
 					TaskID:    task.ID,
 					TaskTitle: task.Title,
 					Project:   task.ProjectPath,
-					Error:     result.Error,
+					Metadata: map[string]string{
+						"attempt":     fmt.Sprintf("%d", retryAttempt),
+						"max_retries": fmt.Sprintf("%d", retryConfig.MaxRetries),
+					},
 					Timestamp: time.Now(),
 				})
 
-				if recorder != nil {
-					recorder.SetModel(result.ModelName)
-					recorder.SetNavigator(state.hasNavigator)
-					if finErr := recorder.Finish("failed"); finErr != nil {
-						log.Warn("Failed to finish recording", slog.Any("error", finErr))
-					}
-				}
-				return result, nil
-			}
+				// Build retry prompt with feedback
+				retryPrompt := r.buildRetryPrompt(task, outcome.RetryFeedback, retryAttempt)
 
-			if !outcome.Passed {
-				log.Warn("Quality gates failed",
-					slog.Bool("should_retry", outcome.ShouldRetry),
-					slog.Int("attempt", outcome.Attempt),
+				log.Info("Re-invoking Claude Code for quality gate retry",
+					slog.String("task_id", task.ID),
+					slog.Int("attempt", retryAttempt),
 				)
 
-				if outcome.ShouldRetry {
-					r.reportProgress(task.ID, "Quality Retry", 92, "Gates failed, retry feedback available")
-					// RetryFeedback is included in the error message for visibility.
-					// Auto-retry with re-invocation is intentionally not implemented:
-					// 1. Requires significant refactoring of the execution loop
-					// 2. Risk of infinite loops without proper circuit breakers
-					// 3. Better to surface feedback to users for manual intervention
-					// See GH-64 for discussion.
-					result.Success = false
-					result.Error = fmt.Sprintf("quality gates failed (attempt %d): %s", outcome.Attempt+1, outcome.RetryFeedback)
+				r.reportProgress(task.ID, "Fixing Issues", 93, "Claude Code fixing quality gate failures...")
+
+				// Execute retry via backend
+				retryResult, retryErr := r.backend.Execute(ctx, ExecuteOptions{
+					Prompt:      retryPrompt,
+					ProjectPath: task.ProjectPath,
+					Verbose:     task.Verbose,
+					EventHandler: func(event BackendEvent) {
+						// Record the retry event
+						if recorder != nil {
+							if recErr := recorder.RecordEvent(event.Raw); recErr != nil {
+								log.Warn("Failed to record retry event", slog.Any("error", recErr))
+							}
+						}
+						// Process event for progress tracking
+						r.processBackendEvent(task.ID, event, state)
+					},
+				})
+
+				if retryErr != nil {
+					log.Error("Retry execution failed",
+						slog.Any("error", retryErr),
+						slog.Int("attempt", retryAttempt),
+					)
+					// Continue to quality check - might still have fixed issues
 				} else {
-					result.Success = false
-					result.Error = "quality gates failed, max retries exhausted"
+					// Accumulate tokens from retry
+					result.TokensInput += retryResult.TokensInput
+					result.TokensOutput += retryResult.TokensOutput
+					result.TokensTotal = result.TokensInput + result.TokensOutput
+				}
+
+				r.reportProgress(task.ID, "Re-testing", 94, "Running quality gates after fix...")
+			}
+
+			// Final quality gate result
+			if !qualityPassed && lastOutcome != nil {
+				result.Success = false
+				if retryAttempt >= retryConfig.MaxRetries {
+					result.Error = fmt.Sprintf("quality gates failed after %d auto-retries: %s",
+						retryAttempt, lastOutcome.RetryFeedback)
+				} else {
+					result.Error = fmt.Sprintf("quality gates failed (attempt %d): %s",
+						retryAttempt+1, lastOutcome.RetryFeedback)
 				}
 
 				r.reportProgress(task.ID, "Quality Failed", 100, "Quality gates did not pass")
@@ -564,7 +660,8 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 				return result, nil
 			}
 
-			r.reportProgress(task.ID, "Quality Passed", 94, "All quality gates passed")
+			r.reportProgress(task.ID, "Quality Passed", 94,
+				fmt.Sprintf("All quality gates passed (after %d attempts)", retryAttempt+1))
 		}
 
 		r.reportProgress(task.ID, "Finalizing", 95, "Preparing for completion")
@@ -1306,4 +1403,29 @@ func (r *Runner) reportProgress(taskID, phase string, progress int, message stri
 	if r.onProgress != nil {
 		r.onProgress(taskID, phase, progress, message)
 	}
+}
+
+// buildRetryPrompt constructs the prompt for quality gate retry attempts.
+// It includes the original task context plus the feedback about what failed.
+func (r *Runner) buildRetryPrompt(task *Task, retryFeedback string, attempt int) string {
+	var sb strings.Builder
+
+	sb.WriteString("## Quality Gate Retry\n\n")
+	sb.WriteString(fmt.Sprintf("**Attempt %d**: The previous implementation failed quality gates.\n\n", attempt))
+	sb.WriteString("Please fix the issues described below and ensure all quality gates pass.\n\n")
+
+	// Include the retry feedback (formatted error output from quality gates)
+	sb.WriteString(retryFeedback)
+	sb.WriteString("\n\n")
+
+	sb.WriteString("## Instructions\n\n")
+	sb.WriteString("1. Review the error output above carefully\n")
+	sb.WriteString("2. Fix the identified issues (lint errors, test failures, build errors)\n")
+	sb.WriteString("3. Commit your fixes with a descriptive message\n")
+	sb.WriteString("4. Do NOT make unrelated changes\n\n")
+
+	sb.WriteString(fmt.Sprintf("Original task: %s\n\n", task.ID))
+	sb.WriteString("Work autonomously to fix these issues. Do not ask for confirmation.\n")
+
+	return sb.String()
 }
