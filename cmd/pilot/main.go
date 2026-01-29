@@ -1,3 +1,4 @@
+// Dashboard progress test - GH-151
 package main
 
 import (
