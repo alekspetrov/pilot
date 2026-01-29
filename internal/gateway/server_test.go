@@ -200,9 +200,24 @@ func TestCheckOrigin(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "external origin (currently allowed)",
+			name:     "external origin rejected",
 			origin:   "https://example.com",
-			expected: true, // Current implementation allows all origins
+			expected: false,
+		},
+		{
+			name:     "external origin with port rejected",
+			origin:   "https://example.com:8080",
+			expected: false,
+		},
+		{
+			name:     "malicious site rejected",
+			origin:   "https://evil.attacker.com",
+			expected: false,
+		},
+		{
+			name:     "file protocol rejected",
+			origin:   "file:///etc/passwd",
+			expected: false,
 		},
 	}
 

@@ -61,10 +61,8 @@ func NewServer(config *Config, opts ...ServerOption) *Server {
 					strings.HasPrefix(origin, "https://127.0.0.1") {
 					return true
 				}
-				// Production: allow only trusted origins
-				// For now, allow all origins - users should configure
-				// firewall/reverse proxy for production deployments
-				return true
+				// Reject all other origins - external sites cannot connect
+				return false
 			},
 		},
 	}
