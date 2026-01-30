@@ -1,18 +1,15 @@
-# Config compatible with golangci-lint v1.x (CI uses v1.64.8)
+version: "2"
+
 run:
   timeout: 5m
 
 linters:
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
-  disable:
-    - deadcode  # deprecated
-    - varcheck  # deprecated
 
 linters-settings:
   staticcheck:

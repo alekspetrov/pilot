@@ -1840,13 +1840,7 @@ func (r *Runner) buildQualityGatesResult(outcome *QualityOutcome, totalRetries i
 	}
 
 	for i, detail := range outcome.GateDetails {
-		qgResult.Gates[i] = QualityGateResult{
-			Name:       detail.Name,
-			Passed:     detail.Passed,
-			Duration:   detail.Duration,
-			RetryCount: detail.RetryCount,
-			Error:      detail.Error,
-		}
+		qgResult.Gates[i] = QualityGateResult(detail)
 	}
 
 	return qgResult
