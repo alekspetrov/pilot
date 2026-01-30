@@ -166,9 +166,9 @@ func (m *AutoMerger) CanMerge(ctx context.Context, prNumber int) (bool, string, 
 }
 
 // ShouldWaitForCI returns true if the environment requires CI to pass before merge.
+// All environments now wait for CI to prevent broken code from merging.
 func (m *AutoMerger) ShouldWaitForCI(env Environment) bool {
-	// Dev can merge immediately, stage and prod wait for CI
-	return env != EnvDev
+	return true
 }
 
 // verifyCIBeforeMerge performs a final CI status check immediately before merge.

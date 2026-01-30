@@ -21,13 +21,18 @@ type CIMonitor struct {
 }
 
 // NewCIMonitor creates a CI monitor with configuration from Config.
+// Uses DevCITimeout for dev environment, CIWaitTimeout for stage/prod.
 func NewCIMonitor(ghClient *github.Client, owner, repo string, cfg *Config) *CIMonitor {
+	timeout := cfg.CIWaitTimeout
+	if cfg.Environment == EnvDev && cfg.DevCITimeout > 0 {
+		timeout = cfg.DevCITimeout
+	}
 	return &CIMonitor{
 		ghClient:       ghClient,
 		owner:          owner,
 		repo:           repo,
 		pollInterval:   cfg.CIPollInterval,
-		waitTimeout:    cfg.CIWaitTimeout,
+		waitTimeout:    timeout,
 		requiredChecks: cfg.RequiredChecks,
 		log:            slog.Default().With("component", "ci-monitor"),
 	}

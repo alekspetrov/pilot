@@ -35,6 +35,50 @@ func TestNewCIMonitor(t *testing.T) {
 	}
 }
 
+func TestNewCIMonitor_DevCITimeout(t *testing.T) {
+	ghClient := github.NewClient(testutil.FakeGitHubToken)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.DevCITimeout = 5 * time.Minute
+	cfg.CIWaitTimeout = 30 * time.Minute
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	if monitor == nil {
+		t.Fatal("NewCIMonitor returned nil")
+	}
+	// Dev environment should use DevCITimeout
+	if monitor.waitTimeout != cfg.DevCITimeout {
+		t.Errorf("waitTimeout = %v, want %v (DevCITimeout for dev env)", monitor.waitTimeout, cfg.DevCITimeout)
+	}
+}
+
+func TestNewCIMonitor_StageProdUseCIWaitTimeout(t *testing.T) {
+	ghClient := github.NewClient(testutil.FakeGitHubToken)
+
+	// Test stage environment
+	cfgStage := DefaultConfig()
+	cfgStage.Environment = EnvStage
+	cfgStage.DevCITimeout = 5 * time.Minute
+	cfgStage.CIWaitTimeout = 30 * time.Minute
+
+	monitorStage := NewCIMonitor(ghClient, "owner", "repo", cfgStage)
+	if monitorStage.waitTimeout != cfgStage.CIWaitTimeout {
+		t.Errorf("stage waitTimeout = %v, want %v (CIWaitTimeout)", monitorStage.waitTimeout, cfgStage.CIWaitTimeout)
+	}
+
+	// Test prod environment
+	cfgProd := DefaultConfig()
+	cfgProd.Environment = EnvProd
+	cfgProd.DevCITimeout = 5 * time.Minute
+	cfgProd.CIWaitTimeout = 30 * time.Minute
+
+	monitorProd := NewCIMonitor(ghClient, "owner", "repo", cfgProd)
+	if monitorProd.waitTimeout != cfgProd.CIWaitTimeout {
+		t.Errorf("prod waitTimeout = %v, want %v (CIWaitTimeout)", monitorProd.waitTimeout, cfgProd.CIWaitTimeout)
+	}
+}
+
 func TestCIMonitor_WaitForCI_Success(t *testing.T) {
 	// Mock GitHub client returning success after 2 polls
 	pollCount := 0

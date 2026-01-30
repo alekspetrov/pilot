@@ -57,12 +57,13 @@ func TestAutoMerger_RequiresApproval(t *testing.T) {
 }
 
 func TestAutoMerger_ShouldWaitForCI(t *testing.T) {
+	// All environments now wait for CI to prevent broken code from merging
 	tests := []struct {
 		name     string
 		env      Environment
 		wantWait bool
 	}{
-		{"dev - no wait", EnvDev, false},
+		{"dev - wait for CI", EnvDev, true},
 		{"stage - wait for CI", EnvStage, true},
 		{"prod - wait for CI", EnvProd, true},
 	}
@@ -506,19 +507,20 @@ func TestAutoMerger_RequestApproval_NoManager(t *testing.T) {
 }
 
 func TestEnvironmentBehaviorMatrix(t *testing.T) {
-	// Verify the environment behavior matrix from the issue spec
+	// Verify the environment behavior matrix
+	// All environments now wait for CI to prevent broken code from merging
 	ghClient := github.NewClient(testutil.FakeGitHubToken)
 	cfg := DefaultConfig()
 
 	tests := []struct {
 		env              Environment
 		autoReview       bool
-		immediateCI      bool // true = no CI wait, false = wait for CI
+		waitForCI        bool // all environments now wait for CI
 		requiresApproval bool
 	}{
-		{EnvDev, true, true, false},    // dev: Auto-Review Yes, Immediate merge, No approval
-		{EnvStage, true, false, false}, // stage: Auto-Review Yes, Wait for CI, No approval
-		{EnvProd, false, false, true},  // prod: No auto-review (per matrix), Wait for CI, Requires approval
+		{EnvDev, true, true, false},   // dev: Auto-Review Yes, Wait for CI, No approval
+		{EnvStage, true, true, false}, // stage: Auto-Review Yes, Wait for CI, No approval
+		{EnvProd, false, true, true},  // prod: No auto-review, Wait for CI, Requires approval
 	}
 
 	for _, tt := range tests {
@@ -526,10 +528,8 @@ func TestEnvironmentBehaviorMatrix(t *testing.T) {
 			merger := NewAutoMerger(ghClient, nil, nil, "owner", "repo", cfg)
 
 			shouldWait := merger.ShouldWaitForCI(tt.env)
-			wantWait := !tt.immediateCI
-
-			if shouldWait != wantWait {
-				t.Errorf("ShouldWaitForCI(%s) = %v, want %v", tt.env, shouldWait, wantWait)
+			if shouldWait != tt.waitForCI {
+				t.Errorf("ShouldWaitForCI(%s) = %v, want %v", tt.env, shouldWait, tt.waitForCI)
 			}
 
 			requiresApproval := merger.requiresApproval(tt.env)
@@ -873,8 +873,8 @@ func TestAutoMerger_MergePR_StageWithCIFailure(t *testing.T) {
 	}
 }
 
-func TestAutoMerger_MergePR_DevSkipsCIVerification(t *testing.T) {
-	// Dev environment should NOT call CI verification
+func TestAutoMerger_MergePR_DevWithCIVerification(t *testing.T) {
+	// Dev environment now calls CI verification like all other environments
 	ciCheckCalled := false
 	mergeWasCalled := false
 
@@ -882,8 +882,14 @@ func TestAutoMerger_MergePR_DevSkipsCIVerification(t *testing.T) {
 		switch {
 		case r.URL.Path == "/repos/owner/repo/commits/abc123def/check-runs":
 			ciCheckCalled = true
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				},
+			}
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(github.CheckRunsResponse{})
+			_ = json.NewEncoder(w).Encode(resp)
 		case r.URL.Path == "/repos/owner/repo/pulls/42/merge":
 			mergeWasCalled = true
 			w.WriteHeader(http.StatusOK)
@@ -897,6 +903,7 @@ func TestAutoMerger_MergePR_DevSkipsCIVerification(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Environment = EnvDev
 	cfg.AutoReview = false
+	cfg.RequiredChecks = []string{"build"}
 
 	ciMonitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
 	merger := NewAutoMerger(ghClient, nil, ciMonitor, "owner", "repo", cfg)
@@ -911,8 +918,8 @@ func TestAutoMerger_MergePR_DevSkipsCIVerification(t *testing.T) {
 		t.Errorf("MergePR() error = %v", err)
 	}
 
-	if ciCheckCalled {
-		t.Error("CI check should NOT have been called for dev environment")
+	if !ciCheckCalled {
+		t.Error("CI check should have been called for dev environment")
 	}
 	if !mergeWasCalled {
 		t.Error("merge should have been called for dev environment")
