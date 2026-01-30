@@ -491,15 +491,14 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 	// Create branch if specified (skip for direct commit mode)
 	if task.Branch != "" && !task.DirectCommit {
 		r.reportProgress(task.ID, "Branching", 5, fmt.Sprintf("Creating branch %s...", task.Branch))
-		if err := git.CreateBranch(ctx, task.Branch); err != nil {
-			// Check if branch already exists - try to switch to it
-			if switchErr := git.SwitchBranch(ctx, task.Branch); switchErr != nil {
-				return nil, fmt.Errorf("failed to create/switch branch: %w", err)
-			}
-			r.reportProgress(task.ID, "Branching", 8, fmt.Sprintf("Switched to existing branch %s", task.Branch))
-		} else {
-			r.reportProgress(task.ID, "Branching", 8, fmt.Sprintf("Created branch %s", task.Branch))
+		baseBranch := task.BaseBranch
+		if baseBranch == "" {
+			baseBranch = "main"
 		}
+		if err := git.EnsureCleanBranch(ctx, task.Branch, baseBranch); err != nil {
+			return nil, fmt.Errorf("failed to prepare branch: %w", err)
+		}
+		r.reportProgress(task.ID, "Branching", 8, fmt.Sprintf("Ready on branch %s", task.Branch))
 	}
 
 	// Run parallel research phase for medium/complex tasks (GH-217)

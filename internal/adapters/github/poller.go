@@ -378,7 +378,7 @@ func (p *Poller) findOldestUnprocessedIssue(ctx context.Context) (*Issue, error)
 			continue
 		}
 
-		if HasLabel(issue, LabelInProgress) || HasLabel(issue, LabelDone) {
+		if HasLabel(issue, LabelInProgress) || HasLabel(issue, LabelDone) || HasLabel(issue, LabelFailed) {
 			continue
 		}
 
@@ -438,8 +438,8 @@ func (p *Poller) checkForNewIssues(ctx context.Context) {
 			continue
 		}
 
-		// Skip if already in progress or done
-		if HasLabel(issue, LabelInProgress) || HasLabel(issue, LabelDone) {
+		// Skip if already in progress, done, or failed
+		if HasLabel(issue, LabelInProgress) || HasLabel(issue, LabelDone) || HasLabel(issue, LabelFailed) {
 			p.markProcessed(issue.Number)
 			continue
 		}

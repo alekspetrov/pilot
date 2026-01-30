@@ -186,3 +186,33 @@ func (g *GitOperations) GetCurrentCommitSHA(ctx context.Context) (string, error)
 	}
 	return strings.TrimSpace(string(output)), nil
 }
+
+// EnsureCleanBranch creates a fresh branch, cleaning up any existing state.
+// Used for retries where we need to start clean.
+func (g *GitOperations) EnsureCleanBranch(ctx context.Context, branchName, baseBranch string) error {
+	// 1. Discard uncommitted changes
+	resetCmd := exec.CommandContext(ctx, "git", "reset", "--hard")
+	resetCmd.Dir = g.projectPath
+	_ = resetCmd.Run() // Best effort
+
+	// 2. Checkout base branch
+	checkoutCmd := exec.CommandContext(ctx, "git", "checkout", baseBranch)
+	checkoutCmd.Dir = g.projectPath
+	if _, err := checkoutCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to checkout %s: %w", baseBranch, err)
+	}
+
+	// 3. Delete existing branch if any (ignore errors)
+	deleteCmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
+	deleteCmd.Dir = g.projectPath
+	_ = deleteCmd.Run()
+
+	// 4. Create fresh branch
+	createCmd := exec.CommandContext(ctx, "git", "checkout", "-b", branchName)
+	createCmd.Dir = g.projectPath
+	output, err := createCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create branch: %w: %s", err, output)
+	}
+	return nil
+}

@@ -109,6 +109,11 @@ func (n *Notifier) NotifyTaskFailed(ctx context.Context, owner, repo string, iss
 		_ = err // intentionally ignored: label may not exist
 	}
 
+	// Remove pilot trigger label to prevent re-pickup
+	if err := n.client.RemoveLabel(ctx, owner, repo, issueNum, n.pilotLabel); err != nil {
+		_ = err // intentionally ignored: label may not exist
+	}
+
 	// Add failed label
 	if err := n.client.AddLabels(ctx, owner, repo, issueNum, []string{LabelFailed}); err != nil {
 		return fmt.Errorf("failed to add failed label: %w", err)
