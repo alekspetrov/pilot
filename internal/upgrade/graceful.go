@@ -197,7 +197,10 @@ func (g *GracefulUpgrader) GetUpgrader() *Upgrader {
 // restart re-executes the current binary
 func (g *GracefulUpgrader) restart() error {
 	binary := g.upgrader.BinaryPath()
-	args := os.Args[1:] // Keep original arguments
+
+	// After upgrade, run 'version' to show the new version and exit cleanly.
+	// This prevents restart loops when 'pilot upgrade' would re-run upgrade.
+	args := []string{"version"}
 
 	// On Unix, we can use exec to replace the current process
 	if err := syscall.Exec(binary, append([]string{binary}, args...), os.Environ()); err != nil {
