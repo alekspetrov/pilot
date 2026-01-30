@@ -601,8 +601,8 @@ func TestController_MergeAttemptIncrement(t *testing.T) {
 	mergeCallCount := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/owner/repo/commits/abc1234/check-runs":
+		switch r.URL.Path {
+		case "/repos/owner/repo/commits/abc1234/check-runs":
 			// Return successful CI checks for pre-merge verification
 			resp := github.CheckRunsResponse{
 				TotalCount: 1,
@@ -612,7 +612,7 @@ func TestController_MergeAttemptIncrement(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(resp)
-		case r.URL.Path == "/repos/owner/repo/pulls/42/merge":
+		case "/repos/owner/repo/pulls/42/merge":
 			mergeCallCount++
 			// Fail first attempt, succeed second
 			if mergeCallCount == 1 {

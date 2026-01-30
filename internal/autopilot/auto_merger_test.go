@@ -766,8 +766,8 @@ func TestAutoMerger_MergePR_StageWithCIVerification(t *testing.T) {
 	ciCheckCalled := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/owner/repo/commits/abc123def/check-runs":
+		switch r.URL.Path {
+		case "/repos/owner/repo/commits/abc123def/check-runs":
 			ciCheckCalled = true
 			response := github.CheckRunsResponse{
 				TotalCount: 1,
@@ -781,9 +781,9 @@ func TestAutoMerger_MergePR_StageWithCIVerification(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(response)
-		case r.URL.Path == "/repos/owner/repo/pulls/42/reviews":
+		case "/repos/owner/repo/pulls/42/reviews":
 			w.WriteHeader(http.StatusOK)
-		case r.URL.Path == "/repos/owner/repo/pulls/42/merge":
+		case "/repos/owner/repo/pulls/42/merge":
 			mergeWasCalled = true
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -824,8 +824,8 @@ func TestAutoMerger_MergePR_StageWithCIFailure(t *testing.T) {
 	mergeWasCalled := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/owner/repo/commits/abc123def/check-runs":
+		switch r.URL.Path {
+		case "/repos/owner/repo/commits/abc123def/check-runs":
 			response := github.CheckRunsResponse{
 				TotalCount: 1,
 				CheckRuns: []github.CheckRun{
@@ -838,9 +838,9 @@ func TestAutoMerger_MergePR_StageWithCIFailure(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(response)
-		case r.URL.Path == "/repos/owner/repo/pulls/42/reviews":
+		case "/repos/owner/repo/pulls/42/reviews":
 			w.WriteHeader(http.StatusOK)
-		case r.URL.Path == "/repos/owner/repo/pulls/42/merge":
+		case "/repos/owner/repo/pulls/42/merge":
 			mergeWasCalled = true
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -879,8 +879,8 @@ func TestAutoMerger_MergePR_DevWithCIVerification(t *testing.T) {
 	mergeWasCalled := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/owner/repo/commits/abc123def/check-runs":
+		switch r.URL.Path {
+		case "/repos/owner/repo/commits/abc123def/check-runs":
 			ciCheckCalled = true
 			resp := github.CheckRunsResponse{
 				TotalCount: 1,
@@ -890,7 +890,7 @@ func TestAutoMerger_MergePR_DevWithCIVerification(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(resp)
-		case r.URL.Path == "/repos/owner/repo/pulls/42/merge":
+		case "/repos/owner/repo/pulls/42/merge":
 			mergeWasCalled = true
 			w.WriteHeader(http.StatusOK)
 		default:
