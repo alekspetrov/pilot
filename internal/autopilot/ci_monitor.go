@@ -171,6 +171,12 @@ func (m *CIMonitor) mapCheckStatus(status, conclusion string) CIStatus {
 	}
 }
 
+// GetCIStatus returns the current overall CI status for a SHA.
+// This is useful for point-in-time status checks without waiting.
+func (m *CIMonitor) GetCIStatus(ctx context.Context, sha string) (CIStatus, error) {
+	return m.checkStatus(ctx, sha)
+}
+
 // GetFailedChecks returns names of failed checks for a SHA.
 func (m *CIMonitor) GetFailedChecks(ctx context.Context, sha string) ([]string, error) {
 	checkRuns, err := m.ghClient.ListCheckRuns(ctx, m.owner, m.repo, sha)

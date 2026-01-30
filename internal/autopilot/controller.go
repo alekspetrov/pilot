@@ -60,7 +60,7 @@ func NewController(cfg *Config, ghClient *github.Client, approvalMgr *approval.M
 	}
 
 	c.ciMonitor = NewCIMonitor(ghClient, owner, repo, cfg)
-	c.autoMerger = NewAutoMerger(ghClient, approvalMgr, owner, repo, cfg)
+	c.autoMerger = NewAutoMerger(ghClient, approvalMgr, c.ciMonitor, owner, repo, cfg)
 	c.feedbackLoop = NewFeedbackLoop(ghClient, owner, repo, cfg)
 
 	return c
