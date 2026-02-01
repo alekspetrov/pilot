@@ -12,14 +12,18 @@ import (
 type mockUsageProvider struct {
 	dailyCost   float64
 	monthlyCost float64
+	callCount   int
 }
 
 func (m *mockUsageProvider) GetUsageSummary(query memory.UsageQuery) (*memory.UsageSummary, error) {
-	// Determine if this is a daily or monthly query based on the time range
-	duration := query.End.Sub(query.Start)
+	// Track call count to distinguish daily vs monthly queries.
+	// The enforcer always calls daily first (odd calls), then monthly (even calls).
+	// This is more reliable than duration-based detection, which fails on the 1st
+	// of the month when both daily and monthly queries start at the same time.
+	m.callCount++
+	isDaily := m.callCount%2 == 1
 
-	if duration < 25*time.Hour {
-		// Daily query
+	if isDaily {
 		return &memory.UsageSummary{
 			TotalCost: m.dailyCost,
 		}, nil
@@ -28,6 +32,11 @@ func (m *mockUsageProvider) GetUsageSummary(query memory.UsageQuery) (*memory.Us
 	return &memory.UsageSummary{
 		TotalCost: m.monthlyCost,
 	}, nil
+}
+
+// Reset resets the call counter for tests that make multiple CheckBudget calls
+func (m *mockUsageProvider) Reset() {
+	m.callCount = 0
 }
 
 func TestEnforcer_CheckBudget_Disabled(t *testing.T) {
