@@ -13,6 +13,7 @@ const (
 	IntentQuestion Intent = "question"
 	IntentTask     Intent = "task"
 	IntentCommand  Intent = "command"
+	IntentPlanning Intent = "planning"
 )
 
 // Common greeting patterns
@@ -45,6 +46,20 @@ var taskActionWords = []string{
 	"sort", "organize", "rank", "triage", "set priority",
 }
 
+// Planning patterns - requests to create a plan before executing
+var planningPatterns = []string{
+	"plan how to",
+	"plan to",
+	"create a plan",
+	"make a plan",
+	"draft a plan",
+	"design how to",
+	"figure out how to",
+	"think about how to",
+	"plan:",
+	"planning:",
+}
+
 // DetectIntent analyzes a message and returns the detected intent
 func DetectIntent(message string) Intent {
 	// Normalize message
@@ -58,6 +73,11 @@ func DetectIntent(message string) Intent {
 	// Check for greetings (short messages that are just greetings)
 	if isGreeting(msg) {
 		return IntentGreeting
+	}
+
+	// Check for planning requests (before general questions/tasks)
+	if isPlanning(msg) {
+		return IntentPlanning
 	}
 
 	// Check for questions
@@ -82,6 +102,16 @@ func DetectIntent(message string) Intent {
 	}
 
 	return IntentTask
+}
+
+// isPlanning checks if the message is a planning request
+func isPlanning(msg string) bool {
+	for _, pattern := range planningPatterns {
+		if strings.HasPrefix(msg, pattern) || strings.Contains(msg, " "+pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // containsTaskReference checks if message references a task, file, or specific item
@@ -206,6 +236,8 @@ func (i Intent) Description() string {
 		return "Task"
 	case IntentCommand:
 		return "Command"
+	case IntentPlanning:
+		return "Planning"
 	default:
 		return "Unknown"
 	}
