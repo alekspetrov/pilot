@@ -29,6 +29,14 @@ type PendingTask struct {
 	CreatedAt   time.Time
 }
 
+// PendingPlan represents a plan awaiting execution
+type PendingPlan struct {
+	ChatID      string
+	Request     string    // Original user request
+	PlanContent string    // Full plan from Claude
+	CreatedAt   time.Time
+}
+
 // RunningTask represents a task currently being executed
 type RunningTask struct {
 	TaskID    string
@@ -47,6 +55,7 @@ type Handler struct {
 	allowedIDs       map[int64]bool          // Allowed user/chat IDs for security
 	offset           int64                   // Last processed update ID
 	pendingTasks     map[string]*PendingTask // ChatID -> pending task
+	pendingPlans     map[string]*PendingPlan // ChatID -> pending plan
 	runningTasks     map[string]*RunningTask // ChatID -> running task
 	mu               sync.Mutex
 	stopCh           chan struct{}
@@ -90,6 +99,7 @@ func NewHandler(config *HandlerConfig, runner *executor.Runner) *Handler {
 		activeProject: make(map[string]string),
 		allowedIDs:    allowedIDs,
 		pendingTasks:  make(map[string]*PendingTask),
+		pendingPlans:  make(map[string]*PendingPlan),
 		runningTasks:  make(map[string]*RunningTask),
 		stopCh:        make(chan struct{}),
 		store:         config.Store,
@@ -194,7 +204,7 @@ func (h *Handler) pollLoop(ctx context.Context) {
 	}
 }
 
-// cleanupLoop removes expired pending tasks
+// cleanupLoop removes expired pending tasks and plans
 func (h *Handler) cleanupLoop(ctx context.Context) {
 	defer h.wg.Done()
 	ticker := time.NewTicker(time.Minute)
@@ -208,6 +218,7 @@ func (h *Handler) cleanupLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			h.cleanupExpiredTasks(ctx)
+			h.cleanupExpiredPlans(ctx)
 		}
 	}
 }
@@ -225,6 +236,22 @@ func (h *Handler) cleanupExpiredTasks(ctx context.Context) {
 				fmt.Sprintf("⏰ Task %s expired (no confirmation received).", task.TaskID), "")
 			delete(h.pendingTasks, chatID)
 			logging.WithComponent("telegram").Debug("Expired pending task", slog.String("task_id", task.TaskID), slog.String("chat_id", chatID))
+		}
+	}
+}
+
+// cleanupExpiredPlans removes plans pending for more than 5 minutes
+func (h *Handler) cleanupExpiredPlans(ctx context.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	expiry := time.Now().Add(-5 * time.Minute)
+	for chatID, plan := range h.pendingPlans {
+		if plan.CreatedAt.Before(expiry) {
+			// Notify user that plan expired
+			_, _ = h.client.SendMessage(ctx, chatID, "⏰ Plan expired (no action taken).", "")
+			delete(h.pendingPlans, chatID)
+			logging.WithComponent("telegram").Debug("Expired pending plan", slog.String("chat_id", chatID))
 		}
 	}
 }
@@ -325,6 +352,8 @@ func (h *Handler) processUpdate(ctx context.Context, update *Update) {
 		h.handleGreeting(ctx, chatID, msg.From)
 	case IntentQuestion:
 		h.handleQuestion(ctx, chatID, text)
+	case IntentPlanning:
+		h.handlePlanning(ctx, chatID, text)
 	case IntentTask:
 		h.handleTask(ctx, chatID, text)
 	default:
@@ -350,6 +379,12 @@ func (h *Handler) handleCallback(ctx context.Context, callback *CallbackQuery) {
 		h.handleConfirmation(ctx, chatID, true)
 	case data == "cancel":
 		h.handleConfirmation(ctx, chatID, false)
+	case data == "execute_plan":
+		h.handleExecutePlan(ctx, chatID)
+	case data == "modify_plan":
+		h.handleModifyPlan(ctx, chatID)
+	case data == "cancel_plan":
+		h.handleCancelPlan(ctx, chatID)
 	case strings.HasPrefix(data, "switch_"):
 		projectName := strings.TrimPrefix(data, "switch_")
 		h.cmdHandler.HandleCallbackSwitch(ctx, chatID, projectName)
@@ -446,6 +481,205 @@ If the question is too broad, ask for clarification instead of exploring everyth
 	}
 
 	_, _ = h.client.SendMessage(ctx, chatID, answer, "")
+}
+
+// handlePlanning handles planning requests - creates a plan without executing
+func (h *Handler) handlePlanning(ctx context.Context, chatID, request string) {
+	// Check for existing pending plan
+	h.mu.Lock()
+	if existing := h.pendingPlans[chatID]; existing != nil {
+		h.mu.Unlock()
+		_, _ = h.client.SendMessage(ctx, chatID,
+			"⚠️ You have a pending plan. Execute, modify, or cancel it first.", "")
+		return
+	}
+	h.mu.Unlock()
+
+	// Extract the actual planning request (remove "plan how to" prefix)
+	planRequest := extractPlanRequest(request)
+
+	// Send acknowledgment
+	_, _ = h.client.SendMessage(ctx, chatID, "📐 Drafting plan...", "")
+
+	// Create planning task (read-only exploration)
+	taskID := fmt.Sprintf("PLAN-%d", time.Now().Unix())
+	task := &executor.Task{
+		ID:          taskID,
+		Title:       "Plan: " + truncateDescription(planRequest, 40),
+		Description: fmt.Sprintf(`Create an implementation plan for: %s
+
+Explore the codebase and propose a detailed plan. Include:
+1. Summary of approach
+2. Files to modify/create
+3. Step-by-step implementation phases
+4. Potential risks or considerations
+
+DO NOT make any code changes. Only explore and plan.`, planRequest),
+		ProjectPath: h.getActiveProjectPath(chatID),
+		CreatePR:    false,
+	}
+
+	// Execute with timeout (2 minutes for planning)
+	planCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	result, err := h.runner.Execute(planCtx, task)
+	if err != nil {
+		if planCtx.Err() == context.DeadlineExceeded {
+			_, _ = h.client.SendMessage(ctx, chatID, "⏱ Planning timed out. Try a simpler request.", "")
+		} else {
+			_, _ = h.client.SendMessage(ctx, chatID, fmt.Sprintf("❌ Planning failed: %s", err.Error()), "")
+		}
+		return
+	}
+
+	planContent := cleanInternalSignals(result.Output)
+	if planContent == "" {
+		_, _ = h.client.SendMessage(ctx, chatID, "🤷 Could not generate a plan. Try being more specific.", "")
+		return
+	}
+
+	// Store pending plan
+	h.mu.Lock()
+	h.pendingPlans[chatID] = &PendingPlan{
+		ChatID:      chatID,
+		Request:     planRequest,
+		PlanContent: planContent,
+		CreatedAt:   time.Now(),
+	}
+	h.mu.Unlock()
+
+	// Send plan summary with buttons
+	summary := extractPlanSummary(planContent)
+	_, _ = h.client.SendMessageWithKeyboard(ctx, chatID,
+		fmt.Sprintf("📋 Implementation Plan\n\n%s", summary), "",
+		[][]InlineKeyboardButton{
+			{
+				{Text: "✅ Execute", CallbackData: "execute_plan"},
+				{Text: "✏️ Modify", CallbackData: "modify_plan"},
+				{Text: "❌ Cancel", CallbackData: "cancel_plan"},
+			},
+		})
+}
+
+// extractPlanRequest removes planning prefixes from the request
+func extractPlanRequest(request string) string {
+	prefixes := []string{
+		"plan how to ", "plan to ", "create a plan for ",
+		"make a plan for ", "draft a plan for ", "design how to ",
+		"figure out how to ", "think about how to ",
+		"plan: ", "planning: ",
+	}
+	lower := strings.ToLower(request)
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return strings.TrimSpace(request[len(prefix):])
+		}
+	}
+	return request
+}
+
+// extractPlanSummary extracts key points from a plan for Telegram display
+func extractPlanSummary(plan string) string {
+	// Try to extract structured sections
+	lines := strings.Split(plan, "\n")
+	var summary []string
+	inSummary := false
+	lineCount := 0
+
+	for _, line := range lines {
+		lineLower := strings.ToLower(line)
+
+		// Look for summary/approach sections
+		if strings.Contains(lineLower, "summary") ||
+			strings.Contains(lineLower, "approach") ||
+			strings.Contains(lineLower, "overview") ||
+			strings.HasPrefix(line, "## ") ||
+			strings.HasPrefix(line, "### ") {
+			inSummary = true
+		}
+
+		if inSummary && lineCount < 20 {
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" {
+				summary = append(summary, trimmed)
+				lineCount++
+			}
+		}
+
+		// Stop at implementation details
+		if strings.Contains(lineLower, "implementation") && lineCount > 5 {
+			break
+		}
+	}
+
+	if len(summary) == 0 {
+		// Fallback: just take first 15 non-empty lines
+		for _, line := range lines {
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				summary = append(summary, trimmed)
+				if len(summary) >= 15 {
+					break
+				}
+			}
+		}
+	}
+
+	result := strings.Join(summary, "\n")
+	if len(result) > 2000 {
+		result = result[:2000] + "\n\n_(truncated)_"
+	}
+
+	return result
+}
+
+// handleExecutePlan executes a pending plan as a task
+func (h *Handler) handleExecutePlan(ctx context.Context, chatID string) {
+	h.mu.Lock()
+	plan := h.pendingPlans[chatID]
+	if plan != nil {
+		delete(h.pendingPlans, chatID)
+	}
+	h.mu.Unlock()
+
+	if plan == nil {
+		_, _ = h.client.SendMessage(ctx, chatID, "No pending plan to execute.", "")
+		return
+	}
+
+	// Execute the plan as a task with PR
+	taskID := fmt.Sprintf("TG-%d", time.Now().Unix())
+	description := fmt.Sprintf("## Implementation Plan\n\n%s\n\n## Original Request\n\n%s",
+		plan.PlanContent, plan.Request)
+
+	_, _ = h.client.SendMessage(ctx, chatID,
+		fmt.Sprintf("🚀 Executing plan...\n\nTask: %s", taskID), "")
+
+	h.executeTask(ctx, chatID, taskID, description)
+}
+
+// handleModifyPlan prompts user to modify the pending plan
+func (h *Handler) handleModifyPlan(ctx context.Context, chatID string) {
+	h.mu.Lock()
+	plan := h.pendingPlans[chatID]
+	h.mu.Unlock()
+
+	if plan == nil {
+		_, _ = h.client.SendMessage(ctx, chatID, "No pending plan to modify.", "")
+		return
+	}
+
+	_, _ = h.client.SendMessage(ctx, chatID,
+		"✏️ Send your modifications or clarifications, then say 'replan' to generate a new plan.", "")
+}
+
+// handleCancelPlan cancels a pending plan
+func (h *Handler) handleCancelPlan(ctx context.Context, chatID string) {
+	h.mu.Lock()
+	delete(h.pendingPlans, chatID)
+	h.mu.Unlock()
+
+	_, _ = h.client.SendMessage(ctx, chatID, "❌ Plan cancelled.", "")
 }
 
 // handleTask handles task requests with confirmation

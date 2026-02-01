@@ -55,6 +55,15 @@ func TestDetectIntent(t *testing.T) {
 		{"meta-task set priority", "set priority for tasks", IntentTask},
 		{"meta-task review with context", "review tasks, set new priority by value", IntentTask},
 
+		// Planning requests
+		{"planning plan how to", "plan how to add authentication", IntentPlanning},
+		{"planning plan to", "plan to refactor the auth module", IntentPlanning},
+		{"planning create a plan", "create a plan for the new feature", IntentPlanning},
+		{"planning make a plan", "make a plan for user registration", IntentPlanning},
+		{"planning draft a plan", "draft a plan for the api redesign", IntentPlanning},
+		{"planning design how to", "design how to implement caching", IntentPlanning},
+		{"planning figure out", "figure out how to optimize queries", IntentPlanning},
+
 		// Edge cases
 		{"what does question", "what does the auth module do", IntentQuestion},
 		{"ambiguous greeting", "hello world file", IntentGreeting}, // "hello" starts msg, <= 3 words
@@ -79,6 +88,7 @@ func TestIntentDescription(t *testing.T) {
 		{IntentQuestion, "Question"},
 		{IntentTask, "Task"},
 		{IntentCommand, "Command"},
+		{IntentPlanning, "Planning"},
 		{Intent("unknown"), "Unknown"},
 	}
 
@@ -357,6 +367,7 @@ func TestIntentConstants(t *testing.T) {
 		{IntentQuestion, "question"},
 		{IntentTask, "task"},
 		{IntentCommand, "command"},
+		{IntentPlanning, "planning"},
 	}
 
 	for _, tt := range tests {
@@ -490,6 +501,7 @@ func TestIntentStringConversion(t *testing.T) {
 		{IntentQuestion, "question"},
 		{IntentTask, "task"},
 		{IntentCommand, "command"},
+		{IntentPlanning, "planning"},
 	}
 
 	for _, tt := range tests {
@@ -497,6 +509,72 @@ func TestIntentStringConversion(t *testing.T) {
 			got := string(tt.intent)
 			if got != tt.want {
 				t.Errorf("string(%v) = %q, want %q", tt.intent, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsPlanning tests planning intent detection (GH-292)
+func TestIsPlanning(t *testing.T) {
+	tests := []struct {
+		message  string
+		expected bool
+	}{
+		// Planning patterns
+		{"plan how to add authentication", true},
+		{"plan to refactor the auth module", true},
+		{"create a plan for user registration", true},
+		{"make a plan for the api redesign", true},
+		{"draft a plan for the new feature", true},
+		{"design how to implement caching", true},
+		{"figure out how to optimize queries", true},
+		{"think about how to restructure", true},
+		{"plan: add dark mode", true},
+		{"planning: new dashboard", true},
+
+		// NOT planning - regular tasks
+		{"add authentication", false},
+		{"refactor the auth module", false},
+		{"create user registration", false},
+		{"implement caching", false},
+		{"optimize queries", false},
+
+		// NOT planning - questions
+		{"how do I add auth", false},
+		{"what is the plan", false},
+		{"show me the plans", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.message, func(t *testing.T) {
+			got := isPlanning(tt.message)
+			if got != tt.expected {
+				t.Errorf("isPlanning(%q) = %v, want %v", tt.message, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestPlanningIntentDetection tests that planning requests get IntentPlanning
+func TestPlanningIntentDetection(t *testing.T) {
+	planningMessages := []string{
+		"plan how to add user authentication",
+		"plan to implement dark mode",
+		"create a plan for the new feature",
+		"make a plan for refactoring",
+		"draft a plan for the api redesign",
+		"design how to structure the database",
+		"figure out how to optimize the build",
+		"think about how to improve performance",
+		"plan: add rate limiting",
+		"planning: new dashboard layout",
+	}
+
+	for _, msg := range planningMessages {
+		t.Run(msg, func(t *testing.T) {
+			intent := DetectIntent(msg)
+			if intent != IntentPlanning {
+				t.Errorf("DetectIntent(%q) = %v, want %v", msg, intent, IntentPlanning)
 			}
 		})
 	}
