@@ -22,6 +22,8 @@ type Notifier interface {
 	NotifyApprovalRequired(ctx context.Context, prState *PRState) error
 	// NotifyFixIssueCreated sends notification when a fix issue is auto-created.
 	NotifyFixIssueCreated(ctx context.Context, prState *PRState, issueNumber int) error
+	// NotifyReleased sends notification when a release is created.
+	NotifyReleased(ctx context.Context, prState *PRState, releaseURL string) error
 }
 
 // Controller orchestrates the autopilot loop for PR processing.
