@@ -55,6 +55,14 @@ func TestDetectIntent(t *testing.T) {
 		{"meta-task set priority", "set priority for tasks", IntentTask},
 		{"meta-task review with context", "review tasks, set new priority by value", IntentTask},
 
+		// Chat (conversational)
+		{"chat what do you think", "what do you think about this approach?", IntentChat},
+		{"chat your thoughts", "your thoughts on microservices?", IntentChat},
+		{"chat do you think", "do you think we should use redis?", IntentChat},
+		{"chat just curious", "just curious, how does the cache work?", IntentChat},
+		{"chat lets discuss", "let's discuss the architecture", IntentChat},
+		{"chat tell me more", "tell me more about that pattern", IntentChat},
+
 		// Edge cases
 		{"what does question", "what does the auth module do", IntentQuestion},
 		{"ambiguous greeting", "hello world file", IntentGreeting}, // "hello" starts msg, <= 3 words
@@ -79,6 +87,7 @@ func TestIntentDescription(t *testing.T) {
 		{IntentQuestion, "Question"},
 		{IntentTask, "Task"},
 		{IntentCommand, "Command"},
+		{IntentChat, "Chat"},
 		{Intent("unknown"), "Unknown"},
 	}
 
@@ -332,8 +341,8 @@ func TestDetectIntentEdgeCases(t *testing.T) {
 		{"number reference", "07", IntentTask},
 		{"pick command", "pick 04", IntentTask},
 
-		// Ambiguous (defaults to task)
-		{"ambiguous long", "something about the code that is unclear", IntentTask},
+		// Ambiguous (defaults to chat for better UX)
+		{"ambiguous long", "something about the code that is unclear", IntentChat},
 	}
 
 	for _, tt := range tests {
@@ -357,6 +366,7 @@ func TestIntentConstants(t *testing.T) {
 		{IntentQuestion, "question"},
 		{IntentTask, "task"},
 		{IntentCommand, "command"},
+		{IntentChat, "chat"},
 	}
 
 	for _, tt := range tests {

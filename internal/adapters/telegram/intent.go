@@ -13,6 +13,7 @@ const (
 	IntentQuestion Intent = "question"
 	IntentTask     Intent = "task"
 	IntentCommand  Intent = "command"
+	IntentChat     Intent = "chat"
 )
 
 // Common greeting patterns
@@ -45,6 +46,28 @@ var taskActionWords = []string{
 	"sort", "organize", "rank", "triage", "set priority",
 }
 
+// Chat patterns - conversational messages that don't require code changes
+var chatPatterns = []string{
+	"what do you think",
+	"what's your opinion",
+	"whats your opinion",
+	"your thoughts on",
+	"thoughts on",
+	"do you think",
+	"would you say",
+	"how do you feel",
+	"tell me more",
+	"let's discuss",
+	"lets discuss",
+	"can we talk about",
+	"i was wondering",
+	"just curious",
+	"quick question",
+	"random question",
+	"off topic",
+	"side note",
+}
+
 // DetectIntent analyzes a message and returns the detected intent
 func DetectIntent(message string) Intent {
 	// Normalize message
@@ -58,6 +81,11 @@ func DetectIntent(message string) Intent {
 	// Check for greetings (short messages that are just greetings)
 	if isGreeting(msg) {
 		return IntentGreeting
+	}
+
+	// Check for chat/conversational patterns (before questions, as chat may end with ?)
+	if isChat(msg) {
+		return IntentChat
 	}
 
 	// Check for questions
@@ -76,12 +104,12 @@ func DetectIntent(message string) Intent {
 	}
 
 	// Default: if message is very short AND looks like a greeting, treat as greeting
-	// Otherwise treat as task (will get confirmation anyway)
 	if len(msg) < 15 && isLikelyGreeting(msg) {
 		return IntentGreeting
 	}
 
-	return IntentTask
+	// Default to chat for better UX - users must use explicit action words for tasks
+	return IntentChat
 }
 
 // containsTaskReference checks if message references a task, file, or specific item
@@ -175,6 +203,16 @@ func isTask(msg string) bool {
 	return containsActionWord(msg)
 }
 
+// isChat checks if the message is conversational/discussion-style
+func isChat(msg string) bool {
+	for _, pattern := range chatPatterns {
+		if strings.Contains(msg, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // containsActionWord checks if message contains task action words
 func containsActionWord(msg string) bool {
 	for _, action := range taskActionWords {
@@ -206,6 +244,8 @@ func (i Intent) Description() string {
 		return "Task"
 	case IntentCommand:
 		return "Command"
+	case IntentChat:
+		return "Chat"
 	default:
 		return "Unknown"
 	}

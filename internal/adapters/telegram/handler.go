@@ -325,11 +325,13 @@ func (h *Handler) processUpdate(ctx context.Context, update *Update) {
 		h.handleGreeting(ctx, chatID, msg.From)
 	case IntentQuestion:
 		h.handleQuestion(ctx, chatID, text)
+	case IntentChat:
+		h.handleChat(ctx, chatID, text)
 	case IntentTask:
 		h.handleTask(ctx, chatID, text)
 	default:
-		// Fallback to task
-		h.handleTask(ctx, chatID, text)
+		// Default to chat for better UX - users must use explicit action words for tasks
+		h.handleChat(ctx, chatID, text)
 	}
 }
 
@@ -446,6 +448,58 @@ If the question is too broad, ask for clarification instead of exploring everyth
 	}
 
 	_, _ = h.client.SendMessage(ctx, chatID, answer, "")
+}
+
+// handleChat handles conversational messages without code execution
+func (h *Handler) handleChat(ctx context.Context, chatID, message string) {
+	// Send typing indicator
+	_, _ = h.client.SendMessage(ctx, chatID, "💬 Thinking...", "")
+
+	// Create chat task (read-only, conversational)
+	taskID := fmt.Sprintf("CHAT-%d", time.Now().Unix())
+	task := &executor.Task{
+		ID:    taskID,
+		Title: "Chat: " + truncateDescription(message, 30),
+		Description: fmt.Sprintf(`You are Pilot, an AI assistant for the codebase at %s.
+
+The user wants to have a conversation (not execute a task).
+Respond helpfully and conversationally. You can reference project knowledge but DO NOT make code changes.
+
+Be concise - this is a chat conversation, not a report. Keep response under 500 words.
+
+User message: %s`, h.getActiveProjectPath(chatID), message),
+		ProjectPath: h.getActiveProjectPath(chatID),
+		CreatePR:    false,
+	}
+
+	// Execute with short timeout (60 seconds for chat)
+	chatCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	result, err := h.runner.Execute(chatCtx, task)
+	if err != nil {
+		if chatCtx.Err() == context.DeadlineExceeded {
+			_, _ = h.client.SendMessage(ctx, chatID,
+				"⏱ Took too long to respond. Try a simpler question.", "")
+		} else {
+			_, _ = h.client.SendMessage(ctx, chatID,
+				"Sorry, I couldn't process that. Try rephrasing?", "")
+		}
+		return
+	}
+
+	// Clean and send response
+	response := cleanInternalSignals(result.Output)
+	if response == "" {
+		response = "I'm not sure how to respond to that. Could you rephrase?"
+	}
+
+	// Truncate if too long
+	if len(response) > 4000 {
+		response = response[:3997] + "..."
+	}
+
+	_, _ = h.client.SendMessage(ctx, chatID, response, "")
 }
 
 // handleTask handles task requests with confirmation
@@ -807,10 +861,12 @@ func (h *Handler) handleVoice(ctx context.Context, chatID string, msg *Message) 
 		h.handleGreeting(ctx, chatID, msg.From)
 	case IntentQuestion:
 		h.handleQuestion(ctx, chatID, text)
+	case IntentChat:
+		h.handleChat(ctx, chatID, text)
 	case IntentTask:
 		h.handleTask(ctx, chatID, text)
 	default:
-		h.handleTask(ctx, chatID, text)
+		h.handleChat(ctx, chatID, text)
 	}
 }
 
