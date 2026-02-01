@@ -213,6 +213,23 @@ func TestFormatGreeting(t *testing.T) {
 	}
 }
 
+func TestFormatGreetingInteractionModes(t *testing.T) {
+	greeting := FormatGreeting("Alice")
+
+	// Should mention all interaction modes
+	modes := []string{"Chat", "Questions", "Research", "Planning", "Tasks"}
+	for _, mode := range modes {
+		if !strings.Contains(greeting, mode) {
+			t.Errorf("FormatGreeting() missing mode: %s", mode)
+		}
+	}
+
+	// Should include username
+	if !strings.Contains(greeting, "Alice") {
+		t.Error("FormatGreeting() missing username")
+	}
+}
+
 func TestFormatTaskConfirmation(t *testing.T) {
 	got := FormatTaskConfirmation("TG-123", "Add auth handler", "/project/path")
 
@@ -510,6 +527,149 @@ func TestFormatQuestionAck(t *testing.T) {
 	}
 	if !strings.Contains(got, "Looking") {
 		t.Errorf("FormatQuestionAck() should contain 'Looking', got: %q", got)
+	}
+}
+
+// TestFormatResearchAck tests research acknowledgment
+func TestFormatResearchAck(t *testing.T) {
+	got := FormatResearchAck()
+	if !strings.Contains(got, "🔬") {
+		t.Errorf("FormatResearchAck() should contain research emoji, got: %q", got)
+	}
+	if !strings.Contains(got, "Researching") {
+		t.Errorf("FormatResearchAck() should contain 'Researching', got: %q", got)
+	}
+}
+
+// TestFormatPlanningAck tests planning acknowledgment
+func TestFormatPlanningAck(t *testing.T) {
+	got := FormatPlanningAck()
+	if !strings.Contains(got, "📐") {
+		t.Errorf("FormatPlanningAck() should contain planning emoji, got: %q", got)
+	}
+	if !strings.Contains(got, "Drafting plan") {
+		t.Errorf("FormatPlanningAck() should contain 'Drafting plan', got: %q", got)
+	}
+}
+
+// TestFormatChatAck tests chat acknowledgment
+func TestFormatChatAck(t *testing.T) {
+	got := FormatChatAck()
+	if !strings.Contains(got, "💬") {
+		t.Errorf("FormatChatAck() should contain chat emoji, got: %q", got)
+	}
+	if !strings.Contains(got, "Thinking") {
+		t.Errorf("FormatChatAck() should contain 'Thinking', got: %q", got)
+	}
+}
+
+// TestFormatPlanSummary tests plan summary formatting
+func TestFormatPlanSummary(t *testing.T) {
+	summary := "1. Create handler\n2. Add tests\n3. Update docs"
+	got := FormatPlanSummary(summary)
+
+	if !strings.Contains(got, "📋") {
+		t.Error("FormatPlanSummary() should contain plan emoji")
+	}
+	if !strings.Contains(got, "Implementation Plan") {
+		t.Error("FormatPlanSummary() should contain 'Implementation Plan'")
+	}
+	if !strings.Contains(got, summary) {
+		t.Error("FormatPlanSummary() should contain the summary content")
+	}
+}
+
+// TestFormatResearchComplete tests research complete formatting
+func TestFormatResearchComplete(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		filePath string
+		want     string
+	}{
+		{
+			name:     "with file path",
+			query:    "auth system",
+			filePath: "/reports/auth-research.md",
+			want:     "📁 Full report saved: /reports/auth-research.md",
+		},
+		{
+			name:     "without file path",
+			query:    "caching",
+			filePath: "",
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatResearchComplete(tt.query, tt.filePath)
+			if got != tt.want {
+				t.Errorf("FormatResearchComplete() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestChunkContent tests content chunking
+func TestChunkContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		maxLen  int
+		want    int // expected number of chunks
+	}{
+		{"short content", "hello", 100, 1},
+		{"exact length", "hello", 5, 1},
+		{"needs chunking", "hello world this is a test", 10, 3},
+		{"empty", "", 100, 1},
+		{"with newlines", "line1\n\nline2\n\nline3", 10, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks := chunkContent(tt.content, tt.maxLen)
+			if len(chunks) != tt.want {
+				t.Errorf("chunkContent() returned %d chunks, want %d", len(chunks), tt.want)
+			}
+			// Verify no chunk exceeds maxLen
+			for i, chunk := range chunks {
+				if len(chunk) > tt.maxLen {
+					t.Errorf("chunk %d length %d exceeds maxLen %d", i, len(chunk), tt.maxLen)
+				}
+			}
+		})
+	}
+}
+
+// TestChunkContentBreaksAtNewlines tests that chunking prefers newline breaks
+func TestChunkContentBreaksAtNewlines(t *testing.T) {
+	content := "First paragraph here.\n\nSecond paragraph here.\n\nThird paragraph here."
+	chunks := chunkContent(content, 30)
+
+	// Should have multiple chunks
+	if len(chunks) < 2 {
+		t.Errorf("chunkContent() should split content, got %d chunks", len(chunks))
+	}
+
+	// Each chunk should be trimmed
+	for i, chunk := range chunks {
+		if strings.HasPrefix(chunk, " ") || strings.HasSuffix(chunk, " ") {
+			t.Errorf("chunk %d should be trimmed: %q", i, chunk)
+		}
+	}
+}
+
+// TestChunkContentLongContent tests chunking long content
+func TestChunkContentLongContent(t *testing.T) {
+	// Create content that's exactly 100 chars
+	content := strings.Repeat("a", 100)
+	chunks := chunkContent(content, 30)
+
+	// Verify all content is preserved
+	reconstructed := strings.Join(chunks, "")
+	if len(reconstructed) != len(content) {
+		t.Errorf("chunkContent() lost content: got %d chars, want %d", len(reconstructed), len(content))
 	}
 }
 

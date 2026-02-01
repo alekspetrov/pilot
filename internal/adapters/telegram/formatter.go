@@ -215,12 +215,19 @@ func FormatGreeting(username string) string {
 		name = username
 	}
 	return fmt.Sprintf(
-		"👋 Hey %s! I'm Pilot bot.\n\n"+
-			"Send me a task to execute, or ask me a question about the codebase.\n\n"+
-			"Examples:\n"+
-			"• `Create a hello.py file`\n"+
-			"• `What files handle auth?`\n"+
-			"• `/help` for more info",
+		"👋 Hey %s! I'm Pilot.\n\n"+
+			"I can help you in different ways:\n\n"+
+			"💬 *Chat* - Ask opinions or discuss\n"+
+			"  \"What do you think about using Redis?\"\n\n"+
+			"🔍 *Questions* - Quick answers\n"+
+			"  \"What files handle auth?\"\n\n"+
+			"🔬 *Research* - Deep analysis\n"+
+			"  \"Research how caching works here\"\n\n"+
+			"📐 *Planning* - Design before building\n"+
+			"  \"Plan how to add rate limiting\"\n\n"+
+			"🚀 *Tasks* - Build features\n"+
+			"  \"Add a logout button\"\n\n"+
+			"Type /help for commands.",
 		name,
 	)
 }
@@ -228,6 +235,68 @@ func FormatGreeting(username string) string {
 // FormatQuestionAck formats acknowledgment for a question
 func FormatQuestionAck() string {
 	return "🔍 Looking into that..."
+}
+
+// FormatResearchAck formats acknowledgment for research request
+func FormatResearchAck() string {
+	return "🔬 Researching..."
+}
+
+// FormatPlanningAck formats acknowledgment for planning request
+func FormatPlanningAck() string {
+	return "📐 Drafting plan..."
+}
+
+// FormatChatAck formats acknowledgment for chat message
+func FormatChatAck() string {
+	return "💬 Thinking..."
+}
+
+// FormatPlanSummary formats a plan summary for Telegram
+func FormatPlanSummary(summary string) string {
+	return fmt.Sprintf("📋 Implementation Plan\n\n%s", summary)
+}
+
+// FormatResearchComplete formats research completion message
+func FormatResearchComplete(query, filePath string) string {
+	if filePath != "" {
+		return fmt.Sprintf("📁 Full report saved: %s", filePath)
+	}
+	return ""
+}
+
+// chunkContent splits content into chunks of maxLen characters
+// Tries to break at newlines for cleaner output
+func chunkContent(content string, maxLen int) []string {
+	if len(content) <= maxLen {
+		return []string{content}
+	}
+
+	var chunks []string
+	remaining := content
+
+	for len(remaining) > 0 {
+		if len(remaining) <= maxLen {
+			chunks = append(chunks, remaining)
+			break
+		}
+
+		// Find a good break point (prefer double newline, then single newline)
+		breakPoint := maxLen
+
+		// Try to find paragraph break first
+		if idx := strings.LastIndex(remaining[:maxLen], "\n\n"); idx > maxLen/2 {
+			breakPoint = idx + 2
+		} else if idx := strings.LastIndex(remaining[:maxLen], "\n"); idx > maxLen/2 {
+			// Fall back to single newline
+			breakPoint = idx + 1
+		}
+
+		chunks = append(chunks, strings.TrimSpace(remaining[:breakPoint]))
+		remaining = strings.TrimSpace(remaining[breakPoint:])
+	}
+
+	return chunks
 }
 
 // FormatQuestionAnswer formats an answer to a question
