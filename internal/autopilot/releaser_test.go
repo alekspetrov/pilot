@@ -401,7 +401,7 @@ func TestReleaser_GetCurrentVersion(t *testing.T) {
 			name: "from latest release",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/repos/owner/repo/releases/latest" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
 						"id":       1,
 						"tag_name": "v1.2.3",
 					})
@@ -416,11 +416,11 @@ func TestReleaser_GetCurrentVersion(t *testing.T) {
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/repos/owner/repo/releases/latest" {
 					w.WriteHeader(http.StatusNotFound)
-					w.Write([]byte(`{"message": "Not Found"}`))
+					_, _ = w.Write([]byte(`{"message": "Not Found"}`))
 					return
 				}
 				if r.URL.Path == "/repos/owner/repo/tags" {
-					json.NewEncoder(w).Encode([]map[string]interface{}{
+					_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 						{"name": "v1.0.0"},
 						{"name": "v2.0.0"},
 						{"name": "v1.5.0"},
@@ -436,11 +436,11 @@ func TestReleaser_GetCurrentVersion(t *testing.T) {
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/repos/owner/repo/releases/latest" {
 					w.WriteHeader(http.StatusNotFound)
-					w.Write([]byte(`{"message": "Not Found"}`))
+					_, _ = w.Write([]byte(`{"message": "Not Found"}`))
 					return
 				}
 				if r.URL.Path == "/repos/owner/repo/tags" {
-					json.NewEncoder(w).Encode([]map[string]interface{}{})
+					_ = json.NewEncoder(w).Encode([]map[string]interface{}{})
 					return
 				}
 				w.WriteHeader(http.StatusNotFound)
@@ -474,8 +474,8 @@ func TestReleaser_CreateRelease(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/repos/owner/repo/releases" && r.Method == "POST" {
-			json.NewDecoder(r.Body).Decode(&capturedBody)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":       123,
 				"tag_name": capturedBody["tag_name"],
 				"name":     capturedBody["name"],
