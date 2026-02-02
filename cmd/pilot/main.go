@@ -1047,8 +1047,11 @@ func logGitHubAPIError(operation string, owner, repo string, issueNum int, err e
 }
 
 // handleGitHubIssue processes a GitHub issue picked up by the poller
-func handleGitHubIssue(ctx context.Context, cfg *config.Config, client *github.Client, issue *github.Issue, projectPath string, dispatcher *executor.Dispatcher, runner *executor.Runner, createPR, directCommit bool) error {
-	fmt.Printf("\n📥 GitHub Issue #%d: %s\n", issue.Number, issue.Title)
+// dashboardMode should be true when running with TUI dashboard to suppress stdout writes
+func handleGitHubIssue(ctx context.Context, cfg *config.Config, client *github.Client, issue *github.Issue, projectPath string, dispatcher *executor.Dispatcher, runner *executor.Runner, createPR, directCommit, dashboardMode bool) error {
+	if !dashboardMode {
+		fmt.Printf("\n📥 GitHub Issue #%d: %s\n", issue.Number, issue.Title)
+	}
 
 	parts := strings.Split(cfg.Adapters.GitHub.Repo, "/")
 	if len(parts) == 2 {
@@ -1084,7 +1087,9 @@ func handleGitHubIssue(ctx context.Context, cfg *config.Config, client *github.C
 		if qErr != nil {
 			execErr = fmt.Errorf("failed to queue task: %w", qErr)
 		} else {
-			fmt.Printf("   📋 Queued as execution %s\n", execID[:8])
+			if !dashboardMode {
+				fmt.Printf("   📋 Queued as execution %s\n", execID[:8])
+			}
 			exec, waitErr := dispatcher.WaitForExecution(ctx, execID, time.Second)
 			if waitErr != nil {
 				execErr = fmt.Errorf("failed waiting for execution: %w", waitErr)
@@ -1160,7 +1165,7 @@ func handleGitHubIssueWithMonitor(ctx context.Context, cfg *config.Config, clien
 		program.Send(dashboard.AddLog(fmt.Sprintf("📥 GitHub Issue #%d: %s", issue.Number, issue.Title))())
 	}
 
-	err := handleGitHubIssue(ctx, cfg, client, issue, projectPath, dispatcher, runner, createPR, directCommit)
+	err := handleGitHubIssue(ctx, cfg, client, issue, projectPath, dispatcher, runner, createPR, directCommit, program != nil)
 
 	// Update monitor with completion status
 	if monitor != nil {
@@ -1195,9 +1200,9 @@ func handleGitHubIssueWithResult(ctx context.Context, cfg *config.Config, client
 	}
 	if program != nil {
 		program.Send(dashboard.AddLog(fmt.Sprintf("📥 GitHub Issue #%d: %s", issue.Number, issue.Title))())
+	} else {
+		fmt.Printf("\n📥 GitHub Issue #%d: %s\n", issue.Number, issue.Title)
 	}
-
-	fmt.Printf("\n📥 GitHub Issue #%d: %s\n", issue.Number, issue.Title)
 
 	parts := strings.Split(cfg.Adapters.GitHub.Repo, "/")
 	if len(parts) == 2 {
@@ -1232,7 +1237,9 @@ func handleGitHubIssueWithResult(ctx context.Context, cfg *config.Config, client
 		if qErr != nil {
 			execErr = fmt.Errorf("failed to queue task: %w", qErr)
 		} else {
-			fmt.Printf("   📋 Queued as execution %s\n", execID[:8])
+			if program == nil {
+				fmt.Printf("   📋 Queued as execution %s\n", execID[:8])
+			}
 			exec, waitErr := dispatcher.WaitForExecution(ctx, execID, time.Second)
 			if waitErr != nil {
 				execErr = fmt.Errorf("failed waiting for execution: %w", waitErr)
