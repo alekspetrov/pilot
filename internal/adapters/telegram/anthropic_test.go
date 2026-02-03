@@ -128,7 +128,7 @@ func TestAnthropicClientClassify(t *testing.T) {
 				}
 
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.response))
+				_, _ = w.Write([]byte(tt.response))
 			}))
 			defer server.Close()
 
@@ -189,7 +189,7 @@ func (t *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Use a recorder to capture the response
 	recorder := httptest.NewRecorder()
 	recorder.WriteHeader(t.statusCode)
-	recorder.Write([]byte(t.response))
+	_, _ = recorder.Write([]byte(t.response))
 
 	return recorder.Result(), nil
 }
@@ -203,7 +203,7 @@ func TestAnthropicClientClassifyRequestBody(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"content": [{"text": "{\"intent\": \"chat\", \"confidence\": 0.95}"}]}`))
+		_, _ = w.Write([]byte(`{"content": [{"text": "{\"intent\": \"chat\", \"confidence\": 0.95}"}]}`))
 	}))
 	defer server.Close()
 
@@ -270,11 +270,11 @@ func TestAnthropicClientHistoryLimit(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		receivedMessages = body["messages"].([]interface{})
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"content": [{"text": "{\"intent\": \"chat\", \"confidence\": 0.95}"}]}`))
+		_, _ = w.Write([]byte(`{"content": [{"text": "{\"intent\": \"chat\", \"confidence\": 0.95}"}]}`))
 	}))
 	defer server.Close()
 

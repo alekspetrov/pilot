@@ -108,7 +108,7 @@ Respond with JSON only: {"intent": "...", "confidence": 0.0-1.0}`
 	if err != nil {
 		return "", fmt.Errorf("API request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("API returned status %d", resp.StatusCode)
