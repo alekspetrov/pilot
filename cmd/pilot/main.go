@@ -1703,12 +1703,12 @@ func showExistingConfigInfo(configPath string) error {
 	fmt.Println("   Current settings:")
 
 	// Projects count
-	projectCount := len(cfg.Projects)
-	if projectCount == 0 {
+	switch projectCount := len(cfg.Projects); projectCount {
+	case 0:
 		fmt.Println("   • Projects: none configured")
-	} else if projectCount == 1 {
+	case 1:
 		fmt.Println("   • Projects: 1 configured")
-	} else {
+	default:
 		fmt.Printf("   • Projects: %d configured\n", projectCount)
 	}
 
