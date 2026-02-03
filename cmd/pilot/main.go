@@ -574,6 +574,21 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 	// Create runner
 	runner := executor.NewRunner()
 
+	// Create memory store early for dashboard persistence (GH-367)
+	// This store will also be reused for the dispatcher later
+	var store *memory.Store
+	store, err := memory.NewStore(cfg.Memory.Path)
+	if err != nil {
+		logging.WithComponent("start").Warn("Failed to open memory store", slog.Any("error", err))
+		// Store is optional for dashboard - continue without persistence
+	} else {
+		defer func() {
+			if store != nil {
+				_ = store.Close()
+			}
+		}()
+	}
+
 	// Set up quality gates if configured (GH-207)
 	if cfg.Quality != nil && cfg.Quality.Enabled {
 		runner.SetQualityCheckerFactory(func(taskID, taskProjectPath string) executor.QualityChecker {
@@ -661,9 +676,9 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 		monitor = executor.NewMonitor()
 		var model dashboard.Model
 		if autopilotController != nil {
-			model = dashboard.NewModelWithAutopilot(version, autopilotController)
+			model = dashboard.NewModelWithAutopilot(version, autopilotController, store)
 		} else {
-			model = dashboard.NewModel(version)
+			model = dashboard.NewModel(version, store)
 		}
 		program = tea.NewProgram(model,
 			tea.WithAltScreen(),
@@ -815,17 +830,9 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 		}
 	}
 
-	// Initialize dispatcher for task queue
+	// Initialize dispatcher for task queue (reuses store created earlier for dashboard GH-367)
 	var dispatcher *executor.Dispatcher
-	store, err := memory.NewStore(cfg.Memory.Path)
-	if err != nil {
-		logging.WithComponent("start").Warn("Failed to open memory store for dispatcher", slog.Any("error", err))
-	} else {
-		defer func() {
-			if store != nil {
-				_ = store.Close()
-			}
-		}()
+	if store != nil {
 		dispatcher = executor.NewDispatcher(store, runner, nil)
 		if err := dispatcher.Start(); err != nil {
 			logging.WithComponent("start").Warn("Failed to start dispatcher", slog.Any("error", err))
@@ -3506,8 +3513,17 @@ func runDashboardMode(p *pilot.Pilot, cfg *config.Config) error {
 	logging.Suppress()
 	p.SuppressProgressLogs(true)
 
+	// Create memory store for dashboard persistence (GH-367)
+	store, err := memory.NewStore(cfg.Memory.Path)
+	if err != nil {
+		logging.WithComponent("dashboard").Warn("Failed to open memory store", slog.Any("error", err))
+		store = nil // Continue without persistence
+	} else {
+		defer func() { _ = store.Close() }()
+	}
+
 	// Create TUI program
-	model := dashboard.NewModel(version)
+	model := dashboard.NewModel(version, store)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	// Set up event bridge: poll task states and send to dashboard
@@ -3563,8 +3579,7 @@ func runDashboardMode(p *pilot.Pilot, cfg *config.Config) error {
 	}()
 
 	// Run TUI (blocks until quit)
-	_, err := program.Run()
-	if err != nil {
+	if _, err = program.Run(); err != nil {
 		return fmt.Errorf("dashboard error: %w", err)
 	}
 

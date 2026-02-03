@@ -797,3 +797,139 @@ func TestGetCrossPatternsForProject(t *testing.T) {
 		})
 	}
 }
+
+// GH-367: Session persistence tests
+func TestSessionCRUD(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	// Test GetOrCreateDailySession creates new session
+	session, err := store.GetOrCreateDailySession()
+	if err != nil {
+		t.Fatalf("GetOrCreateDailySession failed: %v", err)
+	}
+
+	todayID := time.Now().Format("2006-01-02")
+	if session.ID != todayID {
+		t.Errorf("Session ID = %s, want %s", session.ID, todayID)
+	}
+	if session.TotalInputTokens != 0 || session.TotalOutputTokens != 0 {
+		t.Errorf("New session should have zero tokens, got input=%d output=%d",
+			session.TotalInputTokens, session.TotalOutputTokens)
+	}
+
+	// Test GetOrCreateDailySession returns existing session
+	session2, err := store.GetOrCreateDailySession()
+	if err != nil {
+		t.Fatalf("GetOrCreateDailySession (second call) failed: %v", err)
+	}
+	if session2.ID != session.ID {
+		t.Errorf("Second call should return same session ID")
+	}
+}
+
+func TestSessionTokenUpdates(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	// Create session
+	session, _ := store.GetOrCreateDailySession()
+
+	// Update tokens
+	if err := store.UpdateSessionTokens(session.ID, 1000, 500); err != nil {
+		t.Fatalf("UpdateSessionTokens failed: %v", err)
+	}
+
+	// Verify update
+	updated, _ := store.GetSession(session.ID)
+	if updated.TotalInputTokens != 1000 {
+		t.Errorf("TotalInputTokens = %d, want 1000", updated.TotalInputTokens)
+	}
+	if updated.TotalOutputTokens != 500 {
+		t.Errorf("TotalOutputTokens = %d, want 500", updated.TotalOutputTokens)
+	}
+
+	// Test incremental updates
+	if err := store.UpdateSessionTokens(session.ID, 500, 250); err != nil {
+		t.Fatalf("UpdateSessionTokens (second call) failed: %v", err)
+	}
+
+	updated, _ = store.GetSession(session.ID)
+	if updated.TotalInputTokens != 1500 {
+		t.Errorf("TotalInputTokens = %d, want 1500", updated.TotalInputTokens)
+	}
+	if updated.TotalOutputTokens != 750 {
+		t.Errorf("TotalOutputTokens = %d, want 750", updated.TotalOutputTokens)
+	}
+}
+
+func TestSessionTaskCounts(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	// Create session
+	session, _ := store.GetOrCreateDailySession()
+
+	// Increment completed task
+	if err := store.IncrementSessionTaskCount(session.ID, true); err != nil {
+		t.Fatalf("IncrementSessionTaskCount (completed) failed: %v", err)
+	}
+	if err := store.IncrementSessionTaskCount(session.ID, true); err != nil {
+		t.Fatalf("IncrementSessionTaskCount (completed) failed: %v", err)
+	}
+
+	// Increment failed task
+	if err := store.IncrementSessionTaskCount(session.ID, false); err != nil {
+		t.Fatalf("IncrementSessionTaskCount (failed) failed: %v", err)
+	}
+
+	// Verify counts
+	updated, _ := store.GetSession(session.ID)
+	if updated.TasksCompleted != 2 {
+		t.Errorf("TasksCompleted = %d, want 2", updated.TasksCompleted)
+	}
+	if updated.TasksFailed != 1 {
+		t.Errorf("TasksFailed = %d, want 1", updated.TasksFailed)
+	}
+}
+
+func TestGetRecentSessions(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	// Create today's session via GetOrCreateDailySession
+	_, _ = store.GetOrCreateDailySession()
+
+	// Create additional sessions manually for testing
+	past := time.Now().AddDate(0, 0, -1)
+	_, _ = store.db.Exec(`
+		INSERT INTO sessions (id, started_at, total_input_tokens, total_output_tokens, total_cost_cents, tasks_completed, tasks_failed)
+		VALUES (?, ?, 5000, 2500, 100, 5, 1)
+	`, past.Format("2006-01-02"), past)
+
+	sessions, err := store.GetRecentSessions(10)
+	if err != nil {
+		t.Fatalf("GetRecentSessions failed: %v", err)
+	}
+
+	if len(sessions) < 2 {
+		t.Errorf("Expected at least 2 sessions, got %d", len(sessions))
+	}
+
+	// Sessions should be ordered by started_at DESC (most recent first)
+	if len(sessions) >= 2 && sessions[0].StartedAt.Before(sessions[1].StartedAt) {
+		t.Error("Sessions should be ordered by started_at DESC")
+	}
+}

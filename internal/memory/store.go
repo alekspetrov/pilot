@@ -162,6 +162,18 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_events_type ON usage_events(event_type)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_events_execution ON usage_events(execution_id)`,
+		// Dashboard sessions table (GH-367)
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			started_at DATETIME NOT NULL,
+			ended_at DATETIME,
+			total_input_tokens INTEGER DEFAULT 0,
+			total_output_tokens INTEGER DEFAULT 0,
+			total_cost_cents INTEGER DEFAULT 0,
+			tasks_completed INTEGER DEFAULT 0,
+			tasks_failed INTEGER DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at)`,
 	}
 
 	for _, migration := range migrations {
@@ -1053,4 +1065,124 @@ type CrossPatternStats struct {
 	TotalOccurrences int
 	ByType           map[string]int
 	ProjectCount     int
+}
+
+// Session represents a dashboard session for tracking token usage across restarts.
+// Sessions are keyed by date (YYYY-MM-DD) for daily aggregation.
+type Session struct {
+	ID                string
+	StartedAt         time.Time
+	EndedAt           *time.Time
+	TotalInputTokens  int64
+	TotalOutputTokens int64
+	TotalCostCents    int64
+	TasksCompleted    int
+	TasksFailed       int
+}
+
+// GetOrCreateDailySession retrieves today's session or creates a new one.
+// Session ID is the date in YYYY-MM-DD format for daily aggregation.
+func (s *Store) GetOrCreateDailySession() (*Session, error) {
+	sessionID := time.Now().Format("2006-01-02")
+
+	// Try to get existing session
+	session, err := s.GetSession(sessionID)
+	if err == nil {
+		return session, nil
+	}
+
+	// Create new session for today
+	session = &Session{
+		ID:        sessionID,
+		StartedAt: time.Now(),
+	}
+
+	_, err = s.db.Exec(`
+		INSERT INTO sessions (id, started_at, total_input_tokens, total_output_tokens, total_cost_cents, tasks_completed, tasks_failed)
+		VALUES (?, ?, 0, 0, 0, 0, 0)
+	`, session.ID, session.StartedAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	return session, nil
+}
+
+// GetSession retrieves a session by ID.
+func (s *Store) GetSession(id string) (*Session, error) {
+	row := s.db.QueryRow(`
+		SELECT id, started_at, ended_at, total_input_tokens, total_output_tokens, total_cost_cents, tasks_completed, tasks_failed
+		FROM sessions WHERE id = ?
+	`, id)
+
+	var session Session
+	var endedAt sql.NullTime
+	err := row.Scan(&session.ID, &session.StartedAt, &endedAt,
+		&session.TotalInputTokens, &session.TotalOutputTokens, &session.TotalCostCents,
+		&session.TasksCompleted, &session.TasksFailed)
+	if err != nil {
+		return nil, err
+	}
+
+	if endedAt.Valid {
+		session.EndedAt = &endedAt.Time
+	}
+
+	return &session, nil
+}
+
+// UpdateSessionTokens atomically adds token counts to the current session.
+func (s *Store) UpdateSessionTokens(sessionID string, inputTokens, outputTokens int64) error {
+	_, err := s.db.Exec(`
+		UPDATE sessions
+		SET total_input_tokens = total_input_tokens + ?,
+		    total_output_tokens = total_output_tokens + ?
+		WHERE id = ?
+	`, inputTokens, outputTokens, sessionID)
+	return err
+}
+
+// IncrementSessionTaskCount increments completed or failed task count.
+func (s *Store) IncrementSessionTaskCount(sessionID string, completed bool) error {
+	var column string
+	if completed {
+		column = "tasks_completed"
+	} else {
+		column = "tasks_failed"
+	}
+	_, err := s.db.Exec(`
+		UPDATE sessions
+		SET `+column+` = `+column+` + 1
+		WHERE id = ?
+	`, sessionID)
+	return err
+}
+
+// GetRecentSessions retrieves the most recent sessions ordered by start time.
+func (s *Store) GetRecentSessions(limit int) ([]*Session, error) {
+	rows, err := s.db.Query(`
+		SELECT id, started_at, ended_at, total_input_tokens, total_output_tokens, total_cost_cents, tasks_completed, tasks_failed
+		FROM sessions ORDER BY started_at DESC LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var sessions []*Session
+	for rows.Next() {
+		var session Session
+		var endedAt sql.NullTime
+		if err := rows.Scan(&session.ID, &session.StartedAt, &endedAt,
+			&session.TotalInputTokens, &session.TotalOutputTokens, &session.TotalCostCents,
+			&session.TasksCompleted, &session.TasksFailed); err != nil {
+			return nil, err
+		}
+		if endedAt.Valid {
+			session.EndedAt = &endedAt.Time
+		}
+		sessions = append(sessions, &session)
+	}
+
+	return sessions, nil
 }

@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/alekspetrov/pilot/internal/autopilot"
 	"github.com/alekspetrov/pilot/internal/banner"
+	"github.com/alekspetrov/pilot/internal/memory"
 )
 
 // Panel width (all panels same width)
@@ -185,6 +187,8 @@ type Model struct {
 	costPerMToken  float64
 	autopilotPanel *AutopilotPanel
 	version        string
+	store          *memory.Store  // SQLite store for persistence (GH-367)
+	sessionID      string         // Current session ID for token tracking
 }
 
 // tickMsg is sent periodically to refresh the display
@@ -203,8 +207,8 @@ type updateTokensMsg TokenUsage
 type addCompletedTaskMsg CompletedTask
 
 // NewModel creates a new dashboard model
-func NewModel(version string) Model {
-	return Model{
+func NewModel(version string, store *memory.Store) Model {
+	m := Model{
 		tasks:          []TaskDisplay{},
 		logs:           []string{},
 		showLogs:       true,
@@ -212,12 +216,20 @@ func NewModel(version string) Model {
 		costPerMToken:  3.0,
 		autopilotPanel: NewAutopilotPanel(nil), // Disabled by default
 		version:        version,
+		store:          store,
 	}
+
+	// Hydrate from store if available (GH-367)
+	if store != nil {
+		m.hydrateFromStore()
+	}
+
+	return m
 }
 
 // NewModelWithAutopilot creates a dashboard model with autopilot integration.
-func NewModelWithAutopilot(version string, controller *autopilot.Controller) Model {
-	return Model{
+func NewModelWithAutopilot(version string, controller *autopilot.Controller, store *memory.Store) Model {
+	m := Model{
 		tasks:          []TaskDisplay{},
 		logs:           []string{},
 		showLogs:       true,
@@ -225,6 +237,96 @@ func NewModelWithAutopilot(version string, controller *autopilot.Controller) Mod
 		costPerMToken:  3.0,
 		autopilotPanel: NewAutopilotPanel(controller),
 		version:        version,
+		store:          store,
+	}
+
+	// Hydrate from store if available (GH-367)
+	if store != nil {
+		m.hydrateFromStore()
+	}
+
+	return m
+}
+
+// hydrateFromStore loads historical data from SQLite (GH-367)
+func (m *Model) hydrateFromStore() {
+	// Load or create today's session
+	session, err := m.store.GetOrCreateDailySession()
+	if err != nil {
+		slog.Warn("failed to get/create session", slog.Any("error", err))
+	} else {
+		m.sessionID = session.ID
+		// Restore token usage from session
+		m.tokenUsage = TokenUsage{
+			InputTokens:  int(session.TotalInputTokens),
+			OutputTokens: int(session.TotalOutputTokens),
+			TotalTokens:  int(session.TotalInputTokens + session.TotalOutputTokens),
+		}
+	}
+
+	// Load recent executions into completed tasks history
+	executions, err := m.store.GetRecentExecutions(20)
+	if err != nil {
+		slog.Warn("failed to load recent executions", slog.Any("error", err))
+		return
+	}
+
+	// Convert executions to CompletedTask format (reverse order for display - oldest last)
+	for i := len(executions) - 1; i >= 0; i-- {
+		exec := executions[i]
+		// Skip non-terminal states
+		if exec.Status == "running" || exec.Status == "queued" || exec.Status == "pending" {
+			continue
+		}
+
+		status := "success"
+		if exec.Status == "failed" || exec.Status == "cancelled" {
+			status = "failed"
+		}
+
+		// Calculate duration
+		var duration string
+		if exec.DurationMs > 0 {
+			duration = formatDuration(time.Duration(exec.DurationMs) * time.Millisecond)
+		}
+
+		completedAt := exec.CreatedAt
+		if exec.CompletedAt != nil {
+			completedAt = *exec.CompletedAt
+		}
+
+		m.completedTasks = append(m.completedTasks, CompletedTask{
+			ID:          exec.TaskID,
+			Title:       exec.TaskTitle,
+			Status:      status,
+			Duration:    duration,
+			CompletedAt: completedAt,
+		})
+
+		// Keep only the last 5 for display
+		if len(m.completedTasks) > 5 {
+			m.completedTasks = m.completedTasks[len(m.completedTasks)-5:]
+		}
+	}
+}
+
+// formatDuration formats a duration for display
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	} else if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+}
+
+// persistTokenUsage saves token usage to SQLite session (GH-367)
+func (m *Model) persistTokenUsage(inputDelta, outputDelta int64) {
+	if m.store == nil || m.sessionID == "" {
+		return
+	}
+	if err := m.store.UpdateSessionTokens(m.sessionID, inputDelta, outputDelta); err != nil {
+		slog.Warn("failed to persist token usage", slog.Any("error", err))
 	}
 }
 
@@ -287,6 +389,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case updateTokensMsg:
+		// Calculate delta for persistence (GH-367)
+		inputDelta := int64(msg.InputTokens - m.tokenUsage.InputTokens)
+		outputDelta := int64(msg.OutputTokens - m.tokenUsage.OutputTokens)
+		if inputDelta > 0 || outputDelta > 0 {
+			m.persistTokenUsage(inputDelta, outputDelta)
+		}
 		m.tokenUsage = TokenUsage(msg)
 
 	case addCompletedTaskMsg:
@@ -730,9 +838,9 @@ func AddCompletedTask(id, title, status, duration string) tea.Cmd {
 }
 
 // Run starts the TUI with the given version
-func Run(version string) error {
+func Run(version string, store *memory.Store) error {
 	p := tea.NewProgram(
-		NewModel(version),
+		NewModel(version, store),
 		tea.WithAltScreen(),
 	)
 
