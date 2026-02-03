@@ -287,7 +287,7 @@ func TestDetectBuildCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	tests := []struct {
 		name        string
@@ -362,11 +362,11 @@ func TestDetectBuildCommand_Priority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Create both go.mod and package.json
-	os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(""), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(""), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(""), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(""), 0644)
 
 	// Go should take priority
 	got := DetectBuildCommand(tmpDir)
