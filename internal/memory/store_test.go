@@ -276,6 +276,101 @@ func TestGetExecution_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetExecutionByTaskID(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	// Save an execution with a specific task ID
+	exec := &Execution{
+		ID:          "exec-123",
+		TaskID:      "TG-1770110241",
+		ProjectPath: "/test/project",
+		Status:      "completed",
+		Output:      "Task completed successfully",
+		DurationMs:  5000,
+	}
+
+	if err := store.SaveExecution(exec); err != nil {
+		t.Fatalf("SaveExecution failed: %v", err)
+	}
+
+	// Retrieve by task ID
+	retrieved, err := store.GetExecutionByTaskID("TG-1770110241")
+	if err != nil {
+		t.Fatalf("GetExecutionByTaskID failed: %v", err)
+	}
+
+	if retrieved.TaskID != "TG-1770110241" {
+		t.Errorf("TaskID = %q, want 'TG-1770110241'", retrieved.TaskID)
+	}
+	if retrieved.Status != "completed" {
+		t.Errorf("Status = %q, want 'completed'", retrieved.Status)
+	}
+	if retrieved.DurationMs != 5000 {
+		t.Errorf("DurationMs = %d, want 5000", retrieved.DurationMs)
+	}
+}
+
+func TestGetExecutionByTaskID_NotFound(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	_, err := store.GetExecutionByTaskID("nonexistent-task")
+	if err == nil {
+		t.Error("GetExecutionByTaskID should return error for nonexistent task ID")
+	}
+}
+
+func TestGetExecutionByTaskID_ReturnsLatest(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	// Save multiple executions with same task ID (retry scenario)
+	exec1 := &Execution{
+		ID:          "exec-1",
+		TaskID:      "TASK-07",
+		ProjectPath: "/test/project",
+		Status:      "failed",
+		Error:       "first attempt failed",
+	}
+	exec2 := &Execution{
+		ID:          "exec-2",
+		TaskID:      "TASK-07",
+		ProjectPath: "/test/project",
+		Status:      "completed",
+		Output:      "success on retry",
+	}
+
+	if err := store.SaveExecution(exec1); err != nil {
+		t.Fatalf("SaveExecution (exec1) failed: %v", err)
+	}
+	if err := store.SaveExecution(exec2); err != nil {
+		t.Fatalf("SaveExecution (exec2) failed: %v", err)
+	}
+
+	// Should return the most recent execution
+	retrieved, err := store.GetExecutionByTaskID("TASK-07")
+	if err != nil {
+		t.Fatalf("GetExecutionByTaskID failed: %v", err)
+	}
+
+	if retrieved.ID != "exec-2" {
+		t.Errorf("ID = %q, want 'exec-2' (most recent)", retrieved.ID)
+	}
+	if retrieved.Status != "completed" {
+		t.Errorf("Status = %q, want 'completed'", retrieved.Status)
+	}
+}
+
 func TestPattern_Update(t *testing.T) {
 	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
 	defer func() { _ = os.RemoveAll(tmpDir) }()

@@ -82,6 +82,12 @@ func (c *CommandHandler) HandleCommand(ctx context.Context, chatID, text string)
 		} else {
 			_, _ = c.handler.client.SendMessage(ctx, chatID, "Usage: /pr <task description>\nForces PR creation even for ephemeral-looking tasks.", "")
 		}
+	case "/check":
+		if len(args) > 0 {
+			c.handleCheck(ctx, chatID, strings.Join(args, " "))
+		} else {
+			_, _ = c.handler.client.SendMessage(ctx, chatID, "Usage: /check <task-id>\nExample: /check TG-1234567890", "")
+		}
 	default:
 		_, _ = c.handler.client.SendMessage(ctx, chatID, "Unknown command. Use /help for available commands.", "")
 	}
@@ -110,6 +116,7 @@ Task Commands
 /tasks — Show task backlog
 /run <id> — Execute task (e.g., /run 07)
 /stop — Stop running task
+/check <id> — Check if task was executed
 /nopr <task> — Execute without creating PR
 /pr <task> — Force PR creation
 
@@ -144,6 +151,7 @@ I execute tasks and answer questions about your codebase.
 /tasks — Show task backlog
 /run <id> — Execute task (e.g., /run 07)
 /stop — Stop running task
+/check <id> — Check if task was executed
 /nopr <task> — Execute without creating PR
 /pr <task> — Force PR creation
 
@@ -694,6 +702,97 @@ func (c *CommandHandler) handleForcePR(ctx context.Context, chatID, description 
 	_, _ = c.handler.client.SendMessage(ctx, chatID,
 		fmt.Sprintf("🚀 Executing with PR: %s", truncateForDisplay(description, 50)), "")
 	c.handler.executeTaskWithOptions(ctx, chatID, taskID, description, true)
+}
+
+// handleCheck checks if a task was executed and shows its status
+func (c *CommandHandler) handleCheck(ctx context.Context, chatID, taskIDInput string) {
+	if c.store == nil {
+		_, _ = c.handler.client.SendMessage(ctx, chatID, "🔍 Check not available (no memory store)", "")
+		return
+	}
+
+	// Normalize task ID input
+	taskID := strings.TrimSpace(taskIDInput)
+	taskID = strings.ToUpper(taskID)
+
+	// Try to find by task ID
+	exec, err := c.store.GetExecutionByTaskID(taskID)
+	if err != nil {
+		// Try lowercase
+		exec, err = c.store.GetExecutionByTaskID(strings.ToLower(taskIDInput))
+	}
+	if err != nil {
+		// Try with TG- prefix if not present
+		if !strings.HasPrefix(taskID, "TG-") && !strings.HasPrefix(taskID, "TASK-") {
+			exec, err = c.store.GetExecutionByTaskID("TG-" + taskID)
+		}
+	}
+
+	if err != nil {
+		_, _ = c.handler.client.SendMessage(ctx, chatID,
+			fmt.Sprintf("🔍 Task %s not found in execution history.\n\nUse /history to see recent tasks.", taskIDInput), "")
+		return
+	}
+
+	// Format result
+	var sb strings.Builder
+	plainText := c.handler.plainTextMode
+
+	// Status emoji
+	emoji := "⏳"
+	statusText := exec.Status
+	switch exec.Status {
+	case "completed":
+		emoji = "✅"
+		statusText = "Completed"
+	case "failed":
+		emoji = "❌"
+		statusText = "Failed"
+	case "running":
+		emoji = "🔄"
+		statusText = "Running"
+	case "queued":
+		emoji = "📋"
+		statusText = "Queued"
+	}
+
+	if plainText {
+		sb.WriteString(fmt.Sprintf("🔍 Task Check: %s\n\n", exec.TaskID))
+		sb.WriteString(fmt.Sprintf("%s Status: %s\n", emoji, statusText))
+	} else {
+		sb.WriteString(fmt.Sprintf("🔍 *Task Check*: `%s`\n\n", exec.TaskID))
+		sb.WriteString(fmt.Sprintf("%s *Status*: %s\n", emoji, statusText))
+	}
+
+	// Duration
+	if exec.DurationMs > 0 {
+		d := time.Duration(exec.DurationMs) * time.Millisecond
+		sb.WriteString(fmt.Sprintf("⏱ Duration: %s\n", d.Round(time.Second)))
+	}
+
+	// Created time
+	age := formatTimeAgo(exec.CreatedAt)
+	sb.WriteString(fmt.Sprintf("📅 Created: %s\n", age))
+
+	// PR link if present
+	if exec.PRUrl != "" {
+		if plainText {
+			sb.WriteString(fmt.Sprintf("🔗 PR: %s\n", exec.PRUrl))
+		} else {
+			sb.WriteString(fmt.Sprintf("🔗 [View PR](%s)\n", exec.PRUrl))
+		}
+	}
+
+	// Error message if failed
+	if exec.Status == "failed" && exec.Error != "" {
+		errMsg := exec.Error
+		if len(errMsg) > 200 {
+			errMsg = errMsg[:200] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("\n⚠️ Error: %s", errMsg))
+	}
+
+	_, _ = c.handler.client.SendMessage(ctx, chatID, sb.String(), c.handler.getParseMode())
 }
 
 // truncateForDisplay truncates a string for display purposes

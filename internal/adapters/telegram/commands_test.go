@@ -603,6 +603,7 @@ func TestCommandRouting(t *testing.T) {
 		"/tasks",
 		"/list",
 		"/stop",
+		"/check TG-123",
 	}
 
 	ctx := context.Background()
@@ -610,6 +611,48 @@ func TestCommandRouting(t *testing.T) {
 		t.Run(command, func(t *testing.T) {
 			// Should not panic
 			cmd.HandleCommand(ctx, "chat1", command)
+		})
+	}
+}
+
+// TestCommandHandler_HandleCheck tests the /check command
+func TestCommandHandler_HandleCheck(t *testing.T) {
+	h := &Handler{
+		client:        NewClient(testutil.FakeTelegramBotToken),
+		pendingTasks:  make(map[string]*PendingTask),
+		runningTasks:  make(map[string]*RunningTask),
+		activeProject: make(map[string]string),
+		projectPath:   "/test/path",
+	}
+
+	tests := []struct {
+		name    string
+		store   bool
+		command string
+	}{
+		{
+			name:    "no store",
+			store:   false,
+			command: "/check TG-1234567890",
+		},
+		{
+			name:    "missing task ID",
+			store:   false,
+			command: "/check",
+		},
+		{
+			name:    "with task ID",
+			store:   false,
+			command: "/check TASK-07",
+		},
+	}
+
+	ctx := context.Background()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := NewCommandHandler(h, nil)
+			// Should not panic
+			cmd.HandleCommand(ctx, "chat1", tt.command)
 		})
 	}
 }

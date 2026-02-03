@@ -288,6 +288,36 @@ func (s *Store) GetRecentExecutions(limit int) ([]*Execution, error) {
 	return executions, nil
 }
 
+// GetExecutionByTaskID retrieves the most recent execution for a given task ID.
+// Task IDs are external identifiers like "TG-1234567890" or "TASK-07".
+// Returns sql.ErrNoRows if no execution is found for the task ID.
+func (s *Store) GetExecutionByTaskID(taskID string) (*Execution, error) {
+	row := s.db.QueryRow(`
+		SELECT id, task_id, project_path, status, output, error, duration_ms, pr_url, commit_sha, created_at, completed_at,
+			COALESCE(tokens_input, 0), COALESCE(tokens_output, 0), COALESCE(tokens_total, 0),
+			COALESCE(estimated_cost_usd, 0), COALESCE(files_changed, 0), COALESCE(lines_added, 0),
+			COALESCE(lines_removed, 0), COALESCE(model_name, ''),
+			COALESCE(task_title, ''), COALESCE(task_description, ''), COALESCE(task_branch, ''),
+			COALESCE(task_base_branch, ''), COALESCE(task_create_pr, 0), COALESCE(task_verbose, 0)
+		FROM executions WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1
+	`, taskID)
+
+	var exec Execution
+	var completedAt sql.NullTime
+	err := row.Scan(&exec.ID, &exec.TaskID, &exec.ProjectPath, &exec.Status, &exec.Output, &exec.Error, &exec.DurationMs, &exec.PRUrl, &exec.CommitSHA, &exec.CreatedAt, &completedAt,
+		&exec.TokensInput, &exec.TokensOutput, &exec.TokensTotal, &exec.EstimatedCostUSD, &exec.FilesChanged, &exec.LinesAdded, &exec.LinesRemoved, &exec.ModelName,
+		&exec.TaskTitle, &exec.TaskDescription, &exec.TaskBranch, &exec.TaskBaseBranch, &exec.TaskCreatePR, &exec.TaskVerbose)
+	if err != nil {
+		return nil, err
+	}
+
+	if completedAt.Valid {
+		exec.CompletedAt = &completedAt.Time
+	}
+
+	return &exec, nil
+}
+
 // Pattern represents a learned pattern from project executions.
 // Patterns capture recurring code structures, workflows, or solutions
 // that can be applied to future similar tasks.
