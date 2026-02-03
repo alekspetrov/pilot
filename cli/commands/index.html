@@ -1,0 +1,1992 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="AI that ships your tickets">
+      
+      
+      
+        <link rel="canonical" href="https://pilot.dev/cli/commands/">
+      
+      
+        <link rel="prev" href="../../architecture/features/">
+      
+      
+        <link rel="next" href="../../llm/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>Commands - Pilot Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cli-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Pilot Documentation" class="md-header__button md-logo" aria-label="Pilot Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Pilot Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Commands
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/alekspetrov/pilot" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    alekspetrov/pilot
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Pilot Documentation" class="md-nav__button md-logo" aria-label="Pilot Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Pilot Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/alekspetrov/pilot" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    alekspetrov/pilot
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Features
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Features
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../features/telegram/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telegram Bot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../features/github/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../features/autopilot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Autopilot Mode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../DEPLOYMENT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/features/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Feature Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    CLI Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#core-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core Commands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot stop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot status
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-init" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot init
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot version
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task Execution
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Task Execution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot task
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#github-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GitHub Integration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GitHub Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-github-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot github run
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#upgrade-maintenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrade &amp; Maintenance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Upgrade &amp; Maintenance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot upgrade
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-doctor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot doctor
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#analytics-reporting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Analytics &amp; Reporting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Analytics &amp; Reporting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-brief" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot brief
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#memory-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory &amp; Patterns
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Memory &amp; Patterns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot patterns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#replay-debug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay &amp; Debug
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Replay &amp; Debug">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-replay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot replay
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#budget-cost-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Budget &amp; Cost Control
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Budget &amp; Cost Control">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot budget
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#team-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Team Management
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Team Management">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-team" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot team
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#infrastructure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Infrastructure
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Infrastructure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-tunnel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot tunnel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-webhooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot webhooks
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shell-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shell Completion
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Shell Completion">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot completion
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#global-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Global Flags
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LLM Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#core-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core Commands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot stop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot status
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-init" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot init
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot version
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task Execution
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Task Execution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot task
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#github-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GitHub Integration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GitHub Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-github-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot github run
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#upgrade-maintenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrade &amp; Maintenance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Upgrade &amp; Maintenance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot upgrade
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-doctor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot doctor
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#analytics-reporting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Analytics &amp; Reporting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Analytics &amp; Reporting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-brief" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot brief
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#memory-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory &amp; Patterns
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Memory &amp; Patterns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot patterns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#replay-debug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay &amp; Debug
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Replay &amp; Debug">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-replay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot replay
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#budget-cost-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Budget &amp; Cost Control
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Budget &amp; Cost Control">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot budget
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#team-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Team Management
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Team Management">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-team" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot team
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#infrastructure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Infrastructure
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Infrastructure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-tunnel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot tunnel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pilot-webhooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot webhooks
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shell-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shell Completion
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Shell Completion">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pilot-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pilot completion
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#global-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Global Flags
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="cli-reference">CLI Reference<a class="headerlink" href="#cli-reference" title="Permanent link">&para;</a></h1>
+<p>Complete command reference for Pilot.</p>
+<h2 id="core-commands">Core Commands<a class="headerlink" href="#core-commands" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-start"><code>pilot start</code><a class="headerlink" href="#pilot-start" title="Permanent link">&para;</a></h3>
+<p>Start the Pilot daemon with configured inputs.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>start<span class="w">                          </span><span class="c1"># Config-driven</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--telegram<span class="w">               </span><span class="c1"># Enable Telegram polling</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--github<span class="w">                 </span><span class="c1"># Enable GitHub issue polling</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--linear<span class="w">                 </span><span class="c1"># Enable Linear webhooks</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--telegram<span class="w"> </span>--github<span class="w">      </span><span class="c1"># Enable both</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--dashboard<span class="w">              </span><span class="c1"># With TUI dashboard</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--no-gateway<span class="w">             </span><span class="c1"># Polling only (no HTTP server)</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--sequential<span class="w">             </span><span class="c1"># Sequential execution mode</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--parallel<span class="w">               </span><span class="c1"># Parallel execution mode</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--autopilot<span class="o">=</span>stage<span class="w">        </span><span class="c1"># Autopilot mode (dev/stage/prod)</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--no-pr<span class="w">                  </span><span class="c1"># Skip PR creation (local only)</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--direct-commit<span class="w">          </span><span class="c1"># Push directly to main (danger)</span>
+pilot<span class="w"> </span>start<span class="w"> </span>-p<span class="w"> </span>~/Projects/myapp<span class="w">      </span><span class="c1"># Specify project</span>
+pilot<span class="w"> </span>start<span class="w"> </span>--replace<span class="w">                </span><span class="c1"># Kill existing instance first</span>
+</code></pre></div>
+<h3 id="pilot-stop"><code>pilot stop</code><a class="headerlink" href="#pilot-stop" title="Permanent link">&para;</a></h3>
+<p>Stop the running Pilot daemon.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>stop
+</code></pre></div>
+<h3 id="pilot-status"><code>pilot status</code><a class="headerlink" href="#pilot-status" title="Permanent link">&para;</a></h3>
+<p>Show current running tasks and configuration.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>status
+</code></pre></div>
+<h3 id="pilot-init"><code>pilot init</code><a class="headerlink" href="#pilot-init" title="Permanent link">&para;</a></h3>
+<p>Initialize Pilot configuration.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>init<span class="w">                    </span><span class="c1"># Interactive setup</span>
+pilot<span class="w"> </span>init<span class="w"> </span>--minimal<span class="w">          </span><span class="c1"># Minimal config only</span>
+</code></pre></div>
+<h3 id="pilot-version"><code>pilot version</code><a class="headerlink" href="#pilot-version" title="Permanent link">&para;</a></h3>
+<p>Show version information.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>version
+</code></pre></div>
+<hr />
+<h2 id="task-execution">Task Execution<a class="headerlink" href="#task-execution" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-task"><code>pilot task</code><a class="headerlink" href="#pilot-task" title="Permanent link">&para;</a></h3>
+<p>Execute a single task.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>task<span class="w"> </span><span class="s2">&quot;Add user authentication&quot;</span><span class="w">                    </span><span class="c1"># Run in cwd</span>
+pilot<span class="w"> </span>task<span class="w"> </span><span class="s2">&quot;Fix login bug&quot;</span><span class="w"> </span>-p<span class="w"> </span>~/Projects/myapp<span class="w">          </span><span class="c1"># Specify project</span>
+pilot<span class="w"> </span>task<span class="w"> </span><span class="s2">&quot;Add feature&quot;</span><span class="w"> </span>--create-pr<span class="w">                    </span><span class="c1"># Auto-create PR</span>
+pilot<span class="w"> </span>task<span class="w"> </span><span class="s2">&quot;Refactor API&quot;</span><span class="w"> </span>--verbose<span class="w">                     </span><span class="c1"># Stream output</span>
+pilot<span class="w"> </span>task<span class="w"> </span><span class="s2">&quot;Update docs&quot;</span><span class="w"> </span>--dry-run<span class="w">                      </span><span class="c1"># Preview only</span>
+pilot<span class="w"> </span>task<span class="w"> </span><span class="s2">&quot;Quick fix&quot;</span><span class="w"> </span>--no-branch<span class="w">                      </span><span class="c1"># Skip branch</span>
+pilot<span class="w"> </span>task<span class="w"> </span><span class="s2">&quot;Implement feature&quot;</span><span class="w"> </span>--backend<span class="w"> </span>opencode<span class="w">       </span><span class="c1"># Use OpenCode</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-p, --project</code></td>
+<td>Project path</td>
+</tr>
+<tr>
+<td><code>--create-pr</code></td>
+<td>Create PR after completion</td>
+</tr>
+<tr>
+<td><code>--verbose</code></td>
+<td>Stream raw JSON output</td>
+</tr>
+<tr>
+<td><code>--dry-run</code></td>
+<td>Show prompt without executing</td>
+</tr>
+<tr>
+<td><code>--no-branch</code></td>
+<td>Skip branch creation</td>
+</tr>
+<tr>
+<td><code>--backend</code></td>
+<td>Executor backend (claude-code/opencode)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="github-integration">GitHub Integration<a class="headerlink" href="#github-integration" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-github-run"><code>pilot github run</code><a class="headerlink" href="#pilot-github-run" title="Permanent link">&para;</a></h3>
+<p>Execute a specific GitHub issue.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>github<span class="w"> </span>run<span class="w"> </span><span class="m">42</span><span class="w">                  </span><span class="c1"># Run issue #42</span>
+pilot<span class="w"> </span>github<span class="w"> </span>run<span class="w"> </span><span class="m">42</span><span class="w"> </span>--verbose<span class="w">        </span><span class="c1"># With streaming output</span>
+</code></pre></div>
+<hr />
+<h2 id="upgrade-maintenance">Upgrade &amp; Maintenance<a class="headerlink" href="#upgrade-maintenance" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-upgrade"><code>pilot upgrade</code><a class="headerlink" href="#pilot-upgrade" title="Permanent link">&para;</a></h3>
+<p>Check for and install updates.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>upgrade<span class="w">                    </span><span class="c1"># Check and upgrade</span>
+pilot<span class="w"> </span>upgrade<span class="w"> </span>check<span class="w">              </span><span class="c1"># Only check for updates</span>
+pilot<span class="w"> </span>upgrade<span class="w"> </span>rollback<span class="w">           </span><span class="c1"># Restore previous version</span>
+pilot<span class="w"> </span>upgrade<span class="w"> </span>--force<span class="w">            </span><span class="c1"># Skip task completion wait</span>
+pilot<span class="w"> </span>upgrade<span class="w"> </span>--no-restart<span class="w">       </span><span class="c1"># Don&#39;t restart after upgrade</span>
+pilot<span class="w"> </span>upgrade<span class="w"> </span>--yes<span class="w">              </span><span class="c1"># Skip confirmation</span>
+</code></pre></div>
+<h3 id="pilot-doctor"><code>pilot doctor</code><a class="headerlink" href="#pilot-doctor" title="Permanent link">&para;</a></h3>
+<p>Run system health checks.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>doctor
+</code></pre></div>
+<hr />
+<h2 id="analytics-reporting">Analytics &amp; Reporting<a class="headerlink" href="#analytics-reporting" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-brief"><code>pilot brief</code><a class="headerlink" href="#pilot-brief" title="Permanent link">&para;</a></h3>
+<p>Generate and send daily/weekly briefs.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>brief<span class="w">                       </span><span class="c1"># Show scheduler status</span>
+pilot<span class="w"> </span>brief<span class="w"> </span>--now<span class="w">                 </span><span class="c1"># Generate and send immediately</span>
+pilot<span class="w"> </span>brief<span class="w"> </span>--weekly<span class="w">              </span><span class="c1"># Generate weekly summary</span>
+</code></pre></div>
+<h3 id="pilot-metrics"><code>pilot metrics</code><a class="headerlink" href="#pilot-metrics" title="Permanent link">&para;</a></h3>
+<p>View execution metrics.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>metrics<span class="w"> </span>summary<span class="w">             </span><span class="c1"># Last 7 days overview</span>
+pilot<span class="w"> </span>metrics<span class="w"> </span>summary<span class="w"> </span>--days<span class="w"> </span><span class="m">30</span><span class="w">   </span><span class="c1"># Last 30 days</span>
+pilot<span class="w"> </span>metrics<span class="w"> </span>daily<span class="w">               </span><span class="c1"># Daily breakdown</span>
+pilot<span class="w"> </span>metrics<span class="w"> </span>projects<span class="w">            </span><span class="c1"># Per-project stats</span>
+</code></pre></div>
+<h3 id="pilot-usage"><code>pilot usage</code><a class="headerlink" href="#pilot-usage" title="Permanent link">&para;</a></h3>
+<p>View API usage and costs.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>usage<span class="w"> </span>summary<span class="w">               </span><span class="c1"># Billable usage summary</span>
+pilot<span class="w"> </span>usage<span class="w"> </span>daily<span class="w">                 </span><span class="c1"># Daily breakdown</span>
+pilot<span class="w"> </span>usage<span class="w"> </span><span class="nb">export</span><span class="w"> </span>--format<span class="w"> </span>json<span class="w">  </span><span class="c1"># Export for billing</span>
+</code></pre></div>
+<hr />
+<h2 id="memory-patterns">Memory &amp; Patterns<a class="headerlink" href="#memory-patterns" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-patterns"><code>pilot patterns</code><a class="headerlink" href="#pilot-patterns" title="Permanent link">&para;</a></h3>
+<p>Query learned patterns from cross-project memory.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>patterns<span class="w"> </span>list<span class="w">               </span><span class="c1"># List all patterns</span>
+pilot<span class="w"> </span>patterns<span class="w"> </span>search<span class="w"> </span><span class="s2">&quot;auth&quot;</span><span class="w">      </span><span class="c1"># Search by keyword</span>
+pilot<span class="w"> </span>patterns<span class="w"> </span>stats<span class="w">              </span><span class="c1"># Usage statistics</span>
+</code></pre></div>
+<hr />
+<h2 id="replay-debug">Replay &amp; Debug<a class="headerlink" href="#replay-debug" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-replay"><code>pilot replay</code><a class="headerlink" href="#pilot-replay" title="Permanent link">&para;</a></h3>
+<p>View and analyze execution recordings.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>replay<span class="w"> </span>list<span class="w">                 </span><span class="c1"># List recordings</span>
+pilot<span class="w"> </span>replay<span class="w"> </span>list<span class="w"> </span>--project<span class="w"> </span>myapp<span class="w"> </span><span class="c1"># Filter by project</span>
+pilot<span class="w"> </span>replay<span class="w"> </span>list<span class="w"> </span>--failed<span class="w">        </span><span class="c1"># Only failed executions</span>
+pilot<span class="w"> </span>replay<span class="w"> </span>show<span class="w"> </span>&lt;id&gt;<span class="w">            </span><span class="c1"># Show recording metadata</span>
+pilot<span class="w"> </span>replay<span class="w"> </span>play<span class="w"> </span>&lt;id&gt;<span class="w">            </span><span class="c1"># Interactive TUI replay</span>
+pilot<span class="w"> </span>replay<span class="w"> </span>analyze<span class="w"> </span>&lt;id&gt;<span class="w">         </span><span class="c1"># Token/phase breakdown</span>
+pilot<span class="w"> </span>replay<span class="w"> </span><span class="nb">export</span><span class="w"> </span>&lt;id&gt;<span class="w">          </span><span class="c1"># Export to HTML/JSON/MD</span>
+pilot<span class="w"> </span>replay<span class="w"> </span><span class="nb">export</span><span class="w"> </span>&lt;id&gt;<span class="w"> </span>--format<span class="w"> </span>json
+</code></pre></div>
+<hr />
+<h2 id="budget-cost-control">Budget &amp; Cost Control<a class="headerlink" href="#budget-cost-control" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-budget"><code>pilot budget</code><a class="headerlink" href="#pilot-budget" title="Permanent link">&para;</a></h3>
+<p>View budget status and limits.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>budget<span class="w">                      </span><span class="c1"># Show current budget status</span>
+pilot<span class="w"> </span>budget<span class="w"> </span>status<span class="w">               </span><span class="c1"># Detailed breakdown</span>
+</code></pre></div>
+<hr />
+<h2 id="team-management">Team Management<a class="headerlink" href="#team-management" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-team"><code>pilot team</code><a class="headerlink" href="#pilot-team" title="Permanent link">&para;</a></h3>
+<p>Manage team permissions.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>team<span class="w"> </span>list<span class="w">                   </span><span class="c1"># List teams</span>
+pilot<span class="w"> </span>team<span class="w"> </span>add<span class="w"> </span>&lt;name&gt;<span class="w">             </span><span class="c1"># Add team</span>
+pilot<span class="w"> </span>team<span class="w"> </span>remove<span class="w"> </span>&lt;name&gt;<span class="w">          </span><span class="c1"># Remove team</span>
+</code></pre></div>
+<hr />
+<h2 id="infrastructure">Infrastructure<a class="headerlink" href="#infrastructure" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-tunnel"><code>pilot tunnel</code><a class="headerlink" href="#pilot-tunnel" title="Permanent link">&para;</a></h3>
+<p>Manage Cloudflare tunnel for webhook ingress.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>tunnel<span class="w"> </span>start<span class="w">                </span><span class="c1"># Start tunnel</span>
+pilot<span class="w"> </span>tunnel<span class="w"> </span>stop<span class="w">                 </span><span class="c1"># Stop tunnel</span>
+pilot<span class="w"> </span>tunnel<span class="w"> </span>status<span class="w">               </span><span class="c1"># Show tunnel status</span>
+</code></pre></div>
+<h3 id="pilot-webhooks"><code>pilot webhooks</code><a class="headerlink" href="#pilot-webhooks" title="Permanent link">&para;</a></h3>
+<p>Configure outbound webhooks.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>webhooks<span class="w"> </span>list<span class="w">               </span><span class="c1"># List configured webhooks</span>
+pilot<span class="w"> </span>webhooks<span class="w"> </span>add<span class="w"> </span>&lt;url&gt;<span class="w">          </span><span class="c1"># Add webhook endpoint</span>
+pilot<span class="w"> </span>webhooks<span class="w"> </span>remove<span class="w"> </span>&lt;id&gt;<span class="w">        </span><span class="c1"># Remove webhook</span>
+pilot<span class="w"> </span>webhooks<span class="w"> </span><span class="nb">test</span><span class="w"> </span>&lt;id&gt;<span class="w">          </span><span class="c1"># Test webhook delivery</span>
+</code></pre></div>
+<hr />
+<h2 id="shell-completion">Shell Completion<a class="headerlink" href="#shell-completion" title="Permanent link">&para;</a></h2>
+<h3 id="pilot-completion"><code>pilot completion</code><a class="headerlink" href="#pilot-completion" title="Permanent link">&para;</a></h3>
+<p>Generate shell completion scripts.</p>
+<div class="highlight"><pre><span></span><code>pilot<span class="w"> </span>completion<span class="w"> </span>bash<span class="w">             </span><span class="c1"># Bash completion</span>
+pilot<span class="w"> </span>completion<span class="w"> </span>zsh<span class="w">              </span><span class="c1"># Zsh completion</span>
+pilot<span class="w"> </span>completion<span class="w"> </span>fish<span class="w">             </span><span class="c1"># Fish completion</span>
+
+<span class="c1"># Install for bash</span>
+pilot<span class="w"> </span>completion<span class="w"> </span>bash<span class="w"> </span>&gt;<span class="w"> </span>/etc/bash_completion.d/pilot
+
+<span class="c1"># Install for zsh</span>
+pilot<span class="w"> </span>completion<span class="w"> </span>zsh<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">fpath</span><span class="p">[1]</span><span class="si">}</span><span class="s2">/_pilot&quot;</span>
+</code></pre></div>
+<hr />
+<h2 id="global-flags">Global Flags<a class="headerlink" href="#global-flags" title="Permanent link">&para;</a></h2>
+<p>These flags work with all commands:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--config</code></td>
+<td>Config file path (default: ~/.pilot/config.yaml)</td>
+</tr>
+<tr>
+<td><code>--verbose</code></td>
+<td>Enable verbose output</td>
+</tr>
+<tr>
+<td><code>--quiet</code></td>
+<td>Suppress non-error output</td>
+</tr>
+<tr>
+<td><code>--help</code></td>
+<td>Show help for command</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "search.suggest", "content.code.copy", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
