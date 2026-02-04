@@ -346,3 +346,111 @@ func (r *Runner) CloseIssueWithComment(ctx context.Context, projectPath string, 
 	}
 	return nil
 }
+
+// ExecuteSubIssues executes created sub-issues sequentially and tracks progress on the parent.
+// Each sub-issue is executed as a separate task, and the parent issue is updated with progress.
+// Returns an error if any sub-issue fails; completed sub-issues remain done.
+func (r *Runner) ExecuteSubIssues(ctx context.Context, parent *Task, issues []CreatedIssue) error {
+	if len(issues) == 0 {
+		return fmt.Errorf("no sub-issues to execute")
+	}
+
+	total := len(issues)
+	projectPath := ""
+	if parent != nil {
+		projectPath = parent.ProjectPath
+	}
+
+	r.log.Info("Starting sequential sub-issue execution",
+		"parent_id", parent.ID,
+		"total_issues", total,
+	)
+
+	// Update parent with start message
+	startMsg := fmt.Sprintf("🚀 Starting sequential execution of %d sub-issues", total)
+	if err := r.UpdateIssueProgress(ctx, projectPath, parent.ID, startMsg); err != nil {
+		r.log.Warn("Failed to update parent progress", "error", err)
+		// Non-fatal, continue execution
+	}
+
+	for i, issue := range issues {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("execution cancelled: %w", ctx.Err())
+		default:
+		}
+
+		// Update parent with current progress
+		progressMsg := fmt.Sprintf("⏳ Progress: %d/%d - Starting: **%s** (#%d)",
+			i, total, issue.Subtask.Title, issue.Number)
+		if err := r.UpdateIssueProgress(ctx, projectPath, parent.ID, progressMsg); err != nil {
+			r.log.Warn("Failed to update parent progress", "error", err)
+		}
+
+		// Create task from sub-issue
+		subTask := &Task{
+			ID:          fmt.Sprintf("GH-%d", issue.Number),
+			Title:       issue.Subtask.Title,
+			Description: issue.Subtask.Description,
+			ProjectPath: projectPath,
+			Branch:      fmt.Sprintf("pilot/GH-%d", issue.Number),
+			CreatePR:    true,
+		}
+
+		r.log.Info("Executing sub-issue",
+			"parent_id", parent.ID,
+			"sub_issue", issue.Number,
+			"order", i+1,
+			"total", total,
+		)
+
+		// Execute the sub-task
+		result, err := r.Execute(ctx, subTask)
+		if err != nil {
+			failMsg := fmt.Sprintf("❌ Failed on %d/%d: %s - Error: %v",
+				i+1, total, issue.Subtask.Title, err)
+			_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, failMsg)
+			return fmt.Errorf("sub-issue %d failed: %w", issue.Number, err)
+		}
+
+		if !result.Success {
+			failMsg := fmt.Sprintf("❌ Failed on %d/%d: %s - %s",
+				i+1, total, issue.Subtask.Title, result.Error)
+			_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, failMsg)
+			return fmt.Errorf("sub-issue %d failed: %s", issue.Number, result.Error)
+		}
+
+		// Close completed sub-issue
+		closeComment := fmt.Sprintf("✅ Completed as part of %s", parent.ID)
+		if result.PRUrl != "" {
+			closeComment = fmt.Sprintf("✅ Completed as part of %s\nPR: %s", parent.ID, result.PRUrl)
+		}
+		if err := r.CloseIssueWithComment(ctx, projectPath, fmt.Sprintf("%d", issue.Number), closeComment); err != nil {
+			r.log.Warn("Failed to close sub-issue", "issue", issue.Number, "error", err)
+			// Non-fatal, continue
+		}
+
+		r.log.Info("Sub-issue completed",
+			"parent_id", parent.ID,
+			"sub_issue", issue.Number,
+			"pr_url", result.PRUrl,
+		)
+	}
+
+	// All done - update and close parent
+	completeMsg := fmt.Sprintf("✅ Completed: %d/%d sub-issues done\n\nAll sub-tasks executed successfully.", total, total)
+	_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, completeMsg)
+
+	if err := r.CloseIssueWithComment(ctx, projectPath, parent.ID, "All sub-issues completed successfully."); err != nil {
+		r.log.Warn("Failed to close parent issue", "error", err)
+		// Non-fatal
+	}
+
+	r.log.Info("Epic execution completed",
+		"parent_id", parent.ID,
+		"total_completed", total,
+	)
+
+	return nil
+}
