@@ -313,8 +313,8 @@ func (r *Runner) CreateSubIssues(ctx context.Context, plan *EpicPlan) ([]Created
 	return created, nil
 }
 
-// updateIssueProgress adds a progress comment to an issue.
-func (r *Runner) updateIssueProgress(ctx context.Context, projectPath string, issueID string, message string) error {
+// UpdateIssueProgress adds a progress comment to an issue.
+func (r *Runner) UpdateIssueProgress(ctx context.Context, projectPath string, issueID string, message string) error {
 	args := []string{"issue", "comment", issueID, "--body", message}
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	if projectPath != "" {
@@ -330,8 +330,8 @@ func (r *Runner) updateIssueProgress(ctx context.Context, projectPath string, is
 	return nil
 }
 
-// closeIssueWithComment closes an issue with a completion comment.
-func (r *Runner) closeIssueWithComment(ctx context.Context, projectPath string, issueID string, comment string) error {
+// CloseIssueWithComment closes an issue with a completion comment.
+func (r *Runner) CloseIssueWithComment(ctx context.Context, projectPath string, issueID string, comment string) error {
 	args := []string{"issue", "close", issueID, "--comment", comment}
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	if projectPath != "" {
