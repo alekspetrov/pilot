@@ -175,48 +175,10 @@ func stripFilePaths(text string) string {
 
 // detectEpic checks if a task matches epic patterns.
 // Returns true if any epic indicator is found.
-func detectEpic(title, description, combined string) bool {
-	// Check for [epic] tag in title
-	if epicTagRegex.MatchString(title) {
-		return true
-	}
-
-	// Preprocess: strip code blocks and file paths to avoid false matches
-	// on identifiers like "EpicPlan" or file names like "epic.go"
-	cleanCombined := stripCodeBlocks(combined)
-	cleanCombined = stripFilePaths(cleanCombined)
-
-	// Check for epic keywords using word boundary matching
-	if wordBoundaryEpicRegex.MatchString(cleanCombined) {
-		return true
-	}
-
-	// Preprocess description for structural checks
-	cleanDescription := stripCodeBlocks(description)
-
-	// Check for 5+ checkboxes (acceptance criteria)
-	checkboxMatches := checkboxRegex.FindAllString(cleanDescription, -1)
-	if len(checkboxMatches) >= 5 {
-		return true
-	}
-
-	// Check for 3+ numbered phases/sections
-	phaseMatches := numberedPhaseRegex.FindAllString(cleanDescription, -1)
-	if len(phaseMatches) >= 3 {
-		return true
-	}
-
-	// Check for long description with structural markers
-	wordCount := len(strings.Fields(cleanDescription))
-	hasStructuralMarkers := strings.Contains(cleanDescription, "##") ||
-		strings.Contains(strings.ToLower(cleanDescription), "phase") ||
-		strings.Contains(strings.ToLower(cleanDescription), "stage") ||
-		strings.Contains(strings.ToLower(cleanDescription), "step")
-	if wordCount > 200 && hasStructuralMarkers {
-		return true
-	}
-
-	return false
+// Uses CollectSignalMetrics internally for consistent threshold evaluation.
+func detectEpic(title, description, _ string) bool {
+	metrics := CollectSignalMetrics(title, description)
+	return metrics.IsEpic()
 }
 
 // IsTrivial returns true if the task complexity is trivial.
@@ -249,4 +211,87 @@ func (c Complexity) ShouldRunResearch() bool {
 // IsEpic returns true if the task complexity is epic.
 func (c Complexity) IsEpic() bool {
 	return c == ComplexityEpic
+}
+
+// SignalMetrics holds extracted metrics from task description for epic detection.
+// These metrics can be used for debugging, logging, or threshold tuning.
+type SignalMetrics struct {
+	// HasEpicTag indicates [epic] tag presence in title
+	HasEpicTag bool
+	// HasEpicKeyword indicates epic/roadmap/multi-phase/milestone keyword presence
+	HasEpicKeyword bool
+	// CheckboxCount is the number of markdown checkboxes found
+	CheckboxCount int
+	// PhaseCount is the number of numbered phase/stage/part sections
+	PhaseCount int
+	// WordCount is the word count of description (excluding code blocks)
+	WordCount int
+	// HasStructuralMarkers indicates presence of ##, phase, stage, step markers
+	HasStructuralMarkers bool
+}
+
+// CollectSignalMetrics extracts all epic detection signals from task content.
+// This allows callers to inspect individual metrics for debugging or custom logic.
+func CollectSignalMetrics(title, description string) SignalMetrics {
+	combined := strings.ToLower(description) + " " + strings.ToLower(title)
+
+	// Check for [epic] tag in title
+	hasEpicTag := epicTagRegex.MatchString(title)
+
+	// Preprocess: strip code blocks and file paths to avoid false matches
+	cleanCombined := stripCodeBlocks(combined)
+	cleanCombined = stripFilePaths(cleanCombined)
+
+	// Check for epic keywords using word boundary matching
+	hasEpicKeyword := wordBoundaryEpicRegex.MatchString(cleanCombined)
+
+	// Preprocess description for structural checks
+	cleanDescription := stripCodeBlocks(description)
+
+	// Count checkboxes
+	checkboxMatches := checkboxRegex.FindAllString(cleanDescription, -1)
+	checkboxCount := len(checkboxMatches)
+
+	// Count numbered phases/sections
+	phaseMatches := numberedPhaseRegex.FindAllString(cleanDescription, -1)
+	phaseCount := len(phaseMatches)
+
+	// Word count
+	wordCount := len(strings.Fields(cleanDescription))
+
+	// Structural markers
+	hasStructuralMarkers := strings.Contains(cleanDescription, "##") ||
+		strings.Contains(strings.ToLower(cleanDescription), "phase") ||
+		strings.Contains(strings.ToLower(cleanDescription), "stage") ||
+		strings.Contains(strings.ToLower(cleanDescription), "step")
+
+	return SignalMetrics{
+		HasEpicTag:           hasEpicTag,
+		HasEpicKeyword:       hasEpicKeyword,
+		CheckboxCount:        checkboxCount,
+		PhaseCount:           phaseCount,
+		WordCount:            wordCount,
+		HasStructuralMarkers: hasStructuralMarkers,
+	}
+}
+
+// IsEpic evaluates the metrics against epic thresholds.
+// Returns true if any epic indicator threshold is met.
+func (m SignalMetrics) IsEpic() bool {
+	if m.HasEpicTag {
+		return true
+	}
+	if m.HasEpicKeyword {
+		return true
+	}
+	if m.CheckboxCount >= 5 {
+		return true
+	}
+	if m.PhaseCount >= 3 {
+		return true
+	}
+	if m.WordCount > 200 && m.HasStructuralMarkers {
+		return true
+	}
+	return false
 }
