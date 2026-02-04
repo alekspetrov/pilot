@@ -154,7 +154,7 @@ func parseSubtasks(output string) []PlannedSubtask {
 			}
 
 			order := 0
-			fmt.Sscanf(matches[1], "%d", &order)
+			_, _ = fmt.Sscanf(matches[1], "%d", &order)
 
 			// Extract title and possibly inline description
 			titleAndDesc := strings.TrimSpace(matches[2])
