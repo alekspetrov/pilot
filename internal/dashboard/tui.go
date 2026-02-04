@@ -109,9 +109,25 @@ func (p *AutopilotPanel) View() string {
 
 		for _, pr := range prs {
 			icon := p.stageIcon(pr.Stage)
-			prLine := fmt.Sprintf("  %s #%d: %s", icon, pr.PRNumber, pr.Stage)
+			// Show stage transition with time in stage
+			timeInStage := p.formatTimeInStage(pr)
+			prLine := fmt.Sprintf("  %s #%d: %s (%s)", icon, pr.PRNumber, pr.Stage, timeInStage)
 			content.WriteString(prLine)
 			content.WriteString("\n")
+
+			// Show CI status if waiting for CI
+			if pr.Stage == autopilot.StageWaitingCI {
+				ciLine := fmt.Sprintf("     CI: %s", pr.CIStatus)
+				content.WriteString(ciLine)
+				content.WriteString("\n")
+			}
+
+			// Show error if failed
+			if pr.Stage == autopilot.StageFailed && pr.Error != "" {
+				errLine := fmt.Sprintf("     ❌ %s", truncateString(pr.Error, 35))
+				content.WriteString(errLine)
+				content.WriteString("\n")
+			}
 		}
 	}
 
@@ -124,6 +140,41 @@ func (p *AutopilotPanel) View() string {
 	}
 
 	return renderPanel("AUTOPILOT", content.String())
+}
+
+// formatTimeInStage returns a human-readable duration since the PR entered its current stage.
+func (p *AutopilotPanel) formatTimeInStage(pr *autopilot.PRState) string {
+	var since time.Time
+	switch pr.Stage {
+	case autopilot.StageWaitingCI:
+		since = pr.CIWaitStartedAt
+	default:
+		since = pr.LastChecked
+	}
+
+	if since.IsZero() {
+		since = pr.CreatedAt
+	}
+
+	d := time.Since(since)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%.1fh", d.Hours())
+}
+
+// truncateString truncates a string to max length with ellipsis.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // stageIcon returns an emoji icon for the PR stage.

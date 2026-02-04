@@ -171,6 +171,7 @@ func main() {
 		newReleaseCmd(),
 		newAllowCmd(),
 		newProjectCmd(),
+		newAutopilotCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {

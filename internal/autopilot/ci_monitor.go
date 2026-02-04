@@ -81,8 +81,14 @@ func (m *CIMonitor) checkStatus(ctx context.Context, sha string) (CIStatus, erro
 		return CIPending, err
 	}
 
+	m.log.Debug("fetched check runs",
+		"sha", sha[:min(7, len(sha))],
+		"total_checks", checkRuns.TotalCount,
+	)
+
 	// If no required checks configured, check all runs
 	if len(m.requiredChecks) == 0 {
+		m.log.Debug("no required checks configured, checking all runs")
 		return m.checkAllRuns(checkRuns), nil
 	}
 
@@ -92,15 +98,51 @@ func (m *CIMonitor) checkStatus(ctx context.Context, sha string) (CIStatus, erro
 		requiredStatus[name] = CIPending
 	}
 
+	// Log available check names for debugging
+	availableChecks := make([]string, 0, len(checkRuns.CheckRuns))
+	for _, run := range checkRuns.CheckRuns {
+		availableChecks = append(availableChecks, run.Name)
+	}
+	m.log.Debug("check run names from GitHub",
+		"sha", sha[:min(7, len(sha))],
+		"available", availableChecks,
+		"required", m.requiredChecks,
+	)
+
 	// Map check runs to status
 	for _, run := range checkRuns.CheckRuns {
 		if _, ok := requiredStatus[run.Name]; ok {
-			requiredStatus[run.Name] = m.mapCheckStatus(run.Status, run.Conclusion)
+			status := m.mapCheckStatus(run.Status, run.Conclusion)
+			requiredStatus[run.Name] = status
+			m.log.Debug("matched required check",
+				"name", run.Name,
+				"status", run.Status,
+				"conclusion", run.Conclusion,
+				"mapped_status", status,
+			)
+		}
+	}
+
+	// Log any unmatched required checks
+	for name, status := range requiredStatus {
+		if status == CIPending {
+			m.log.Warn("required check not found in GitHub checks",
+				"check_name", name,
+				"sha", sha[:min(7, len(sha))],
+				"available_checks", availableChecks,
+			)
 		}
 	}
 
 	// Determine overall status
-	return m.aggregateStatus(requiredStatus), nil
+	result := m.aggregateStatus(requiredStatus)
+	m.log.Debug("aggregated CI status",
+		"sha", sha[:min(7, len(sha))],
+		"result", result,
+		"check_statuses", requiredStatus,
+	)
+
+	return result, nil
 }
 
 // checkAllRuns returns aggregate status when no required checks are configured.
