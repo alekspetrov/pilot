@@ -250,3 +250,38 @@ func (c Complexity) ShouldRunResearch() bool {
 func (c Complexity) IsEpic() bool {
 	return c == ComplexityEpic
 }
+
+// SignalMetrics contains the signal counts used for epic detection.
+// This enables callers to implement custom combination logic without calling detectEpic directly.
+type SignalMetrics struct {
+	// CheckboxCount is the number of markdown checkboxes (- [ ] or - [x]) in the description.
+	CheckboxCount int
+
+	// PhaseCount is the number of explicit phase markers (Phase 1, Stage 2, etc.) in the description.
+	PhaseCount int
+
+	// WordCount is the word count of the description with code blocks stripped.
+	WordCount int
+}
+
+// CollectSignalMetrics analyzes a description and returns all signal metrics in one call.
+// This allows callers to implement custom thresholds and combination logic for epic detection.
+func CollectSignalMetrics(description string) SignalMetrics {
+	// Strip code blocks to get clean text for analysis
+	cleanDescription := stripCodeBlocks(description)
+
+	// Count checkboxes
+	checkboxMatches := checkboxRegex.FindAllString(cleanDescription, -1)
+
+	// Count phases
+	phaseMatches := numberedPhaseRegex.FindAllString(cleanDescription, -1)
+
+	// Count words
+	wordCount := len(strings.Fields(cleanDescription))
+
+	return SignalMetrics{
+		CheckboxCount: len(checkboxMatches),
+		PhaseCount:    len(phaseMatches),
+		WordCount:     wordCount,
+	}
+}
