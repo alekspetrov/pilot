@@ -286,6 +286,69 @@ func TestComplexity_Methods(t *testing.T) {
 	}
 }
 
+func TestCountCheckboxes(t *testing.T) {
+	tests := []struct {
+		name        string
+		description string
+		expected    int
+	}{
+		{
+			name:        "no checkboxes",
+			description: "Simple task with no checkboxes",
+			expected:    0,
+		},
+		{
+			name:        "single unchecked checkbox",
+			description: "- [ ] Do the thing",
+			expected:    1,
+		},
+		{
+			name:        "single checked checkbox",
+			description: "- [x] Done already",
+			expected:    1,
+		},
+		{
+			name: "multiple checkboxes",
+			description: `Task list:
+- [ ] First item
+- [x] Second item
+- [ ] Third item`,
+			expected: 3,
+		},
+		{
+			name: "checkboxes in code block ignored",
+			description: "Normal text\n```markdown\n- [ ] This is in a code block\n```\n- [ ] This is real",
+			expected:    1,
+		},
+		{
+			name: "indented checkboxes",
+			description: `Task:
+  - [ ] Indented item
+    - [x] More indented`,
+			expected: 2,
+		},
+		{
+			name:        "empty description",
+			description: "",
+			expected:    0,
+		},
+		{
+			name: "checkboxes in multiple code blocks",
+			description: "```\n- [ ] fake1\n```\n- [ ] real\n~~~\n- [ ] fake2\n~~~",
+			expected:    1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CountCheckboxes(tt.description)
+			if got != tt.expected {
+				t.Errorf("CountCheckboxes() = %d, want %d", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestComplexity_String(t *testing.T) {
 	tests := []struct {
 		complexity Complexity

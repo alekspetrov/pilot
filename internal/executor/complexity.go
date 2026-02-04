@@ -173,6 +173,14 @@ func stripFilePaths(text string) string {
 	return filePathRegex.ReplaceAllString(text, " ")
 }
 
+// CountCheckboxes strips code blocks from the description and returns
+// the count of markdown checkboxes (- [ ] or - [x]) found.
+func CountCheckboxes(description string) int {
+	cleanDescription := stripCodeBlocks(description)
+	matches := checkboxRegex.FindAllString(cleanDescription, -1)
+	return len(matches)
+}
+
 // detectEpic checks if a task matches epic patterns.
 // Returns true if any epic indicator is found.
 func detectEpic(title, description, combined string) bool {
@@ -191,14 +199,13 @@ func detectEpic(title, description, combined string) bool {
 		return true
 	}
 
-	// Preprocess description for structural checks
-	cleanDescription := stripCodeBlocks(description)
-
 	// Check for 5+ checkboxes (acceptance criteria)
-	checkboxMatches := checkboxRegex.FindAllString(cleanDescription, -1)
-	if len(checkboxMatches) >= 5 {
+	if CountCheckboxes(description) >= 5 {
 		return true
 	}
+
+	// Preprocess description for structural checks
+	cleanDescription := stripCodeBlocks(description)
 
 	// Check for 3+ numbered phases/sections
 	phaseMatches := numberedPhaseRegex.FindAllString(cleanDescription, -1)
