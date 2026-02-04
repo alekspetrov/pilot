@@ -1092,6 +1092,162 @@ func TestController_CheckExternalMerge_MultiplePRs(t *testing.T) {
 	}
 }
 
+// TestController_SHASync_UpdatesWhenChanged tests that SHA is synced when PR head changes
+// This addresses GH-419 where CI status wasn't updating after self-review added commits
+func TestController_SHASync_UpdatesWhenChanged(t *testing.T) {
+	// Track which SHA is being checked for CI
+	var ciCheckedSHA string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/42":
+			// Return PR with updated SHA (simulates self-review adding a commit)
+			resp := github.PullRequest{
+				Number:  42,
+				State:   "open",
+				Head:    github.PRRef{Ref: "feature", SHA: "newsha7890"},
+				HTMLURL: "https://github.com/owner/repo/pull/42",
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/repos/owner/repo/commits/newsha7890/check-runs":
+			// CI checks for new SHA
+			ciCheckedSHA = "newsha7890"
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: "completed", Conclusion: "success"},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/repos/owner/repo/commits/oldsha12345/check-runs":
+			// CI checks for old SHA - should NOT be called
+			ciCheckedSHA = "oldsha12345"
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: "queued", Conclusion: ""},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.CIPollInterval = 10 * time.Millisecond
+	cfg.DevCITimeout = 1 * time.Second
+	cfg.RequiredChecks = []string{"build"}
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	// Register PR with old SHA (simulates PR created before self-review commit)
+	c.OnPRCreated(42, "https://github.com/owner/repo/pull/42", 10, "oldsha12345")
+
+	// Move to waiting CI stage
+	ctx := context.Background()
+	err := c.ProcessPR(ctx, 42)
+	if err != nil {
+		t.Fatalf("ProcessPR stage 1 error: %v", err)
+	}
+
+	// Process waiting CI - should sync SHA and check CI for new SHA
+	err = c.ProcessPR(ctx, 42)
+	if err != nil {
+		t.Fatalf("ProcessPR stage 2 error: %v", err)
+	}
+
+	// Verify CI was checked with the new SHA
+	if ciCheckedSHA != "newsha7890" {
+		t.Errorf("CI should have been checked with new SHA, got %s", ciCheckedSHA)
+	}
+
+	// Verify PR state was updated with new SHA
+	pr, ok := c.GetPRState(42)
+	if !ok {
+		t.Fatal("PR should still be tracked")
+	}
+	if pr.HeadSHA != "newsha7890" {
+		t.Errorf("HeadSHA = %s, want newsha7890", pr.HeadSHA)
+	}
+
+	// Verify CI passed (new SHA had success)
+	if pr.Stage != StageCIPassed {
+		t.Errorf("Stage = %s, want %s (CI should pass with new SHA)", pr.Stage, StageCIPassed)
+	}
+}
+
+// TestController_SHASync_PreservesOnEmptyResponse tests that empty SHA from API doesn't overwrite stored SHA
+func TestController_SHASync_PreservesOnEmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/42":
+			// Return PR with empty SHA (edge case)
+			resp := github.PullRequest{
+				Number:  42,
+				State:   "open",
+				Head:    github.PRRef{Ref: "feature", SHA: ""},
+				HTMLURL: "https://github.com/owner/repo/pull/42",
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/repos/owner/repo/commits/abc1234567/check-runs":
+			// CI checks should use stored SHA
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: "completed", Conclusion: "success"},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.CIPollInterval = 10 * time.Millisecond
+	cfg.DevCITimeout = 1 * time.Second
+	cfg.RequiredChecks = []string{"build"}
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	// Register PR with known SHA
+	c.OnPRCreated(42, "https://github.com/owner/repo/pull/42", 10, "abc1234567")
+
+	// Move to waiting CI stage
+	ctx := context.Background()
+	err := c.ProcessPR(ctx, 42)
+	if err != nil {
+		t.Fatalf("ProcessPR stage 1 error: %v", err)
+	}
+
+	// Process waiting CI - should preserve stored SHA when API returns empty
+	err = c.ProcessPR(ctx, 42)
+	if err != nil {
+		t.Fatalf("ProcessPR stage 2 error: %v", err)
+	}
+
+	// Verify PR state kept original SHA
+	pr, ok := c.GetPRState(42)
+	if !ok {
+		t.Fatal("PR should still be tracked")
+	}
+	if pr.HeadSHA != "abc1234567" {
+		t.Errorf("HeadSHA = %s, want abc1234567 (should preserve original)", pr.HeadSHA)
+	}
+}
+
 // mockNotifier is a test double for the Notifier interface
 type mockNotifier struct {
 	notifyMergedFunc           func(ctx context.Context, prState *PRState) error

@@ -211,23 +211,50 @@ func (c *Controller) handleWaitingCI(ctx context.Context, prState *PRState) erro
 		return nil
 	}
 
+	// GH-419: Sync HeadSHA with current PR head before checking CI
+	// This handles the case where self-review or other commits are added after PR creation
+	currentSHA, err := c.syncPRHeadSHA(ctx, prState)
+	if err != nil {
+		c.log.Warn("failed to sync PR head SHA, using stored SHA",
+			"pr", prState.PRNumber,
+			"stored_sha", ShortSHA(prState.HeadSHA),
+			"error", err,
+		)
+		currentSHA = prState.HeadSHA
+	}
+
+	c.log.Debug("handleWaitingCI: checking CI status",
+		"pr", prState.PRNumber,
+		"sha", ShortSHA(currentSHA),
+		"stored_sha", ShortSHA(prState.HeadSHA),
+		"sha_changed", currentSHA != prState.HeadSHA,
+		"wait_time", time.Since(prState.CIWaitStartedAt).Round(time.Second),
+	)
+
 	// Non-blocking CI status check
-	status, err := c.ciMonitor.CheckCI(ctx, prState.HeadSHA)
+	status, err := c.ciMonitor.CheckCI(ctx, currentSHA)
 	if err != nil {
 		c.log.Warn("CI status check failed", "pr", prState.PRNumber, "error", err)
 		// Don't fail the PR on transient errors, will retry next poll cycle
 		return nil
 	}
 
+	c.log.Debug("handleWaitingCI: CI status result",
+		"pr", prState.PRNumber,
+		"sha", ShortSHA(currentSHA),
+		"status", status,
+		"previous_status", prState.CIStatus,
+	)
+
 	prState.CIStatus = status
 	prState.LastChecked = time.Now()
 
 	switch status {
 	case CISuccess:
-		c.log.Info("CI passed", "pr", prState.PRNumber)
+		c.log.Info("CI passed", "pr", prState.PRNumber, "sha", ShortSHA(currentSHA))
 		prState.Stage = StageCIPassed
 	case CIFailure:
-		c.log.Warn("CI failed", "pr", prState.PRNumber)
+		c.log.Warn("CI failed", "pr", prState.PRNumber, "sha", ShortSHA(currentSHA))
 		prState.Stage = StageCIFailed
 	case CIPending, CIRunning:
 		// Stay in StageWaitingCI, will be checked next poll cycle
@@ -235,6 +262,38 @@ func (c *Controller) handleWaitingCI(ctx context.Context, prState *PRState) erro
 	}
 
 	return nil
+}
+
+// syncPRHeadSHA fetches the current PR head SHA from GitHub and updates PRState if changed.
+// Returns the current SHA (which may be different from the stored one).
+// If the API returns an empty SHA, the stored SHA is preserved.
+func (c *Controller) syncPRHeadSHA(ctx context.Context, prState *PRState) (string, error) {
+	ghPR, err := c.ghClient.GetPullRequest(ctx, c.owner, c.repo, prState.PRNumber)
+	if err != nil {
+		return "", fmt.Errorf("failed to get PR: %w", err)
+	}
+
+	currentSHA := ghPR.Head.SHA
+
+	// Only update if we got a valid (non-empty) SHA from the API
+	if currentSHA == "" {
+		c.log.Debug("syncPRHeadSHA: API returned empty SHA, keeping stored SHA",
+			"pr", prState.PRNumber,
+			"stored_sha", ShortSHA(prState.HeadSHA),
+		)
+		return prState.HeadSHA, nil
+	}
+
+	if currentSHA != prState.HeadSHA {
+		c.log.Info("PR head SHA changed, updating",
+			"pr", prState.PRNumber,
+			"old_sha", ShortSHA(prState.HeadSHA),
+			"new_sha", ShortSHA(currentSHA),
+		)
+		prState.HeadSHA = currentSHA
+	}
+
+	return currentSHA, nil
 }
 
 // handleCIPassed proceeds to merge (with approval for prod).

@@ -78,12 +78,27 @@ func (m *CIMonitor) checkStatus(ctx context.Context, sha string) (CIStatus, erro
 	// Get check runs (GitHub Actions)
 	checkRuns, err := m.ghClient.ListCheckRuns(ctx, m.owner, m.repo, sha)
 	if err != nil {
+		m.log.Debug("checkStatus: API call failed",
+			"sha", ShortSHA(sha),
+			"error", err,
+		)
 		return CIPending, err
 	}
 
+	m.log.Debug("checkStatus: received check runs",
+		"sha", ShortSHA(sha),
+		"total_count", checkRuns.TotalCount,
+		"runs_returned", len(checkRuns.CheckRuns),
+	)
+
 	// If no required checks configured, check all runs
 	if len(m.requiredChecks) == 0 {
-		return m.checkAllRuns(checkRuns), nil
+		status := m.checkAllRuns(checkRuns)
+		m.log.Debug("checkStatus: no required checks, using all runs",
+			"sha", ShortSHA(sha),
+			"status", status,
+		)
+		return status, nil
 	}
 
 	// Track required checks
@@ -95,17 +110,32 @@ func (m *CIMonitor) checkStatus(ctx context.Context, sha string) (CIStatus, erro
 	// Map check runs to status
 	for _, run := range checkRuns.CheckRuns {
 		if _, ok := requiredStatus[run.Name]; ok {
-			requiredStatus[run.Name] = m.mapCheckStatus(run.Status, run.Conclusion)
+			mappedStatus := m.mapCheckStatus(run.Status, run.Conclusion)
+			requiredStatus[run.Name] = mappedStatus
+			m.log.Debug("checkStatus: mapped required check",
+				"sha", ShortSHA(sha),
+				"check_name", run.Name,
+				"api_status", run.Status,
+				"api_conclusion", run.Conclusion,
+				"mapped_status", mappedStatus,
+			)
 		}
 	}
 
 	// Determine overall status
-	return m.aggregateStatus(requiredStatus), nil
+	finalStatus := m.aggregateStatus(requiredStatus)
+	m.log.Debug("checkStatus: aggregated status",
+		"sha", ShortSHA(sha),
+		"required_statuses", requiredStatus,
+		"final_status", finalStatus,
+	)
+	return finalStatus, nil
 }
 
 // checkAllRuns returns aggregate status when no required checks are configured.
 func (m *CIMonitor) checkAllRuns(checkRuns *github.CheckRunsResponse) CIStatus {
 	if checkRuns.TotalCount == 0 {
+		m.log.Debug("checkAllRuns: no check runs found")
 		return CIPending
 	}
 
@@ -114,6 +144,12 @@ func (m *CIMonitor) checkAllRuns(checkRuns *github.CheckRunsResponse) CIStatus {
 
 	for _, run := range checkRuns.CheckRuns {
 		status := m.mapCheckStatus(run.Status, run.Conclusion)
+		m.log.Debug("checkAllRuns: check run",
+			"name", run.Name,
+			"api_status", run.Status,
+			"api_conclusion", run.Conclusion,
+			"mapped_status", status,
+		)
 		switch status {
 		case CIFailure:
 			hasFailure = true
@@ -180,6 +216,11 @@ func (m *CIMonitor) mapCheckStatus(status, conclusion string) CIStatus {
 // This is the non-blocking alternative to WaitForCI.
 // Returns CIPending/CIRunning if checks are still running.
 func (m *CIMonitor) CheckCI(ctx context.Context, sha string) (CIStatus, error) {
+	m.log.Debug("CheckCI: fetching check runs",
+		"sha", ShortSHA(sha),
+		"required_checks", m.requiredChecks,
+	)
+
 	status, err := m.checkStatus(ctx, sha)
 	if err != nil {
 		m.log.Debug("CheckCI: status check failed",
