@@ -250,3 +250,21 @@ func (c Complexity) ShouldRunResearch() bool {
 func (c Complexity) IsEpic() bool {
 	return c == ComplexityEpic
 }
+
+// CountCheckboxes counts markdown checkboxes in the given text.
+// It first strips code blocks to avoid counting checkboxes in code examples.
+// Matches both unchecked "- [ ]" and checked "- [x]" formats.
+func CountCheckboxes(text string) int {
+	cleanText := stripCodeBlocks(text)
+	matches := checkboxRegex.FindAllString(cleanText, -1)
+	return len(matches)
+}
+
+// CountPhases counts numbered phase markers in the given text.
+// It first strips code blocks to avoid counting phases in code examples.
+// Matches patterns like "Phase 1", "## Phase 2", "Stage 3", "Part 1", "Milestone 2".
+func CountPhases(text string) int {
+	cleanText := stripCodeBlocks(text)
+	matches := numberedPhaseRegex.FindAllString(cleanText, -1)
+	return len(matches)
+}
