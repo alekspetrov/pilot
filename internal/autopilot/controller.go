@@ -705,7 +705,7 @@ func (c *Controller) ScanRecentlyMergedPRs(ctx context.Context) error {
 		// Extract issue number from branch name (optional)
 		var issueNum int
 		if strings.HasPrefix(pr.Head.Ref, "pilot/GH-") {
-			fmt.Sscanf(pr.Head.Ref, "pilot/GH-%d", &issueNum)
+			_, _ = fmt.Sscanf(pr.Head.Ref, "pilot/GH-%d", &issueNum)
 		}
 
 		c.log.Info("found merged Pilot PR needing release",
