@@ -312,3 +312,37 @@ func (r *Runner) CreateSubIssues(ctx context.Context, plan *EpicPlan) ([]Created
 
 	return created, nil
 }
+
+// updateIssueProgress adds a progress comment to an issue.
+func (r *Runner) updateIssueProgress(ctx context.Context, projectPath string, issueID string, message string) error {
+	args := []string{"issue", "comment", issueID, "--body", message}
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	if projectPath != "" {
+		cmd.Dir = projectPath
+	}
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to comment on issue %s: %w (stderr: %s)", issueID, err, stderr.String())
+	}
+	return nil
+}
+
+// closeIssueWithComment closes an issue with a completion comment.
+func (r *Runner) closeIssueWithComment(ctx context.Context, projectPath string, issueID string, comment string) error {
+	args := []string{"issue", "close", issueID, "--comment", comment}
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	if projectPath != "" {
+		cmd.Dir = projectPath
+	}
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to close issue %s: %w (stderr: %s)", issueID, err, stderr.String())
+	}
+	return nil
+}
