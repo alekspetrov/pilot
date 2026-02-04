@@ -306,3 +306,144 @@ func TestComplexity_String(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractSignalMetrics(t *testing.T) {
+	tests := []struct {
+		name        string
+		description string
+		expected    SignalMetrics
+	}{
+		{
+			name:        "empty description",
+			description: "",
+			expected:    SignalMetrics{CheckboxCount: 0, PhaseCount: 0, WordCount: 0},
+		},
+		{
+			name:        "simple text",
+			description: "Add a new button to the page",
+			expected:    SignalMetrics{CheckboxCount: 0, PhaseCount: 0, WordCount: 7},
+		},
+		{
+			name: "checkboxes only",
+			description: `Task list:
+- [ ] First item
+- [x] Second item done
+- [ ] Third item`,
+			expected: SignalMetrics{CheckboxCount: 3, PhaseCount: 0, WordCount: 17},
+		},
+		{
+			name: "phases only",
+			description: `Implementation:
+Phase 1: Design
+Phase 2: Build
+Phase 3: Test`,
+			expected: SignalMetrics{CheckboxCount: 0, PhaseCount: 3, WordCount: 10},
+		},
+		{
+			name: "mixed checkboxes and phases",
+			description: `Epic task:
+Phase 1: Setup
+- [ ] Create project
+- [ ] Add dependencies
+
+Phase 2: Implementation
+- [ ] Build core
+- [ ] Add tests`,
+			expected: SignalMetrics{CheckboxCount: 4, PhaseCount: 2, WordCount: 28},
+		},
+		{
+			name: "code blocks excluded from word count",
+			description: `Add this method:
+` + "```go" + `
+func example() {
+    return nil
+}
+` + "```" + `
+That's it.`,
+			expected: SignalMetrics{CheckboxCount: 0, PhaseCount: 0, WordCount: 5},
+		},
+		{
+			name: "checkboxes in code block not counted",
+			description: `Example:
+` + "```markdown" + `
+- [ ] This is in code
+- [ ] Also in code
+` + "```" + `
+Real checkbox:
+- [ ] Real item`,
+			expected: SignalMetrics{CheckboxCount: 1, PhaseCount: 0, WordCount: 8},
+		},
+		{
+			name: "stage markers count as phases",
+			description: `Plan:
+Stage 1: First
+Stage 2: Second`,
+			expected: SignalMetrics{CheckboxCount: 0, PhaseCount: 2, WordCount: 7},
+		},
+		{
+			name: "part markers count as phases",
+			description: `Guide:
+Part 1: Introduction
+Part 2: Main content`,
+			expected: SignalMetrics{CheckboxCount: 0, PhaseCount: 2, WordCount: 8},
+		},
+		{
+			name: "heading phases count",
+			description: `Implementation:
+## Phase 1
+Setup stuff
+## Phase 2
+Build stuff`,
+			expected: SignalMetrics{CheckboxCount: 0, PhaseCount: 2, WordCount: 11},
+		},
+		{
+			name: "5+ checkboxes for epic threshold",
+			description: `Tasks:
+- [ ] One
+- [ ] Two
+- [ ] Three
+- [ ] Four
+- [ ] Five
+- [ ] Six`,
+			expected: SignalMetrics{CheckboxCount: 6, PhaseCount: 0, WordCount: 25},
+		},
+		{
+			name:        "checkbox with checked x lowercase",
+			description: "- [x] Done item",
+			expected:    SignalMetrics{CheckboxCount: 1, PhaseCount: 0, WordCount: 4},
+		},
+		{
+			name:        "checkbox with space unchecked",
+			description: "- [ ] Pending item",
+			expected:    SignalMetrics{CheckboxCount: 1, PhaseCount: 0, WordCount: 5},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractSignalMetrics(tt.description)
+			if got.CheckboxCount != tt.expected.CheckboxCount {
+				t.Errorf("CheckboxCount = %d, want %d", got.CheckboxCount, tt.expected.CheckboxCount)
+			}
+			if got.PhaseCount != tt.expected.PhaseCount {
+				t.Errorf("PhaseCount = %d, want %d", got.PhaseCount, tt.expected.PhaseCount)
+			}
+			if got.WordCount != tt.expected.WordCount {
+				t.Errorf("WordCount = %d, want %d", got.WordCount, tt.expected.WordCount)
+			}
+		})
+	}
+}
+
+func TestSignalMetrics_ZeroValue(t *testing.T) {
+	var metrics SignalMetrics
+	if metrics.CheckboxCount != 0 {
+		t.Errorf("zero value CheckboxCount = %d, want 0", metrics.CheckboxCount)
+	}
+	if metrics.PhaseCount != 0 {
+		t.Errorf("zero value PhaseCount = %d, want 0", metrics.PhaseCount)
+	}
+	if metrics.WordCount != 0 {
+		t.Errorf("zero value WordCount = %d, want 0", metrics.WordCount)
+	}
+}

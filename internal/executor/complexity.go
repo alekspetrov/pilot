@@ -88,6 +88,19 @@ var complexPatterns = []string{
 	"cross-cutting",
 }
 
+// SignalMetrics holds extracted signal metrics from task analysis.
+// These metrics are used for complexity detection and routing decisions.
+type SignalMetrics struct {
+	// CheckboxCount is the number of markdown checkboxes (- [ ] or - [x]) found.
+	CheckboxCount int
+
+	// PhaseCount is the number of explicit phase/stage markers found.
+	PhaseCount int
+
+	// WordCount is the number of words in the description (excluding code blocks).
+	WordCount int
+}
+
 // epicTagRegex matches [epic] tag in title.
 var epicTagRegex = regexp.MustCompile(`(?i)\[epic\]`)
 
@@ -173,6 +186,30 @@ func stripFilePaths(text string) string {
 	return filePathRegex.ReplaceAllString(text, " ")
 }
 
+// ExtractSignalMetrics extracts quantitative signal metrics from a task description.
+// This separates metric extraction from threshold-based decisions.
+func ExtractSignalMetrics(description string) SignalMetrics {
+	// Preprocess description: strip code blocks to avoid false matches
+	cleanDescription := stripCodeBlocks(description)
+
+	// Count checkboxes
+	checkboxMatches := checkboxRegex.FindAllString(cleanDescription, -1)
+	checkboxCount := len(checkboxMatches)
+
+	// Count phases/sections
+	phaseMatches := numberedPhaseRegex.FindAllString(cleanDescription, -1)
+	phaseCount := len(phaseMatches)
+
+	// Count words
+	wordCount := len(strings.Fields(cleanDescription))
+
+	return SignalMetrics{
+		CheckboxCount: checkboxCount,
+		PhaseCount:    phaseCount,
+		WordCount:     wordCount,
+	}
+}
+
 // detectEpic checks if a task matches epic patterns.
 // Returns true if any epic indicator is found.
 func detectEpic(title, description, combined string) bool {
@@ -191,28 +228,26 @@ func detectEpic(title, description, combined string) bool {
 		return true
 	}
 
-	// Preprocess description for structural checks
-	cleanDescription := stripCodeBlocks(description)
+	// Extract signal metrics
+	metrics := ExtractSignalMetrics(description)
 
 	// Check for 5+ checkboxes (acceptance criteria)
-	checkboxMatches := checkboxRegex.FindAllString(cleanDescription, -1)
-	if len(checkboxMatches) >= 5 {
+	if metrics.CheckboxCount >= 5 {
 		return true
 	}
 
 	// Check for 3+ numbered phases/sections
-	phaseMatches := numberedPhaseRegex.FindAllString(cleanDescription, -1)
-	if len(phaseMatches) >= 3 {
+	if metrics.PhaseCount >= 3 {
 		return true
 	}
 
 	// Check for long description with structural markers
-	wordCount := len(strings.Fields(cleanDescription))
+	cleanDescription := stripCodeBlocks(description)
 	hasStructuralMarkers := strings.Contains(cleanDescription, "##") ||
 		strings.Contains(strings.ToLower(cleanDescription), "phase") ||
 		strings.Contains(strings.ToLower(cleanDescription), "stage") ||
 		strings.Contains(strings.ToLower(cleanDescription), "step")
-	if wordCount > 200 && hasStructuralMarkers {
+	if metrics.WordCount > 200 && hasStructuralMarkers {
 		return true
 	}
 
