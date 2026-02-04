@@ -349,6 +349,105 @@ func TestCountCheckboxes(t *testing.T) {
 	}
 }
 
+func TestCountPhases(t *testing.T) {
+	tests := []struct {
+		name        string
+		description string
+		expected    int
+	}{
+		{
+			name:        "no phases",
+			description: "Simple task with no phase markers",
+			expected:    0,
+		},
+		{
+			name:        "single phase",
+			description: "Phase 1: Do the thing",
+			expected:    1,
+		},
+		{
+			name: "multiple phases",
+			description: `Implementation plan:
+Phase 1: Design the database schema
+Phase 2: Implement the API layer
+Phase 3: Create the frontend components`,
+			expected: 3,
+		},
+		{
+			name: "stage markers",
+			description: `Implementation:
+Stage 1: Setup
+Stage 2: Core logic
+Stage 3: Testing`,
+			expected: 3,
+		},
+		{
+			name: "part markers",
+			description: `Part 1: Introduction
+Part 2: Implementation`,
+			expected: 2,
+		},
+		{
+			name: "milestone markers",
+			description: `Milestone 1: MVP
+Milestone 2: Beta
+Milestone 3: Release`,
+			expected: 3,
+		},
+		{
+			name: "phases with ## header prefix",
+			description: `## Phase 1: Setup
+Some content
+## Phase 2: Implementation
+More content`,
+			expected: 2,
+		},
+		{
+			name: "phases in code block ignored",
+			description: "Normal text\n```markdown\nPhase 1: This is in a code block\n```\nPhase 1: This is real",
+			expected:    1,
+		},
+		{
+			name:        "empty description",
+			description: "",
+			expected:    0,
+		},
+		{
+			name: "phases in multiple code blocks",
+			description: "```\nPhase 1: fake1\n```\nPhase 1: real\n~~~\nPhase 2: fake2\n~~~",
+			expected:    1,
+		},
+		{
+			name: "mixed phase and stage",
+			description: `Phase 1: Design
+Stage 2: Build
+Phase 3: Test`,
+			expected: 3,
+		},
+		{
+			name:        "numbered list not matching",
+			description: "1. First item\n2. Second item\n3. Third item",
+			expected:    0,
+		},
+		{
+			name: "case insensitive",
+			description: `PHASE 1: Setup
+phase 2: Build
+Phase 3: Deploy`,
+			expected: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CountPhases(tt.description)
+			if got != tt.expected {
+				t.Errorf("CountPhases() = %d, want %d", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestComplexity_String(t *testing.T) {
 	tests := []struct {
 		complexity Complexity

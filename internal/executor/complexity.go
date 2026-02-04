@@ -181,6 +181,14 @@ func CountCheckboxes(description string) int {
 	return len(matches)
 }
 
+// CountPhases strips code blocks from the description and returns
+// the count of explicit phase markers (Phase 1, Stage 2, etc.) found.
+func CountPhases(description string) int {
+	cleanDescription := stripCodeBlocks(description)
+	matches := numberedPhaseRegex.FindAllString(cleanDescription, -1)
+	return len(matches)
+}
+
 // detectEpic checks if a task matches epic patterns.
 // Returns true if any epic indicator is found.
 func detectEpic(title, description, combined string) bool {
@@ -204,14 +212,13 @@ func detectEpic(title, description, combined string) bool {
 		return true
 	}
 
-	// Preprocess description for structural checks
-	cleanDescription := stripCodeBlocks(description)
-
 	// Check for 3+ numbered phases/sections
-	phaseMatches := numberedPhaseRegex.FindAllString(cleanDescription, -1)
-	if len(phaseMatches) >= 3 {
+	if CountPhases(description) >= 3 {
 		return true
 	}
+
+	// Preprocess description for structural checks
+	cleanDescription := stripCodeBlocks(description)
 
 	// Check for long description with structural markers
 	wordCount := len(strings.Fields(cleanDescription))
