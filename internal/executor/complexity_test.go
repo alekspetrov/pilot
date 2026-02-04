@@ -306,3 +306,270 @@ func TestComplexity_String(t *testing.T) {
 		})
 	}
 }
+
+func TestCollectSignalMetrics(t *testing.T) {
+	tests := []struct {
+		name     string
+		task     *Task
+		expected SignalMetrics
+	}{
+		{
+			name: "nil task returns empty metrics",
+			task: nil,
+			expected: SignalMetrics{
+				CheckboxCount:        0,
+				PhaseCount:           0,
+				WordCount:            0,
+				HasEpicTag:           false,
+				HasEpicKeywords:      false,
+				HasStructuralMarkers: false,
+			},
+		},
+		{
+			name: "empty task returns empty metrics",
+			task: &Task{},
+			expected: SignalMetrics{
+				CheckboxCount:        0,
+				PhaseCount:           0,
+				WordCount:            0,
+				HasEpicTag:           false,
+				HasEpicKeywords:      false,
+				HasStructuralMarkers: false,
+			},
+		},
+		{
+			name: "epic tag in title",
+			task: &Task{Title: "[epic] Implement new auth", Description: "Some description"},
+			expected: SignalMetrics{
+				CheckboxCount:        0,
+				PhaseCount:           0,
+				WordCount:            2,
+				HasEpicTag:           true,
+				HasEpicKeywords:      true, // "epic" keyword also found in combined text
+				HasStructuralMarkers: false,
+			},
+		},
+		{
+			name: "epic keyword in description",
+			task: &Task{Description: "This is an epic task spanning sprints"},
+			expected: SignalMetrics{
+				CheckboxCount:        0,
+				PhaseCount:           0,
+				WordCount:            7,
+				HasEpicTag:           false,
+				HasEpicKeywords:      true,
+				HasStructuralMarkers: false,
+			},
+		},
+		{
+			name: "checkboxes counted",
+			task: &Task{Description: `Tasks:
+- [ ] First task
+- [ ] Second task
+- [x] Third task done
+- [ ] Fourth task`},
+			expected: SignalMetrics{
+				CheckboxCount:        4,
+				PhaseCount:           0,
+				WordCount:            21, // includes all words in description
+				HasEpicTag:           false,
+				HasEpicKeywords:      false,
+				HasStructuralMarkers: false,
+			},
+		},
+		{
+			name: "phases counted",
+			task: &Task{Description: `Plan:
+Phase 1: Setup
+Phase 2: Implementation
+Phase 3: Testing`},
+			expected: SignalMetrics{
+				CheckboxCount:        0,
+				PhaseCount:           3,
+				WordCount:            10, // "Plan:", "Phase", "1:", "Setup", etc.
+				HasEpicTag:           false,
+				HasEpicKeywords:      false,
+				HasStructuralMarkers: true,
+			},
+		},
+		{
+			name: "structural markers detected",
+			task: &Task{Description: "## Overview\nThis is a phased approach with multiple steps"},
+			expected: SignalMetrics{
+				CheckboxCount:        0,
+				PhaseCount:           0,
+				WordCount:            10, // "##" counts as a word too
+				HasEpicTag:           false,
+				HasEpicKeywords:      false,
+				HasStructuralMarkers: true,
+			},
+		},
+		{
+			name: "trivial pattern matched",
+			task: &Task{Description: "Fix typo in the documentation"},
+			expected: SignalMetrics{
+				CheckboxCount:         0,
+				PhaseCount:            0,
+				WordCount:             5,
+				HasEpicTag:            false,
+				HasEpicKeywords:       false,
+				HasStructuralMarkers:  false,
+				MatchedTrivialPattern: "fix typo",
+			},
+		},
+		{
+			name: "simple pattern matched",
+			task: &Task{Description: "Add field to user struct"},
+			expected: SignalMetrics{
+				CheckboxCount:        0,
+				PhaseCount:           0,
+				WordCount:            5,
+				HasEpicTag:           false,
+				HasEpicKeywords:      false,
+				HasStructuralMarkers: false,
+				MatchedSimplePattern: "add field",
+			},
+		},
+		{
+			name: "complex pattern matched",
+			task: &Task{Description: "Refactor the authentication system"},
+			expected: SignalMetrics{
+				CheckboxCount:         0,
+				PhaseCount:            0,
+				WordCount:             4,
+				HasEpicTag:            false,
+				HasEpicKeywords:       false,
+				HasStructuralMarkers:  false,
+				MatchedComplexPattern: "refactor",
+			},
+		},
+		{
+			name: "code blocks excluded from word count",
+			task: &Task{Description: "Add this:\n```go\nfunc main() {\n    fmt.Println(\"hello\")\n}\n```\nDone"},
+			expected: SignalMetrics{
+				CheckboxCount:        0,
+				PhaseCount:           0,
+				WordCount:            3, // "Add this:" and "Done" only
+				HasEpicTag:           false,
+				HasEpicKeywords:      false,
+				HasStructuralMarkers: false,
+			},
+		},
+		{
+			name: "multiple patterns can match",
+			task: &Task{Description: "Fix typo and add field during refactor"},
+			expected: SignalMetrics{
+				CheckboxCount:         0,
+				PhaseCount:            0,
+				WordCount:             7,
+				HasEpicTag:            false,
+				HasEpicKeywords:       false,
+				HasStructuralMarkers:  false,
+				MatchedTrivialPattern: "fix typo", // matches "fix typo" pattern
+				MatchedSimplePattern:  "add field",
+				MatchedComplexPattern: "refactor",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CollectSignalMetrics(tt.task)
+
+			if got.CheckboxCount != tt.expected.CheckboxCount {
+				t.Errorf("CheckboxCount = %v, want %v", got.CheckboxCount, tt.expected.CheckboxCount)
+			}
+			if got.PhaseCount != tt.expected.PhaseCount {
+				t.Errorf("PhaseCount = %v, want %v", got.PhaseCount, tt.expected.PhaseCount)
+			}
+			if got.WordCount != tt.expected.WordCount {
+				t.Errorf("WordCount = %v, want %v", got.WordCount, tt.expected.WordCount)
+			}
+			if got.HasEpicTag != tt.expected.HasEpicTag {
+				t.Errorf("HasEpicTag = %v, want %v", got.HasEpicTag, tt.expected.HasEpicTag)
+			}
+			if got.HasEpicKeywords != tt.expected.HasEpicKeywords {
+				t.Errorf("HasEpicKeywords = %v, want %v", got.HasEpicKeywords, tt.expected.HasEpicKeywords)
+			}
+			if got.HasStructuralMarkers != tt.expected.HasStructuralMarkers {
+				t.Errorf("HasStructuralMarkers = %v, want %v", got.HasStructuralMarkers, tt.expected.HasStructuralMarkers)
+			}
+			if got.MatchedTrivialPattern != tt.expected.MatchedTrivialPattern {
+				t.Errorf("MatchedTrivialPattern = %v, want %v", got.MatchedTrivialPattern, tt.expected.MatchedTrivialPattern)
+			}
+			if got.MatchedSimplePattern != tt.expected.MatchedSimplePattern {
+				t.Errorf("MatchedSimplePattern = %v, want %v", got.MatchedSimplePattern, tt.expected.MatchedSimplePattern)
+			}
+			if got.MatchedComplexPattern != tt.expected.MatchedComplexPattern {
+				t.Errorf("MatchedComplexPattern = %v, want %v", got.MatchedComplexPattern, tt.expected.MatchedComplexPattern)
+			}
+		})
+	}
+}
+
+func TestSignalMetrics_IsEpicSignal(t *testing.T) {
+	tests := []struct {
+		name     string
+		metrics  SignalMetrics
+		expected bool
+	}{
+		{
+			name:     "empty metrics is not epic",
+			metrics:  SignalMetrics{},
+			expected: false,
+		},
+		{
+			name:     "epic tag is epic",
+			metrics:  SignalMetrics{HasEpicTag: true},
+			expected: true,
+		},
+		{
+			name:     "epic keywords is epic",
+			metrics:  SignalMetrics{HasEpicKeywords: true},
+			expected: true,
+		},
+		{
+			name:     "5+ checkboxes is epic",
+			metrics:  SignalMetrics{CheckboxCount: 5},
+			expected: true,
+		},
+		{
+			name:     "4 checkboxes is not epic",
+			metrics:  SignalMetrics{CheckboxCount: 4},
+			expected: false,
+		},
+		{
+			name:     "3+ phases is epic",
+			metrics:  SignalMetrics{PhaseCount: 3},
+			expected: true,
+		},
+		{
+			name:     "2 phases is not epic",
+			metrics:  SignalMetrics{PhaseCount: 2},
+			expected: false,
+		},
+		{
+			name:     "200+ words with structural markers is epic",
+			metrics:  SignalMetrics{WordCount: 201, HasStructuralMarkers: true},
+			expected: true,
+		},
+		{
+			name:     "200+ words without structural markers is not epic",
+			metrics:  SignalMetrics{WordCount: 201, HasStructuralMarkers: false},
+			expected: false,
+		},
+		{
+			name:     "structural markers with fewer words is not epic",
+			metrics:  SignalMetrics{WordCount: 50, HasStructuralMarkers: true},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.metrics.IsEpicSignal(); got != tt.expected {
+				t.Errorf("IsEpicSignal() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}

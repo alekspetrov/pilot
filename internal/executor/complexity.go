@@ -250,3 +250,123 @@ func (c Complexity) ShouldRunResearch() bool {
 func (c Complexity) IsEpic() bool {
 	return c == ComplexityEpic
 }
+
+// SignalMetrics holds all extracted signal metrics from task analysis.
+// These metrics provide visibility into WHY a task was classified at a given complexity level.
+type SignalMetrics struct {
+	// CheckboxCount is the number of markdown checkboxes (- [ ] or - [x]) found.
+	CheckboxCount int `json:"checkbox_count"`
+
+	// PhaseCount is the number of explicit phase/stage markers found.
+	PhaseCount int `json:"phase_count"`
+
+	// WordCount is the number of words in the description (excluding code blocks).
+	WordCount int `json:"word_count"`
+
+	// HasEpicTag is true if [epic] tag is present in the title.
+	HasEpicTag bool `json:"has_epic_tag"`
+
+	// HasEpicKeywords is true if epic-related keywords are found (epic, roadmap, multi-phase, milestone).
+	HasEpicKeywords bool `json:"has_epic_keywords"`
+
+	// HasStructuralMarkers is true if structural markers (##, phase, stage, step) are present.
+	HasStructuralMarkers bool `json:"has_structural_markers"`
+
+	// MatchedTrivialPattern is the trivial pattern that matched, if any.
+	MatchedTrivialPattern string `json:"matched_trivial_pattern,omitempty"`
+
+	// MatchedSimplePattern is the simple pattern that matched, if any.
+	MatchedSimplePattern string `json:"matched_simple_pattern,omitempty"`
+
+	// MatchedComplexPattern is the complex pattern that matched, if any.
+	MatchedComplexPattern string `json:"matched_complex_pattern,omitempty"`
+}
+
+// CollectSignalMetrics analyzes a task and extracts all signal metrics.
+// This provides detailed visibility into the signals used for complexity detection.
+func CollectSignalMetrics(task *Task) SignalMetrics {
+	metrics := SignalMetrics{}
+
+	if task == nil {
+		return metrics
+	}
+
+	desc := strings.ToLower(task.Description)
+	title := strings.ToLower(task.Title)
+	combined := desc + " " + title
+
+	// Check for [epic] tag in title
+	metrics.HasEpicTag = epicTagRegex.MatchString(task.Title)
+
+	// Preprocess: strip code blocks and file paths to avoid false matches
+	cleanCombined := stripCodeBlocks(combined)
+	cleanCombined = stripFilePaths(cleanCombined)
+
+	// Check for epic keywords
+	metrics.HasEpicKeywords = wordBoundaryEpicRegex.MatchString(cleanCombined)
+
+	// Preprocess description for structural checks
+	cleanDescription := stripCodeBlocks(task.Description)
+
+	// Count checkboxes
+	checkboxMatches := checkboxRegex.FindAllString(cleanDescription, -1)
+	metrics.CheckboxCount = len(checkboxMatches)
+
+	// Count numbered phases/sections
+	phaseMatches := numberedPhaseRegex.FindAllString(cleanDescription, -1)
+	metrics.PhaseCount = len(phaseMatches)
+
+	// Count words (excluding code blocks)
+	metrics.WordCount = len(strings.Fields(stripCodeBlocks(desc)))
+
+	// Check structural markers
+	lowerCleanDesc := strings.ToLower(cleanDescription)
+	metrics.HasStructuralMarkers = strings.Contains(cleanDescription, "##") ||
+		strings.Contains(lowerCleanDesc, "phase") ||
+		strings.Contains(lowerCleanDesc, "stage") ||
+		strings.Contains(lowerCleanDesc, "step")
+
+	// Check pattern matches
+	for _, pattern := range trivialPatterns {
+		if strings.Contains(combined, pattern) {
+			metrics.MatchedTrivialPattern = pattern
+			break
+		}
+	}
+
+	for _, pattern := range simplePatterns {
+		if strings.Contains(combined, pattern) {
+			metrics.MatchedSimplePattern = pattern
+			break
+		}
+	}
+
+	for _, pattern := range complexPatterns {
+		if strings.Contains(combined, pattern) {
+			metrics.MatchedComplexPattern = pattern
+			break
+		}
+	}
+
+	return metrics
+}
+
+// IsEpicSignal returns true if the metrics indicate an epic-level task.
+func (m SignalMetrics) IsEpicSignal() bool {
+	if m.HasEpicTag {
+		return true
+	}
+	if m.HasEpicKeywords {
+		return true
+	}
+	if m.CheckboxCount >= 5 {
+		return true
+	}
+	if m.PhaseCount >= 3 {
+		return true
+	}
+	if m.WordCount > 200 && m.HasStructuralMarkers {
+		return true
+	}
+	return false
+}
