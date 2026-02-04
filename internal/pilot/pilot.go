@@ -45,6 +45,7 @@ type Pilot struct {
 	telegramHandler    *telegram.Handler // Telegram polling handler (GH-349)
 	telegramRunner     *executor.Runner  // Runner for Telegram tasks (GH-349)
 	githubPoller       *github.Poller    // GitHub polling handler (GH-350)
+	linearPollers      []*linear.Poller  // Linear polling handlers (GH-393)
 	alertEngine        *alerts.Engine
 	store              *memory.Store
 	graph              *memory.KnowledgeGraph
@@ -114,6 +115,14 @@ func WithTelegramHandler(runner *executor.Runner, projectPath string) Option {
 func WithGitHubPoller(poller *github.Poller) Option {
 	return func(p *Pilot) {
 		p.githubPoller = poller
+	}
+}
+
+// WithLinearPollers enables Linear polling in gateway mode (GH-393)
+// The pollers are created externally with all necessary options and passed in.
+func WithLinearPollers(pollers []*linear.Poller) Option {
+	return func(p *Pilot) {
+		p.linearPollers = pollers
 	}
 }
 
@@ -406,6 +415,21 @@ func (p *Pilot) Start() error {
 	if p.githubPoller != nil {
 		go p.githubPoller.Start(p.ctx)
 		logging.WithComponent("pilot").Info("GitHub polling started in gateway mode")
+	}
+
+	// Start Linear polling if pollers are initialized (GH-393)
+	for _, linearPoller := range p.linearPollers {
+		poller := linearPoller // capture for goroutine
+		go func() {
+			if err := poller.Start(p.ctx); err != nil && err != context.Canceled {
+				logging.WithComponent("pilot").Error("Linear poller failed",
+					slog.Any("error", err))
+			}
+		}()
+	}
+	if len(p.linearPollers) > 0 {
+		logging.WithComponent("pilot").Info("Linear polling started in gateway mode",
+			slog.Int("pollers", len(p.linearPollers)))
 	}
 
 	logging.WithComponent("pilot").Info("Pilot started",

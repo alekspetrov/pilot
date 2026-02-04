@@ -1,5 +1,7 @@
 package linear
 
+import "time"
+
 // Config holds Linear adapter configuration
 type Config struct {
 	Enabled    bool               `yaml:"enabled"`
@@ -11,6 +13,15 @@ type Config struct {
 	AutoAssign bool     `yaml:"auto_assign"`
 	PilotLabel string   `yaml:"pilot_label,omitempty"`
 	ProjectIDs []string `yaml:"project_ids,omitempty"` // Filter issues by project ID(s)
+
+	// Polling configuration
+	Polling *PollingConfig `yaml:"polling,omitempty"`
+}
+
+// PollingConfig holds Linear polling configuration
+type PollingConfig struct {
+	Enabled  bool          `yaml:"enabled"`
+	Interval time.Duration `yaml:"interval"`
 }
 
 // WorkspaceConfig holds configuration for a single Linear workspace
@@ -22,6 +33,9 @@ type WorkspaceConfig struct {
 	ProjectIDs []string `yaml:"project_ids,omitempty"`
 	Projects   []string `yaml:"projects"` // Pilot project names
 	AutoAssign bool     `yaml:"auto_assign"`
+
+	// Polling configuration (inherits from parent if not set)
+	Polling *PollingConfig `yaml:"polling,omitempty"`
 }
 
 // GetWorkspaces returns all configured workspaces.
@@ -98,7 +112,39 @@ func DefaultConfig() *Config {
 		Enabled:    false,
 		PilotLabel: "pilot",
 		AutoAssign: true,
+		Polling: &PollingConfig{
+			Enabled:  true,
+			Interval: 30 * time.Second,
+		},
 	}
+}
+
+// GetPollingInterval returns the polling interval for a workspace
+func (c *WorkspaceConfig) GetPollingInterval(parentConfig *Config) time.Duration {
+	// Workspace-specific polling config takes precedence
+	if c.Polling != nil && c.Polling.Interval > 0 {
+		return c.Polling.Interval
+	}
+	// Fall back to parent config
+	if parentConfig != nil && parentConfig.Polling != nil && parentConfig.Polling.Interval > 0 {
+		return parentConfig.Polling.Interval
+	}
+	// Default to 30 seconds
+	return 30 * time.Second
+}
+
+// IsPollingEnabled returns whether polling is enabled for a workspace
+func (c *WorkspaceConfig) IsPollingEnabled(parentConfig *Config) bool {
+	// Workspace-specific polling config takes precedence
+	if c.Polling != nil {
+		return c.Polling.Enabled
+	}
+	// Fall back to parent config
+	if parentConfig != nil && parentConfig.Polling != nil {
+		return parentConfig.Polling.Enabled
+	}
+	// Default to enabled
+	return true
 }
 
 // Priority levels
