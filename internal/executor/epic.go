@@ -53,8 +53,8 @@ type CreatedIssue struct {
 	Subtask PlannedSubtask
 }
 
-// numberedListRegex matches numbered patterns: "1. ", "1) ", "Step 1:", "Phase 1:", "**1.", etc.
-// Allows optional markdown bold markers (**) before the number.
+// Deprecated: numberedListRegex is used by the legacy parseSubtasks fallback.
+// Primary parsing is now handled by SubtaskParser via the Haiku API.
 var numberedListRegex = regexp.MustCompile(`(?mi)^(?:\s*)(?:\*{0,2})(?:step|phase|task)?\s*(\d+)[.):]\s*(.+)`)
 
 // PlanEpic runs Claude Code in planning mode to break an epic into subtasks.
@@ -99,10 +99,10 @@ func (r *Runner) PlanEpic(ctx context.Context, task *Task) (*EpicPlan, error) {
 		return nil, fmt.Errorf("claude planning returned empty output")
 	}
 
-	// Parse subtasks from output
-	subtasks := parseSubtasks(output)
-	if len(subtasks) == 0 {
-		return nil, fmt.Errorf("no subtasks found in planning output")
+	// Try structured parsing via Haiku API first, fall back to regex
+	subtasks, err := r.parseSubtasksWithFallback(ctx, output)
+	if err != nil {
+		return nil, err
 	}
 
 	return &EpicPlan{
@@ -141,6 +141,35 @@ func buildPlanningPrompt(task *Task) string {
 	return sb.String()
 }
 
+// parseSubtasksWithFallback attempts structured parsing via Haiku API, falling back
+// to regex-based parseSubtasks if the API call fails (no key, timeout, API error).
+func (r *Runner) parseSubtasksWithFallback(ctx context.Context, output string) ([]PlannedSubtask, error) {
+	// Try SubtaskParser (Haiku API) first
+	parser, err := NewSubtaskParser("")
+	if err != nil {
+		r.log.Warn("SubtaskParser unavailable, using regex fallback", "error", err)
+	} else {
+		subtasks, err := parser.Parse(ctx, output)
+		if err != nil {
+			r.log.Warn("SubtaskParser failed, using regex fallback", "error", err)
+		} else if len(subtasks) > 0 {
+			r.log.Info("Parsed subtasks via Haiku API", "count", len(subtasks))
+			return subtasks, nil
+		}
+	}
+
+	// Fallback to regex-based parsing
+	subtasks := parseSubtasks(output)
+	if len(subtasks) == 0 {
+		return nil, fmt.Errorf("no subtasks found in planning output")
+	}
+	r.log.Info("Parsed subtasks via regex fallback", "count", len(subtasks))
+	return subtasks, nil
+}
+
+// Deprecated: parseSubtasks is the legacy regex-based parser. Use SubtaskParser.Parse() instead.
+// Retained as fallback for when the Haiku API is unavailable.
+//
 // parseSubtasks extracts subtasks from Claude's planning output.
 // Looks for numbered patterns: "1. Title - Description" or "Step 1: Title"
 func parseSubtasks(output string) []PlannedSubtask {
