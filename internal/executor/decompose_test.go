@@ -9,8 +9,8 @@ import (
 func TestDecomposeConfig_Defaults(t *testing.T) {
 	config := DefaultDecomposeConfig()
 
-	if config.Enabled {
-		t.Error("Expected Enabled to be false by default")
+	if !config.Enabled {
+		t.Error("Expected Enabled to be true by default")
 	}
 	if config.MinComplexity != "complex" {
 		t.Errorf("Expected MinComplexity to be 'complex', got %q", config.MinComplexity)

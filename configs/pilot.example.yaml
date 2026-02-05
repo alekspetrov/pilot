@@ -130,6 +130,14 @@ executor:
   #   medium: "high"             # Standard (default behavior)
   #   complex: "max"             # Deepest reasoning (Opus 4.6 only)
 
+  # Auto-decomposition of complex tasks into subtasks (GH-218)
+  # Enabled by default — complex tasks with 50+ word descriptions are split into subtasks
+  decompose:
+    enabled: true                  # Set to false to disable auto-decomposition
+    min_complexity: "complex"      # Only decompose complex tasks
+    max_subtasks: 5                # Maximum subtasks per decomposition (range: 2-10)
+    min_description_words: 50      # Minimum description length to trigger decomposition
+
 # Daily briefs configuration
 briefs:
   enabled: false
