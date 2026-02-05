@@ -181,18 +181,13 @@ func (p *SubtaskParser) Parse(ctx context.Context, planningOutput string) ([]Pla
 	}
 
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("Haiku returned empty subtask array")
+		return nil, fmt.Errorf("haiku returned empty subtask array")
 	}
 
 	// Convert to PlannedSubtask
 	subtasks := make([]PlannedSubtask, len(raw))
 	for i, r := range raw {
-		subtasks[i] = PlannedSubtask{
-			Title:       r.Title,
-			Description: r.Description,
-			Order:       r.Order,
-			DependsOn:   r.DependsOn,
-		}
+		subtasks[i] = PlannedSubtask(r)
 	}
 
 	return subtasks, nil
