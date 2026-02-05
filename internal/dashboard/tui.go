@@ -1123,25 +1123,6 @@ func (m Model) renderMetricsCards() string {
 		m.renderTokenCard(), gap, m.renderCostCard(), gap, m.renderTaskCard())
 }
 
-// formatNumber formats an integer with comma separators
-func formatNumber(n int) string {
-	if n == 0 {
-		return "0"
-	}
-
-	str := fmt.Sprintf("%d", n)
-	var result strings.Builder
-
-	for i, c := range str {
-		if i > 0 && (len(str)-i)%3 == 0 {
-			result.WriteRune(',')
-		}
-		result.WriteRune(c)
-	}
-
-	return result.String()
-}
-
 // renderTasks renders the tasks list
 func (m Model) renderTasks() string {
 	var content strings.Builder
