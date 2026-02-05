@@ -291,13 +291,9 @@ func TestHaikuParserRequestBody(t *testing.T) {
 		t.Error("system prompt is missing")
 	}
 
-	// Verify effort = "low"
-	outputConfig, ok := receivedBody["output_config"].(map[string]interface{})
-	if !ok {
-		t.Fatal("output_config missing")
-	}
-	if outputConfig["effort"] != "low" {
-		t.Errorf("effort = %v, want low", outputConfig["effort"])
+	// Verify output_config is NOT sent (not supported on Haiku)
+	if _, ok := receivedBody["output_config"]; ok {
+		t.Error("output_config should not be sent for Haiku model")
 	}
 
 	// Verify messages

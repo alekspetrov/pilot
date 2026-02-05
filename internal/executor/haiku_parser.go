@@ -70,22 +70,16 @@ func NewSubtaskParser(configAPIKey string) (*SubtaskParser, error) {
 
 // haikuRequest is the Anthropic Messages API request body.
 type haikuRequest struct {
-	Model        string            `json:"model"`
-	MaxTokens    int               `json:"max_tokens"`
-	System       string            `json:"system"`
-	Messages     []haikuMessage    `json:"messages"`
-	OutputConfig haikuOutputConfig `json:"output_config"`
+	Model     string         `json:"model"`
+	MaxTokens int            `json:"max_tokens"`
+	System    string         `json:"system"`
+	Messages  []haikuMessage `json:"messages"`
 }
 
 // haikuMessage is a single message in the Anthropic API request.
 type haikuMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
-}
-
-// haikuOutputConfig controls output effort level.
-type haikuOutputConfig struct {
-	Effort string `json:"effort"`
 }
 
 // haikuResponse is the Anthropic Messages API response body.
@@ -122,7 +116,6 @@ func (p *SubtaskParser) Parse(ctx context.Context, planningOutput string) ([]Pla
 		Messages: []haikuMessage{
 			{Role: "user", Content: planningOutput},
 		},
-		OutputConfig: haikuOutputConfig{Effort: "low"},
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
