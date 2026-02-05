@@ -99,8 +99,26 @@ func (r *Runner) PlanEpic(ctx context.Context, task *Task) (*EpicPlan, error) {
 		return nil, fmt.Errorf("claude planning returned empty output")
 	}
 
-	// Parse subtasks from output
-	subtasks := parseSubtasks(output)
+	// Parse subtasks from output using Haiku (primary) with regex fallback
+	var subtasks []PlannedSubtask
+	parser := NewSubtaskParser(r.log)
+	if parser != nil {
+		parsed, err := parser.Parse(ctx, output)
+		if err != nil {
+			r.log.Warn("SubtaskParser failed, falling back to regex",
+				"task_id", task.ID,
+				"error", err,
+			)
+			subtasks = parseSubtasks(output)
+		} else {
+			subtasks = parsed
+		}
+	} else {
+		r.log.Warn("SubtaskParser unavailable (no ANTHROPIC_API_KEY), using regex fallback",
+			"task_id", task.ID,
+		)
+		subtasks = parseSubtasks(output)
+	}
 	if len(subtasks) == 0 {
 		return nil, fmt.Errorf("no subtasks found in planning output")
 	}
@@ -141,8 +159,9 @@ func buildPlanningPrompt(task *Task) string {
 	return sb.String()
 }
 
-// parseSubtasks extracts subtasks from Claude's planning output.
-// Looks for numbered patterns: "1. Title - Description" or "Step 1: Title"
+// Deprecated: parseSubtasks uses regex to extract subtasks from planning output.
+// Use SubtaskParser.Parse() instead, which uses Claude Haiku for structured extraction.
+// This function is retained as a fallback when the Anthropic API is unavailable.
 func parseSubtasks(output string) []PlannedSubtask {
 	var subtasks []PlannedSubtask
 	seenOrders := make(map[int]bool)
