@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -648,3 +650,77 @@ func TestParseIssueNumber(t *testing.T) {
 	}
 }
 
+func TestPlanEpicFallbackOnHaiku500(t *testing.T) {
+	// Integration test: when the Haiku API returns 500, PlanEpic should
+	// fall back to regex parsing and still return valid subtasks.
+	tmpDir := t.TempDir()
+
+	planOutput := `Here's the implementation plan:
+
+1. **Add config validation** - Validate all required fields on startup
+2. **Implement retry logic** - Exponential backoff for transient failures
+3. **Write unit tests** - Cover validation and retry edge cases`
+
+	mockCmd := writeMockScript(t, tmpDir, planOutput, 0)
+
+	// Mock Haiku API server that always returns 500
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	parser := newSubtaskParserWithURL("test-api-key", server.URL, log)
+
+	runner := &Runner{
+		config: &BackendConfig{
+			ClaudeCode: &ClaudeCodeConfig{
+				Command: mockCmd,
+			},
+		},
+		running:           make(map[string]*exec.Cmd),
+		progressCallbacks: make(map[string]ProgressCallback),
+		tokenCallbacks:    make(map[string]TokenCallback),
+		log:               log,
+		modelRouter:       NewModelRouter(nil, nil),
+		subtaskParser:     parser,
+	}
+
+	task := &Task{
+		ID:          "GH-524",
+		Title:       "[epic] Integrate SubtaskParser into PlanEpic",
+		Description: "Haiku API fails, regex should take over",
+		ProjectPath: tmpDir,
+	}
+
+	plan, err := runner.PlanEpic(context.Background(), task)
+	if err != nil {
+		t.Fatalf("PlanEpic should succeed via regex fallback, got error: %v", err)
+	}
+
+	if plan == nil {
+		t.Fatal("PlanEpic returned nil plan")
+	}
+
+	// Verify subtasks came from regex fallback (3 items from the numbered list)
+	if len(plan.Subtasks) != 3 {
+		t.Fatalf("expected 3 subtasks from regex fallback, got %d", len(plan.Subtasks))
+	}
+
+	expectedTitles := []string{
+		"Add config validation",
+		"Implement retry logic",
+		"Write unit tests",
+	}
+	for i, want := range expectedTitles {
+		if plan.Subtasks[i].Title != want {
+			t.Errorf("subtask %d: title = %q, want %q", i, plan.Subtasks[i].Title, want)
+		}
+		if plan.Subtasks[i].Order != i+1 {
+			t.Errorf("subtask %d: order = %d, want %d", i, plan.Subtasks[i].Order, i+1)
+		}
+		if plan.Subtasks[i].Description == "" {
+			t.Errorf("subtask %d: description should not be empty", i)
+		}
+	}
+}

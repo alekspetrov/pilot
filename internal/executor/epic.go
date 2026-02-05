@@ -142,6 +142,8 @@ func buildPlanningPrompt(task *Task) string {
 	return sb.String()
 }
 
+// Deprecated: parseSubtasks is the regex-only fallback parser. Use SubtaskParser.Parse
+// for structured Haiku API extraction with automatic regex fallback via parseSubtasksWithFallback.
 // parseSubtasks extracts subtasks from Claude's planning output.
 // Looks for numbered patterns: "1. Title - Description" or "Step 1: Title"
 func parseSubtasks(output string) []PlannedSubtask {
