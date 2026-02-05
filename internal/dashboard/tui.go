@@ -959,22 +959,28 @@ func normalizeToSparkline(values []float64, width int) []int {
 	}
 
 	span := maxVal - minVal
-	for i, v := range values {
-		if span == 0 {
-			// All values identical → place at midpoint
-			result[offset+i] = 4
-		} else {
-			// Scale to 0-8
-			normalized := (v - minVal) / span * 8
-			level := int(math.Round(normalized))
-			if level < 0 {
-				level = 0
-			}
-			if level > 8 {
-				level = 8
-			}
+	if span == 0 {
+		level := 1 // baseline for all-zero
+		if values[0] > 0 {
+			level = 4 // midpoint for uniform non-zero
+		}
+		for i := range values {
 			result[offset+i] = level
 		}
+		return result
+	}
+
+	for i, v := range values {
+		// Scale to 1-8, keeping 0 reserved for padding
+		normalized := (v - minVal) / span * 7
+		level := int(math.Round(normalized)) + 1
+		if v == 0 {
+			level = 1 // visible baseline
+		}
+		if level > 8 {
+			level = 8
+		}
+		result[offset+i] = level
 	}
 
 	return result
