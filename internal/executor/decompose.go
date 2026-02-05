@@ -28,7 +28,7 @@ type DecomposeConfig struct {
 // DefaultDecomposeConfig returns default decomposition settings.
 func DefaultDecomposeConfig() *DecomposeConfig {
 	return &DecomposeConfig{
-		Enabled:             false, // Disabled by default, opt-in
+		Enabled:             true, // Enabled by default
 		MinComplexity:       "complex",
 		MaxSubtasks:         5,
 		MinDescriptionWords: 50,
