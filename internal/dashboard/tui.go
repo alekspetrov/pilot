@@ -25,9 +25,9 @@ const (
 
 // Metrics card dimensions
 const (
-	cardWidth      = 21 // 21*3 + 3*2 = 69 = panelTotalWidth
+	cardWidth      = 21 // 21*3 + 1*2 = 65 ≤ panelTotalWidth
 	cardInnerWidth = 17 // cardWidth - 4 (border + padding)
-	cardGap        = 3  // space between cards
+	cardGap        = 1  // space between cards
 )
 
 // sparkBlocks maps normalized levels (0-8) to Unicode block elements for sparkline rendering.
