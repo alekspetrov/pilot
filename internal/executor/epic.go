@@ -55,6 +55,7 @@ type CreatedIssue struct {
 
 // numberedListRegex matches numbered patterns: "1. ", "1) ", "Step 1:", "Phase 1:", "**1.", etc.
 // Allows optional markdown bold markers (**) before the number.
+// Used by the deprecated parseSubtasks function; prefer SubtaskParser for new code.
 var numberedListRegex = regexp.MustCompile(`(?mi)^(?:\s*)(?:\*{0,2})(?:step|phase|task)?\s*(\d+)[.):]\s*(.+)`)
 
 // PlanEpic runs Claude Code in planning mode to break an epic into subtasks.
@@ -141,6 +142,7 @@ func buildPlanningPrompt(task *Task) string {
 	return sb.String()
 }
 
+// Deprecated: use SubtaskParser.Parse instead.
 // parseSubtasks extracts subtasks from Claude's planning output.
 // Looks for numbered patterns: "1. Title - Description" or "Step 1: Title"
 func parseSubtasks(output string) []PlannedSubtask {
