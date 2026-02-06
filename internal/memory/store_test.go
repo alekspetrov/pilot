@@ -797,3 +797,77 @@ func TestGetCrossPatternsForProject(t *testing.T) {
 		})
 	}
 }
+
+func TestGetLifetimeTokens(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "pilot-test-*")
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, err := NewStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Empty table should return zeros
+	lt, err := store.GetLifetimeTokens()
+	if err != nil {
+		t.Fatalf("GetLifetimeTokens (empty): %v", err)
+	}
+	if lt.TotalTokens != 0 || lt.TotalCostUSD != 0 {
+		t.Errorf("empty: want zeros, got tokens=%d cost=%.4f", lt.TotalTokens, lt.TotalCostUSD)
+	}
+
+	// Insert executions with token data
+	execs := []struct {
+		id     string
+		input  int64
+		output int64
+		cost   float64
+	}{
+		{"exec-lt-1", 1000, 500, 0.05},
+		{"exec-lt-2", 2000, 1000, 0.10},
+		{"exec-lt-3", 3000, 1500, 0.15},
+	}
+	for _, e := range execs {
+		if err := store.SaveExecution(&Execution{
+			ID:          e.id,
+			TaskID:      "TASK-" + e.id,
+			ProjectPath: "/test",
+			Status:      "completed",
+		}); err != nil {
+			t.Fatalf("SaveExecution %s: %v", e.id, err)
+		}
+		if err := store.SaveExecutionMetrics(&ExecutionMetrics{
+			ExecutionID:      e.id,
+			TokensInput:      e.input,
+			TokensOutput:     e.output,
+			TokensTotal:      e.input + e.output,
+			EstimatedCostUSD: e.cost,
+		}); err != nil {
+			t.Fatalf("SaveExecutionMetrics %s: %v", e.id, err)
+		}
+	}
+
+	lt, err = store.GetLifetimeTokens()
+	if err != nil {
+		t.Fatalf("GetLifetimeTokens: %v", err)
+	}
+
+	wantInput := int64(6000)
+	wantOutput := int64(3000)
+	wantTotal := int64(9000)
+	wantCost := 0.30
+
+	if lt.InputTokens != wantInput {
+		t.Errorf("InputTokens = %d, want %d", lt.InputTokens, wantInput)
+	}
+	if lt.OutputTokens != wantOutput {
+		t.Errorf("OutputTokens = %d, want %d", lt.OutputTokens, wantOutput)
+	}
+	if lt.TotalTokens != wantTotal {
+		t.Errorf("TotalTokens = %d, want %d", lt.TotalTokens, wantTotal)
+	}
+	if lt.TotalCostUSD != wantCost {
+		t.Errorf("TotalCostUSD = %.4f, want %.4f", lt.TotalCostUSD, wantCost)
+	}
+}

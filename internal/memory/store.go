@@ -1161,6 +1161,33 @@ func (s *Store) UpdateSessionTaskCount(sessionID string, completed, failed int) 
 	return err
 }
 
+// LifetimeTokens holds cumulative token and cost totals from all executions.
+type LifetimeTokens struct {
+	InputTokens  int64
+	OutputTokens int64
+	TotalTokens  int64
+	TotalCostUSD float64
+}
+
+// GetLifetimeTokens returns cumulative token usage and cost across all executions.
+// Unlike session-scoped data, this survives restarts by querying the executions table directly.
+func (s *Store) GetLifetimeTokens() (*LifetimeTokens, error) {
+	row := s.db.QueryRow(`
+		SELECT
+			COALESCE(SUM(tokens_input), 0),
+			COALESCE(SUM(tokens_output), 0),
+			COALESCE(SUM(tokens_total), 0),
+			COALESCE(SUM(estimated_cost_usd), 0)
+		FROM executions
+	`)
+
+	var lt LifetimeTokens
+	if err := row.Scan(&lt.InputTokens, &lt.OutputTokens, &lt.TotalTokens, &lt.TotalCostUSD); err != nil {
+		return nil, fmt.Errorf("failed to get lifetime tokens: %w", err)
+	}
+	return &lt, nil
+}
+
 // EndSession marks a session as ended.
 func (s *Store) EndSession(sessionID string) error {
 	_, err := s.db.Exec(`
