@@ -210,3 +210,55 @@ func TestRenderMetricsCards_ZeroState(t *testing.T) {
 		t.Error("zero-state output missing TASKS card")
 	}
 }
+
+func TestRenderTaskCard_ShowsQueueDepth(t *testing.T) {
+	m := NewModel("test")
+	// Simulate 10 lifetime tasks (succeeded + failed) in metrics
+	m.metricsCard.TotalTasks = 10
+	m.metricsCard.Succeeded = 8
+	m.metricsCard.Failed = 2
+
+	// Simulate 2 active tasks in queue (pending/running)
+	m.tasks = []TaskDisplay{
+		{ID: "1", Title: "Task A", Status: "running"},
+		{ID: "2", Title: "Task B", Status: "pending"},
+	}
+
+	output := m.renderTaskCard()
+
+	// QUEUE card value must show current queue depth (2), not lifetime total (10)
+	if !strings.Contains(output, "QUEUE") {
+		t.Error("output missing QUEUE header")
+	}
+	// The main value "2" should appear (queue depth)
+	if !strings.Contains(output, "2") {
+		t.Error("QUEUE card should show current queue depth of 2")
+	}
+	// Lifetime total "10" should NOT appear as the main value
+	if strings.Contains(output, "10") {
+		t.Error("QUEUE card should not show lifetime total (10)")
+	}
+	// Succeeded/failed detail lines should still be present
+	if !strings.Contains(output, "8 succeeded") {
+		t.Error("QUEUE card missing succeeded count")
+	}
+	if !strings.Contains(output, "2 failed") {
+		t.Error("QUEUE card missing failed count")
+	}
+}
+
+func TestRenderTaskCard_EmptyQueue(t *testing.T) {
+	m := NewModel("test")
+	// Historical tasks exist but queue is empty
+	m.metricsCard.TotalTasks = 5
+	m.metricsCard.Succeeded = 3
+	m.metricsCard.Failed = 2
+	m.tasks = nil
+
+	output := m.renderTaskCard()
+
+	// Should show 0 for empty queue, not 5 (lifetime total)
+	if strings.Contains(output, "5") {
+		t.Error("QUEUE card should show 0, not lifetime total (5)")
+	}
+}

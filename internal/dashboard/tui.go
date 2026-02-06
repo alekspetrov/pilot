@@ -1110,8 +1110,9 @@ func (m Model) renderCostCard() string {
 }
 
 // renderTaskCard renders the QUEUE mini-card.
+// Value shows current queue depth (pending + running), not lifetime totals.
 func (m Model) renderTaskCard() string {
-	value := fmt.Sprintf("%d", m.metricsCard.TotalTasks)
+	value := fmt.Sprintf("%d", len(m.tasks))
 	detail1 := statusCompletedStyle.Render(fmt.Sprintf("✓ %d succeeded", m.metricsCard.Succeeded))
 	detail2 := statusFailedStyle.Render(fmt.Sprintf("✗ %d failed", m.metricsCard.Failed))
 
