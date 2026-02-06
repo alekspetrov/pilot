@@ -1,0 +1,146 @@
+import { Callout } from 'nextra/components'
+
+# Model Routing
+
+Pilot classifies every ticket by complexity and routes it to the appropriate model, timeout, and effort level. This keeps costs low for simple tasks and reserves deep reasoning for work that needs it.
+
+## Complexity Levels
+
+| Level | Model | Navigator | Timeout | Example Tasks |
+|-------|-------|-----------|---------|--------------|
+| **Trivial** | Haiku (fast, cheap) | Skipped | 5 min | Fix typo, rename variable, update comment |
+| **Simple** | Opus 4.6 | Optional | 15 min | Add field, fix test, update config |
+| **Medium** | Opus 4.6 | Active | 30 min | New endpoint, component, integration |
+| **Complex** | Opus 4.6 (deep) | Active | 60 min | Refactor, migrate, cross-cutting change |
+| **Epic** | Opus 4.6 | Active | N/A | Decomposed into subtasks |
+
+## How Classification Works
+
+Detection runs against the ticket title and description using a three-stage algorithm:
+
+### Stage 1: Pattern Matching
+
+Keywords in the ticket text map directly to complexity levels:
+
+**Trivial patterns** — `fix typo`, `rename`, `add log`, `bump version`, `lint fix`, `fix import`, `formatting`, `remove unused`
+
+**Simple patterns** — `add field`, `small fix`, `update config`, `add test case`, `fix test`
+
+**Complex patterns** — `refactor`, `rewrite`, `migrate`, `architecture`, `restructure`, `database schema`, `api design`, `cross-cutting`
+
+Pattern matching runs in priority order: epic first, then trivial, then complex, then simple. This prevents a ticket like "refactor the small fix handler" from being classified as simple.
+
+### Stage 2: Word Count Heuristics
+
+If no patterns match, the description length (with code blocks stripped) determines complexity:
+
+| Word Count | Classification |
+|-----------|---------------|
+| < 10 words | Simple |
+| 10–50 words | Medium |
+| > 50 words | Complex |
+
+Code blocks are stripped before counting to prevent long code examples from inflating the word count.
+
+### Stage 3: Epic Detection
+
+Epic detection uses multiple signals — no single signal triggers it (except the explicit `[epic]` tag):
+
+| Signal | Threshold |
+|--------|-----------|
+| `[epic]` tag in title | Immediate match |
+| Phase markers (`Phase 1`, `Stage 2`, etc.) | 5+ phases |
+| Epic keywords + structural signals | Keywords + (3+ phases OR 5+ checkboxes OR 200+ words) |
+| Many checkboxes | 7+ checkboxes + (200+ words OR 3+ phases) |
+| Long structured description | 300+ words + structural markers + (5+ checkboxes OR 2+ phases) |
+
+<Callout type="info">
+Phase detection was tightened after false positives — a 3-phase implementation plan is normal for medium tasks. Only 5+ phases reliably indicates an epic. See the [execution flow](/concepts/how-it-works#epic-decomposition) for how epics are decomposed.
+</Callout>
+
+## Model Selection
+
+The model router maps complexity to model names. Default configuration:
+
+```yaml
+# ~/.pilot/config.yaml
+model_routing:
+  enabled: true
+  trivial: "claude-haiku-4-5-20251001"
+  simple: "claude-opus-4-6"
+  medium: "claude-opus-4-6"
+  complex: "claude-opus-4-6"
+```
+
+You can override any level. For example, to use Sonnet for simple tasks:
+
+```yaml
+model_routing:
+  enabled: true
+  trivial: "claude-haiku-4-5-20251001"
+  simple: "claude-sonnet-4-5-20250929"
+  medium: "claude-opus-4-6"
+  complex: "claude-opus-4-6"
+```
+
+Set `enabled: false` to disable routing entirely and use the default model for all tasks.
+
+## Effort Routing
+
+In addition to model selection, Pilot supports effort-level routing. This maps to Claude's `effort` parameter, controlling how much reasoning the model applies:
+
+```yaml
+effort_routing:
+  enabled: true
+  trivial: "low"
+  simple: "medium"
+  medium: "medium"
+  complex: "high"
+```
+
+Effort routing is independent of model routing — you can use both, either, or neither.
+
+## Timeout Configuration
+
+Each complexity level has a configurable timeout. If execution exceeds the timeout, the task is terminated and marked as failed:
+
+```yaml
+timeouts:
+  trivial: "5m"
+  simple: "15m"
+  medium: "30m"
+  complex: "60m"
+  default: "30m"
+```
+
+## Cost Implications
+
+Model routing directly impacts cost. Current pricing per 1M tokens:
+
+| Model | Input | Output | Typical Use |
+|-------|-------|--------|------------|
+| Haiku 4.5 | $1 | $5 | Trivial tasks |
+| Opus 4.6 | $5 | $25 | Simple through complex |
+
+A trivial task (typo fix) typically uses ~2k tokens with Haiku, costing fractions of a cent. A complex refactor might use ~50k tokens with Opus, costing ~$1.50. Without routing, every typo fix would use Opus pricing.
+
+Combined with [budget controls](/concepts/security#budget-controls), model routing ensures cost stays predictable. Set daily spend thresholds and budget limits to prevent runaway costs.
+
+## Navigator Interaction
+
+Model routing determines whether Navigator context is loaded:
+
+- **Trivial** — Navigator skipped entirely. A typo fix doesn't need architecture context.
+- **Simple** — Navigator may be skipped for well-known patterns.
+- **Medium/Complex** — Full Navigator workflow. Architecture docs, SOPs, and cross-project memory are loaded.
+- **Epic** — Full Navigator for decomposition planning.
+
+This saves significant tokens. Loading Navigator context costs ~12k tokens. Skipping it for trivial tasks that use ~2k tokens total would more than triple their cost.
+
+See [How It Works](/concepts/how-it-works#navigator-integration) for details on Navigator's lazy loading strategy.
+
+## What's Next
+
+- [How It Works](/concepts/how-it-works) — Full execution pipeline and autopilot state machine
+- [Security](/concepts/security) — Budget limits, alerts, and authentication
+- [Why Pilot](/concepts/why-pilot) — How model routing compares to fixed-model competitors

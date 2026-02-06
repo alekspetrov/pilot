@@ -1,0 +1,164 @@
+import { Callout } from 'nextra/components'
+
+# How It Works
+
+Pilot is an autonomous development pipeline that transforms tickets into pull requests. This page covers the architecture, execution flow, and key mechanisms that make it work.
+
+## Architecture Overview
+
+Pilot is a single Go binary with several internal subsystems:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Pilot Binary                             │
+│                                                                 │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────────┐  │
+│  │  Poller   │  │ Executor │  │  Gateway   │  │   Dashboard   │  │
+│  │ (GitHub,  │→ │ (Claude  │  │ (WebSocket │  │  (Terminal    │  │
+│  │  Linear)  │  │  Code)   │  │  + HTTP)   │  │   UI)         │  │
+│  └──────────┘  └──────────┘  └───────────┘  └───────────────┘  │
+│       ↓             ↓              ↓                            │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────────┐  │
+│  │  Config   │  │  Memory  │  │  Alerts   │  │   Telegram    │  │
+│  │  (YAML)   │  │ (SQLite) │  │  System   │  │   Bot         │  │
+│  └──────────┘  └──────────┘  └───────────┘  └───────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+- **Poller** — Monitors ticket sources (GitHub Issues, Linear, Jira, Asana) for issues labeled `pilot`
+- **Executor** — Runs Claude Code in a subprocess, manages the implementation lifecycle
+- **Gateway** — WebSocket control plane and HTTP webhook receiver
+- **Dashboard** — Terminal UI showing token usage, costs, and task status
+- **Memory** — SQLite database with knowledge graph for cross-project learning
+- **Alerts** — Configurable alerting for budget, failures, and [security events](/concepts/security)
+
+## Execution Flow
+
+When Pilot picks up a ticket, it follows this pipeline:
+
+```
+┌─────────┐    ┌────────────┐    ┌──────────┐    ┌──────────┐
+│  Ticket  │───▶│ Complexity │───▶│  Plan    │───▶│ Execute  │
+│  Polled  │    │ Detection  │    │          │    │          │
+└─────────┘    └────────────┘    └──────────┘    └──────────┘
+                                                       │
+                     ┌─────────────────────────────────┘
+                     ▼
+               ┌──────────┐    ┌──────────┐    ┌──────────┐
+               │ Quality  │───▶│  Self-   │───▶│  Push +  │
+               │  Gates   │    │  Review  │    │  PR      │
+               └──────────┘    └──────────┘    └──────────┘
+                                                     │
+                     ┌───────────────────────────────┘
+                     ▼
+               ┌──────────┐    ┌──────────┐    ┌──────────┐
+               │ Wait CI  │───▶│  Merge   │───▶│  Done    │
+               │          │    │          │    │          │
+               └──────────┘    └──────────┘    └──────────┘
+                     │
+                     ▼ (CI fails)
+               ┌──────────┐
+               │ Fix Loop │──▶ (back to Execute on same branch)
+               └──────────┘
+```
+
+### Step 1: Complexity Detection
+
+Every ticket is classified into one of five complexity levels. This determines which model handles it, whether Navigator context is loaded, and timeout limits. Trivial tasks (typo fixes, renames) use Haiku for speed. Complex tasks get Opus with full codebase context.
+
+See [Model Routing](/concepts/model-routing) for the full classification algorithm and cost implications.
+
+### Step 2: Planning
+
+For medium and complex tasks, Pilot runs a planning phase. The executor asks Claude Code to analyze the codebase and produce an implementation plan before writing code. This step uses Navigator's lazy-loaded documentation to understand your project's architecture, patterns, and SOPs.
+
+### Step 3: Execution
+
+Claude Code runs in a subprocess with the planned approach. The executor streams output, tracks token usage, and monitors for errors. Timeouts are complexity-aware — trivial tasks get 5 minutes, complex tasks get 60 minutes.
+
+### Step 4: Quality Gates
+
+After implementation, quality gates run automatically:
+
+| Gate | What It Checks |
+|------|---------------|
+| **Test** | `go test ./...`, `npm test`, or your configured test command |
+| **Lint** | `golangci-lint`, `eslint`, or your configured linter |
+| **Build** | `go build ./...`, `npm run build`, or your configured build command |
+
+If a gate fails, the executor retries with the error output as context. This gives Claude Code a chance to fix issues before the PR is created.
+
+### Step 5: Self-Review
+
+Before pushing, Pilot runs a self-review phase. Claude Code reviews its own diff, checking for:
+
+- Missing error handling
+- Incomplete implementations
+- Style violations against project conventions
+- Test coverage gaps
+
+This catches issues that quality gates miss — logical errors, incomplete features, convention violations. The review may push additional commits to address findings.
+
+### Step 6: PR Creation and CI
+
+Pilot pushes the branch and creates a pull request. In autopilot mode, it then monitors CI:
+
+- **CI passes** → Auto-merge (in `dev`/`stage` mode) or notify for human review (`prod` mode)
+- **CI fails** → Create a fix issue targeting the same branch, iterate until CI passes
+
+The CI feedback loop ensures Pilot doesn't leave broken PRs. See [Security](/concepts/security) for how budget limits prevent runaway CI loops.
+
+## Autopilot State Machine
+
+The autopilot controller manages PR lifecycle through these states:
+
+```
+PRCreated → WaitingCI → CIPassed → Merging → Merged → PostMergeCI
+                │
+                ▼ (failure)
+          CreateFixIssue → Fix on same branch → New PR
+```
+
+<Callout type="info">
+The fix issue always targets the original branch. This is critical — without it, CI fixes would create divergent branches instead of iterating on the original PR.
+</Callout>
+
+Three environment modes control autopilot behavior:
+
+| Mode | CI Required | Auto-Merge | Fix Loop | Use Case |
+|------|------------|------------|----------|----------|
+| `dev` | Yes | Yes | Yes | Personal projects, fast iteration |
+| `stage` | Yes | After delay | Yes | Team staging, balanced safety |
+| `prod` | Yes | No | Yes | Production, human approval required |
+
+## Epic Decomposition
+
+When a ticket is classified as [epic complexity](/concepts/model-routing#stage-3-epic-detection), Pilot doesn't try to implement it in one shot. Instead, it decomposes the ticket into subtasks:
+
+1. Claude Code analyzes the epic and produces a numbered list of implementation steps
+2. Each step becomes a separate GitHub issue with the `pilot` label
+3. The parent issue is marked as decomposed
+4. Pilot picks up subtasks sequentially, creating PRs for each
+
+This prevents context window exhaustion on large features and produces reviewable, incremental PRs.
+
+## Navigator Integration
+
+Navigator is a Claude Code plugin that gives Pilot deep codebase understanding. Without it, Claude Code sees only the files it opens. With Navigator, Pilot has access to:
+
+- **Architecture docs** — System design, component relationships, data flows
+- **SOPs** — Standard operating procedures for common patterns in your codebase
+- **Cross-project memory** — Patterns learned from previous tasks and other repositories
+- **Task context** — Implementation plans, design decisions, known issues
+
+Navigator uses lazy loading — documentation is loaded on demand, not upfront. This reduces token usage by 92% (from ~150k to ~12k tokens per session) while maintaining deep context awareness.
+
+<Callout type="info">
+Trivial tasks skip Navigator entirely. A typo fix doesn't need to understand your system architecture. See [Model Routing](/concepts/model-routing) for which complexity levels use Navigator.
+</Callout>
+
+## What's Next
+
+- [Model Routing](/concepts/model-routing) — How Pilot classifies complexity and selects models
+- [Security](/concepts/security) — Budget controls, authentication, and alert system
+- [Why Pilot](/concepts/why-pilot) — Market positioning and comparison with other AI tools

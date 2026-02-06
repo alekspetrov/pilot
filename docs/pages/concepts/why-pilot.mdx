@@ -60,11 +60,11 @@ This is Pilot's core differentiator. [Navigator](https://github.com/anthropics/c
 - **SOPs** — Standard operating procedures for common tasks
 - **Cross-project memory** — Patterns learned across multiple repositories
 
-Without Navigator, Pilot would generate generic code. With Navigator, it generates code that follows your established conventions.
+Without Navigator, Pilot would generate generic code. With Navigator, it generates code that follows your established conventions. Learn more about [how Navigator integrates with the execution pipeline](/concepts/how-it-works#navigator-integration).
 
 ### 3. Autopilot feedback loop
 
-Most AI tools stop at code generation. Pilot manages the full PR lifecycle:
+Most AI tools stop at code generation. Pilot manages the [full PR lifecycle](/concepts/how-it-works#execution-flow):
 
 ```
 Ticket → Plan → Implement → Test → PR → CI Monitor → Merge
@@ -100,7 +100,7 @@ The bot classifies your intent automatically. Saying "what files handle authenti
 
 ### 5. Complexity-aware routing
 
-Not every ticket needs the same level of AI reasoning. Pilot classifies ticket complexity and routes accordingly:
+Not every ticket needs the same level of AI reasoning. Pilot [classifies ticket complexity](/concepts/model-routing) and routes accordingly:
 
 | Complexity | Model | Navigator | Example |
 |------------|-------|-----------|---------|
@@ -137,7 +137,7 @@ Pilot augments engineers. It does not replace them.
 
 **Not for novel algorithms.** If the task requires research, experimentation, or creative problem-solving, a human engineer is better suited. Pilot works best when the pattern is established and the implementation is bounded.
 
-**Not for security-critical code.** Authentication flows, encryption, access control — these need careful human review regardless of who writes them. Pilot can write tests for security code, but shouldn't be the primary author.
+**Not for security-critical code.** Authentication flows, encryption, access control — these need careful human review regardless of who writes them. Pilot can write tests for security code, but shouldn't be the primary author. See [Security](/concepts/security) for how Pilot handles its own authentication and cost controls.
 
 **Not a silver bullet.** Pilot handles the 60% of tickets that are predictable and well-defined. The other 40% still need your team. The value is in freeing your engineers to focus on that 40%.
 
@@ -148,3 +148,9 @@ Software development has a massive efficiency problem. Engineers spend significa
 Pilot's vision is to handle that predictable work automatically, with the same quality standards your team maintains, while keeping engineers in control through the PR review process. Not replacing engineers. Redirecting them to the work that matters.
 
 The ticket system is the interface because it's already where work gets defined. The PR is the output because it's already where code gets reviewed. No new tools to learn. No new workflows to adopt. Label a ticket, review a PR. That's it.
+
+## What's Next
+
+- [How It Works](/concepts/how-it-works) — Architecture, execution pipeline, and autopilot state machine
+- [Model Routing](/concepts/model-routing) — Complexity classification, model selection, and cost optimization
+- [Security](/concepts/security) — Authentication, budget controls, and the alert system

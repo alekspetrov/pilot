@@ -1,0 +1,198 @@
+import { Callout } from 'nextra/components'
+
+# Security
+
+Pilot runs on your infrastructure, processes your code, and creates commits in your repositories. This page covers how it handles authentication, cost control, and operational safety.
+
+## Self-Hosted by Default
+
+Pilot is a single Go binary that runs on your machine or server. Your code never leaves your environment:
+
+- **Source code** stays on your filesystem — Pilot reads it locally via Claude Code
+- **API keys** are stored in your config file (`~/.pilot/config.yaml`) or environment variables
+- **Anthropic API calls** go directly from your machine to Anthropic's API — no intermediary
+- **Git operations** use your local Git credentials
+
+<Callout type="info">
+For cloud AI providers (AWS Bedrock, Google Vertex), traffic routes through your existing cloud account with your existing security policies. Pilot doesn't add any intermediate infrastructure.
+</Callout>
+
+## Authentication
+
+Pilot supports two authentication modes for its internal gateway:
+
+### Claude Code Auth (Default)
+
+Local socket authentication — accepts connections only from `127.0.0.1`, `localhost`, or `[::1]`. No tokens required. This is the default for single-machine setups.
+
+### API Token Auth
+
+Bearer token authentication with constant-time comparison (using `crypto/subtle`) to prevent timing attacks. Tokens support expiration and scope-based access control:
+
+```yaml
+# ~/.pilot/config.yaml
+gateway:
+  auth:
+    type: api-token
+    token: "your-secure-token"
+```
+
+Scopes control what operations a token can perform. A wildcard scope (`*`) grants full access.
+
+## Budget Controls
+
+Uncontrolled AI spending is a real risk. Pilot provides multiple layers of cost protection:
+
+### Per-Execution Cost Tracking
+
+Every execution tracks token usage (input and output) and calculates cost based on the model used. The [model router](/concepts/model-routing) selects cheaper models for trivial tasks, which is the first line of defense.
+
+### Daily Spend Threshold
+
+Alert when daily spend exceeds a configured amount:
+
+```yaml
+alerts:
+  enabled: true
+  rules:
+    - name: daily_spend
+      type: daily_spend_exceeded
+      enabled: true
+      condition:
+        daily_spend_threshold: 50.00  # USD
+      severity: warning
+      channels: ["slack-ops"]
+      cooldown: 1h
+```
+
+### Budget Limit
+
+Hard stop when total budget is exhausted:
+
+```yaml
+alerts:
+  rules:
+    - name: budget_depleted
+      type: budget_depleted
+      enabled: true
+      condition:
+        budget_limit: 500.00  # USD monthly
+      severity: critical
+      channels: ["slack-ops", "pagerduty"]
+      cooldown: 4h
+```
+
+### Usage Spike Detection
+
+Detect abnormal token consumption patterns:
+
+```yaml
+alerts:
+  rules:
+    - name: usage_spike
+      type: usage_spike
+      condition:
+        usage_spike_percent: 200  # 200% above baseline
+```
+
+## Alert System
+
+Pilot's alert system monitors three categories:
+
+### Operational Alerts
+
+| Alert | Trigger | Default Severity |
+|-------|---------|-----------------|
+| Task stuck | No progress for 10 minutes | Warning |
+| Task failed | Any task failure | Warning |
+| Consecutive failures | 3+ failures in a row | Critical |
+| Service unhealthy | Internal health check failure | Critical |
+
+### Cost Alerts
+
+| Alert | Trigger | Default Severity |
+|-------|---------|-----------------|
+| Daily spend exceeded | Spend > threshold | Warning |
+| Budget depleted | Total spend > limit | Critical |
+| Usage spike | Token usage > baseline % | Warning |
+
+### Security Alerts
+
+| Alert | Trigger | Default Severity |
+|-------|---------|-----------------|
+| Unauthorized access | Failed authentication attempt | Critical |
+| Sensitive file modified | Changes to security-critical files | Warning |
+| Unusual pattern | Regex-matched suspicious patterns | Warning |
+
+### Alert Channels
+
+Alerts route to any combination of:
+
+- **Slack** — Channel-based notifications
+- **Telegram** — Chat notifications
+- **Email** — Direct delivery
+- **Webhook** — Custom HTTP endpoints
+- **PagerDuty** — Incident management integration
+
+Each channel can filter by severity level, so critical alerts go to PagerDuty while warnings go to Slack.
+
+## Quality Gates as Security
+
+Pilot's [quality gates](/concepts/how-it-works#step-4-quality-gates) serve double duty as security controls:
+
+- **Test gate** catches regressions before they reach your codebase
+- **Lint gate** enforces code standards and catches common security anti-patterns
+- **Build gate** ensures the code compiles and packages correctly
+- **Self-review** checks for missing error handling and incomplete implementations
+
+These gates run before any code is pushed to your repository. Failed gates trigger automatic retries — Claude Code gets the error output and attempts to fix the issue.
+
+## Autopilot Safety
+
+The [autopilot state machine](/concepts/how-it-works#autopilot-state-machine) has built-in safety controls:
+
+- **CI is always required** — No auto-merge without passing CI, even in `dev` mode
+- **Protected branches** — Direct pushes to `main`/`production` are blocked
+- **Merge delay** — `stage` mode adds a configurable delay before merging, allowing human review
+- **Fix loop limits** — Budget controls prevent infinite CI fix loops (each retry costs tokens)
+- **PR review** — `prod` mode never auto-merges, requiring explicit human approval
+
+<Callout type="warning">
+In `dev` mode, Pilot auto-merges PRs after CI passes. Use this only for personal projects where you trust Pilot's output without review. For team repositories, use `stage` or `prod` mode.
+</Callout>
+
+## Sensitive File Protection
+
+The alert system can monitor for modifications to security-critical files:
+
+```yaml
+alerts:
+  rules:
+    - name: sensitive_files
+      type: sensitive_file_modified
+      enabled: true
+      condition:
+        file_pattern: "*.env*"
+        paths:
+          - ".env"
+          - ".env.local"
+          - "credentials.json"
+          - "config/secrets.yaml"
+      severity: warning
+      channels: ["slack-security"]
+```
+
+This triggers when Pilot's execution modifies files matching the pattern — useful for catching accidental credential exposure or configuration changes.
+
+## What Pilot Doesn't Do
+
+- **No network access beyond Git and API** — Pilot doesn't open arbitrary network connections
+- **No credential storage** — Secrets live in your config file or environment, not in Pilot's database
+- **No telemetry** — No usage data sent anywhere. Self-hosted means self-contained
+- **No remote code execution** — Claude Code runs locally as a subprocess with your user permissions
+
+## What's Next
+
+- [How It Works](/concepts/how-it-works) — Execution pipeline, quality gates, and autopilot details
+- [Model Routing](/concepts/model-routing) — How complexity routing reduces cost
+- [Why Pilot](/concepts/why-pilot) — Security comparison with cloud-based alternatives
