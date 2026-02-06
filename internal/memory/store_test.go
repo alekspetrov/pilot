@@ -871,3 +871,59 @@ func TestGetLifetimeTokens(t *testing.T) {
 		t.Errorf("TotalCostUSD = %.4f, want %.4f", lt.TotalCostUSD, wantCost)
 	}
 }
+
+func TestGetLifetimeTaskCounts(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	store, err := NewStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Empty table should return zeros
+	tc, err := store.GetLifetimeTaskCounts()
+	if err != nil {
+		t.Fatalf("GetLifetimeTaskCounts (empty): %v", err)
+	}
+	if tc.Total != 0 || tc.Succeeded != 0 || tc.Failed != 0 {
+		t.Errorf("empty: want zeros, got total=%d succeeded=%d failed=%d", tc.Total, tc.Succeeded, tc.Failed)
+	}
+
+	// Insert mix of completed and failed executions
+	statuses := []struct {
+		id     string
+		status string
+	}{
+		{"exec-tc-1", "completed"},
+		{"exec-tc-2", "completed"},
+		{"exec-tc-3", "failed"},
+		{"exec-tc-4", "completed"},
+		{"exec-tc-5", "failed"},
+	}
+	for _, s := range statuses {
+		if err := store.SaveExecution(&Execution{
+			ID:          s.id,
+			TaskID:      "TASK-" + s.id,
+			ProjectPath: "/test",
+			Status:      s.status,
+		}); err != nil {
+			t.Fatalf("SaveExecution %s: %v", s.id, err)
+		}
+	}
+
+	tc, err = store.GetLifetimeTaskCounts()
+	if err != nil {
+		t.Fatalf("GetLifetimeTaskCounts: %v", err)
+	}
+
+	if tc.Total != 5 {
+		t.Errorf("Total = %d, want 5", tc.Total)
+	}
+	if tc.Succeeded != 3 {
+		t.Errorf("Succeeded = %d, want 3", tc.Succeeded)
+	}
+	if tc.Failed != 2 {
+		t.Errorf("Failed = %d, want 2", tc.Failed)
+	}
+}

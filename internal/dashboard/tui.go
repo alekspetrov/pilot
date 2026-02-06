@@ -424,31 +424,37 @@ func (m *Model) hydrateFromStore() {
 		m.metricsCard.TotalCostUSD = lifetime.TotalCostUSD
 	}
 
-	// Count completed/failed tasks from executions and populate history panel
+	// Initialize task counts from lifetime data (survives restarts).
+	// Previous code sampled from GetRecentExecutions(20), showing only last 20 results.
+	taskCounts, err := m.store.GetLifetimeTaskCounts()
+	if err != nil {
+		slog.Warn("failed to load lifetime task counts", slog.Any("error", err))
+	} else {
+		m.metricsCard.TotalTasks = taskCounts.Total
+		m.metricsCard.Succeeded = taskCounts.Succeeded
+		m.metricsCard.Failed = taskCounts.Failed
+	}
+
+	// Populate history panel from recent executions (most recent 5)
 	for i, exec := range executions {
+		if i >= 5 {
+			break
+		}
 		status := "success"
 		if exec.Status == "failed" {
 			status = "failed"
-			m.metricsCard.Failed++
-		} else {
-			m.metricsCard.Succeeded++
 		}
-		m.metricsCard.TotalTasks++
-
-		// Most recent 5 for history panel
-		if i < 5 {
-			completedAt := exec.CreatedAt
-			if exec.CompletedAt != nil {
-				completedAt = *exec.CompletedAt
-			}
-			m.completedTasks = append(m.completedTasks, CompletedTask{
-				ID:          exec.TaskID,
-				Title:       exec.TaskTitle,
-				Status:      status,
-				Duration:    fmt.Sprintf("%dms", exec.DurationMs),
-				CompletedAt: completedAt,
-			})
+		completedAt := exec.CreatedAt
+		if exec.CompletedAt != nil {
+			completedAt = *exec.CompletedAt
 		}
+		m.completedTasks = append(m.completedTasks, CompletedTask{
+			ID:          exec.TaskID,
+			Title:       exec.TaskTitle,
+			Status:      status,
+			Duration:    fmt.Sprintf("%dms", exec.DurationMs),
+			CompletedAt: completedAt,
+		})
 	}
 
 	// Compute cost per task

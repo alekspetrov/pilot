@@ -1188,6 +1188,31 @@ func (s *Store) GetLifetimeTokens() (*LifetimeTokens, error) {
 	return &lt, nil
 }
 
+// LifetimeTaskCounts holds cumulative succeeded/failed counts from all executions.
+type LifetimeTaskCounts struct {
+	Total     int
+	Succeeded int
+	Failed    int
+}
+
+// GetLifetimeTaskCounts returns cumulative task counts across all executions.
+// Parallels GetLifetimeTokens — survives restarts by querying executions table directly.
+func (s *Store) GetLifetimeTaskCounts() (*LifetimeTaskCounts, error) {
+	row := s.db.QueryRow(`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0)
+		FROM executions
+	`)
+
+	var tc LifetimeTaskCounts
+	if err := row.Scan(&tc.Total, &tc.Succeeded, &tc.Failed); err != nil {
+		return nil, fmt.Errorf("failed to get lifetime task counts: %w", err)
+	}
+	return &tc, nil
+}
+
 // EndSession marks a session as ended.
 func (s *Store) EndSession(sessionID string) error {
 	_, err := s.db.Exec(`
