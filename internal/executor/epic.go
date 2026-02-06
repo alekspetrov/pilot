@@ -142,6 +142,10 @@ func buildPlanningPrompt(task *Task) string {
 	return sb.String()
 }
 
+// Deprecated: parseSubtasks uses fragile regex extraction. Use SubtaskParser.Parse
+// with parseSubtasksWithFallback instead, which calls Haiku API for structured
+// extraction and falls back to this regex parser only when the API is unavailable.
+//
 // parseSubtasks extracts subtasks from Claude's planning output.
 // Looks for numbered patterns: "1. Title - Description" or "Step 1: Title"
 func parseSubtasks(output string) []PlannedSubtask {
