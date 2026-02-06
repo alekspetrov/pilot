@@ -1,0 +1,203 @@
+import { Callout } from 'nextra/components'
+
+# Epic Decomposition
+
+Automatic detection and breakdown of large tasks into sequentially executed sub-issues.
+
+<Callout type="info">
+  Epic decomposition is disabled by default. Enable it in your config to allow Pilot to
+  automatically split complex tasks into manageable sub-issues.
+</Callout>
+
+## How It Works
+
+```
+Issue received → Complexity detection → Epic?
+                                         ├─ No → Normal execution
+                                         └─ Yes → Plan → Create sub-issues → Execute sequentially → Push & PR
+```
+
+When Pilot receives a task, it analyzes the description for structural signals that indicate
+the task is too large for a single execution cycle. If classified as **epic**, Pilot:
+
+1. Runs a planning step with Claude to break the task into 3-5 subtasks
+2. Creates GitHub sub-issues with the `pilot` label
+3. Executes each sub-issue sequentially on its own branch
+4. Closes sub-issues as they complete
+5. Pushes the final result and creates a PR
+
+## Structural Signal Detection
+
+Epic detection uses **multiple signals combined** — no single signal triggers epic classification
+(except the explicit `[epic]` tag).
+
+### Signals
+
+| Signal | Detection | Standalone? |
+|--------|-----------|-------------|
+| `[epic]` in title | Regex: `(?i)\[epic\]` | Yes (instant) |
+| Phase/stage/milestone headers | `Phase 1`, `Stage 2`, `## Part 3` | Only at 5+ |
+| Checkboxes (`- [ ]`, `- [x]`) | Count in description | No |
+| Word count | `len(strings.Fields(...))` | No |
+| Epic keywords | `\b(epic\|roadmap\|multi-phase\|milestone)\b` | No |
+| Structural markers | `##`, `phase`, `stage`, `step` | No |
+
+### Preprocessing
+
+Before signal detection, code blocks and file paths are stripped to prevent false positives:
+
+- `` `EpicPlan` `` in code → not detected as keyword
+- `epic.go` file path → not detected as keyword
+- ` ```go ... ``` ` code fences → stripped entirely
+
+### Combination Rules
+
+```
+Rule 1: phaseCount >= 5                                              → epic
+Rule 2: epicKeywords AND (phases >= 3 OR checkboxes >= 5 OR words > 200) → epic
+Rule 3: checkboxes >= 7 AND (words > 200 OR phases >= 3)            → epic
+Rule 4: words > 300 AND structuralMarkers AND (checkboxes >= 5 OR phases >= 2) → epic
+```
+
+### The 5-Phase Threshold
+
+Three phases is a normal implementation plan (setup → implementation → testing). Only 5+ phases
+qualifies as a standalone epic signal. With fewer phases, additional signals are required.
+
+**Not epic (3 phases):**
+
+```markdown
+Phase 1: Design the database schema
+Phase 2: Implement the API layer
+Phase 3: Add integration tests
+```
+
+**Epic (5 phases):**
+
+```markdown
+Phase 1: Design the database schema
+Phase 2: Implement the API layer
+Phase 3: Create the frontend components
+Phase 4: Add integration tests
+Phase 5: Deploy and monitor
+```
+
+## Decomposition Flow
+
+### Step 1: Planning
+
+Pilot invokes Claude in planning mode to break down the epic:
+
+```
+Break down this epic task into 3-5 sequential subtasks
+that can each be completed independently.
+```
+
+The planning output is a numbered list of subtask titles and descriptions.
+
+### Step 2: Subtask Parsing
+
+A two-stage parser extracts structured subtasks from the planning output:
+
+```
+Planning output → Haiku API (JSON extraction) → structured subtasks
+                         ↓ fallback
+                  Regex parser → structured subtasks
+```
+
+**Primary: Haiku API** — Uses `claude-haiku-4-5` for fast, cheap structured extraction ($0.25/$1.25 per 1M tokens). Returns JSON with `order`, `title`, `description` fields.
+
+**Fallback: Regex** — Handles multiple formatting variants when the API is unavailable:
+
+| Format | Example |
+|--------|---------|
+| Numbered list | `1. Title - Description` |
+| Bold markers | `**1. Title** - Description` |
+| Heading prefix | `### 1. Title - Description` |
+| Bullet + bold | `- **1. Title** - Description` |
+| Phase prefix | `Phase 1: Title` |
+
+The regex fallback activates when:
+- `ANTHROPIC_API_KEY` is not set
+- API request fails or times out
+- Response contains invalid JSON
+
+### Step 3: Sub-Issue Creation
+
+Each subtask becomes a GitHub issue:
+
+```bash
+gh issue create \
+  --title "Subtask title" \
+  --body "Parent: GH-123\n\n[description]" \
+  --label pilot
+```
+
+<Callout type="warning">
+  The `pilot` label is critical. Without it, the poller never picks up sub-issues and the
+  parent task stalls as `pilot-in-progress`.
+</Callout>
+
+### Step 4: Sequential Execution
+
+Sub-issues execute in order. Each gets its own branch (`pilot/GH-<number>`), and Pilot reports
+progress as it goes:
+
+```
+Progress: 1/5 - Starting: Setup database (#42)
+Progress: 2/5 - Starting: Implement API (#43)
+...
+Completed: 5/5 - Deploy and monitor (#46)
+```
+
+Completed sub-issues are closed with a comment linking back to the parent.
+
+### Step 5: Push and PR
+
+After all sub-issues complete, Pilot pushes the epic branch and creates a PR combining
+all deliverables.
+
+## Configuration
+
+```yaml
+# ~/.pilot/config.yaml
+executor:
+  decompose:
+    enabled: true
+    min_complexity: "complex"      # Minimum complexity to trigger
+    max_subtasks: 5                # Range: 2-10
+    min_description_words: 50      # Skip short descriptions
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `false` | Opt-in. Must be explicitly enabled. |
+| `min_complexity` | `"complex"` | Only `complex` and `epic` tasks are candidates. |
+| `max_subtasks` | `5` | Upper bound on generated sub-issues. Range: 2-10. |
+| `min_description_words` | `50` | Tasks with fewer words skip decomposition. |
+
+## Known Gotchas
+
+### False Positives from Phase Headers
+
+Tasks with "Phase 1/2/3" headers in normal implementation plans used to trigger epic mode.
+The threshold was raised from 3 to 5 phases as a standalone signal (GH-539).
+
+Three phases combined with epic keywords (`epic`, `roadmap`, `multi-phase`, `milestone`)
+still triggers decomposition — this is intentional for explicitly labeled epics.
+
+### Bold Format in Planning Output
+
+Claude sometimes outputs `**1. Title**` with bold markers. The regex parser was updated to
+handle `\*{0,2}` prefix patterns (GH-490).
+
+### Missing Pilot Label on Sub-Issues
+
+Early versions omitted `--label pilot` when creating sub-issues. Without the label, the
+poller ignores them and the parent task stalls. Fixed in v0.20.2 (GH-499).
+
+### Haiku Parser Requires API Key
+
+The Haiku structured parser needs `ANTHROPIC_API_KEY` to be set. Without it, Pilot falls back
+to regex parsing silently. Both paths produce valid results, but Haiku handles more formatting
+edge cases.
