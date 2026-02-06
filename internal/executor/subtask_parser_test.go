@@ -208,10 +208,7 @@ func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 func TestSubtaskParser_Parse_ContextCancelled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Slow response - should be cancelled
-		select {
-		case <-r.Context().Done():
-			return
-		}
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 
