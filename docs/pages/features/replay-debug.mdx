@@ -1,0 +1,525 @@
+import { Callout, Tabs } from 'nextra/components'
+
+# Replay & Debug
+
+Full execution recordings with interactive playback, analysis reports, and multi-format export.
+
+<Callout type="info">
+  Every task execution is automatically recorded to `~/.pilot/recordings/`. Recordings capture
+  the complete event stream — Claude actions, tool calls, API responses, file changes, token usage,
+  and phase timings — so you can replay, analyze, and share any execution after the fact.
+</Callout>
+
+## Recording Format
+
+Recordings are stored as directories under `~/.pilot/recordings/`, each identified by a
+timestamp-based ID (e.g., `TG-1738900000000`).
+
+```
+~/.pilot/recordings/
+└── TG-1738900000000/
+    ├── metadata.json     # Recording metadata and token usage
+    ├── stream.jsonl      # Full event stream (one JSON object per line)
+    ├── diffs/
+    │   └── changes.json  # File operations tracked during execution
+    └── summary.md        # Human-readable summary
+```
+
+### JSONL Event Stream
+
+Each line in `stream.jsonl` is a self-contained JSON object representing one event:
+
+```json
+{
+  "timestamp": "2026-02-07T14:23:01.456Z",
+  "sequence": 42,
+  "raw": "{...}",
+  "type": "assistant",
+  "parsed": {
+    "type": "assistant",
+    "tool_name": "Edit",
+    "tool_input": { "file_path": "internal/config/config.go", "old_string": "...", "new_string": "..." },
+    "file_path": "internal/config/config.go",
+    "file_operation": "modify"
+  }
+}
+```
+
+### Captured Data
+
+| Category | Fields |
+|----------|--------|
+| **Claude actions** | Assistant text, reasoning, tool selections |
+| **Tool calls** | Tool name, full input parameters, file paths |
+| **API responses** | Result text, error status, token counts per turn |
+| **File diffs** | File path, operation (`create`/`modify`/`delete`), timestamps |
+| **Token usage** | Input tokens, output tokens, total, estimated cost (USD) |
+| **Phase timings** | Phase name, start/end timestamps, duration |
+
+### Metadata Fields
+
+Every recording carries structured metadata:
+
+```json
+{
+  "id": "TG-1738900000000",
+  "task_id": "GH-123",
+  "project_path": "/home/user/my-project",
+  "start_time": "2026-02-07T14:20:00Z",
+  "end_time": "2026-02-07T14:35:12Z",
+  "duration": "15m12s",
+  "status": "completed",
+  "event_count": 247,
+  "metadata": {
+    "branch": "pilot/GH-123",
+    "base_branch": "main",
+    "commit_sha": "a1b2c3d",
+    "pr_url": "https://github.com/you/repo/pull/456",
+    "has_navigator": true,
+    "model_name": "claude-opus-4-6",
+    "tags": {
+      "complexity": "medium",
+      "effort": "moderate"
+    }
+  },
+  "token_usage": {
+    "input_tokens": 48200,
+    "output_tokens": 12350,
+    "total_tokens": 60550,
+    "estimated_cost_usd": 0.5493
+  },
+  "phase_timings": [
+    { "phase": "Exploring", "duration": "3m20s" },
+    { "phase": "Implementing", "duration": "8m45s" },
+    { "phase": "Testing", "duration": "2m10s" },
+    { "phase": "Committing", "duration": "57s" }
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `branch` | Git branch created for the task |
+| `base_branch` | Branch the task branched from |
+| `commit_sha` | Final commit SHA after execution |
+| `pr_url` | GitHub PR URL (if PR was created) |
+| `has_navigator` | Whether Navigator `.agent/` was detected |
+| `model_name` | Claude model used for execution |
+| `tags` | Arbitrary key-value pairs (complexity, effort, custom) |
+
+## CLI Commands
+
+### `pilot replay list`
+
+List recorded executions with optional filters.
+
+```bash
+# List all recordings
+pilot replay list
+
+# Filter by status
+pilot replay list --status=failed
+
+# Filter by project
+pilot replay list --project=/path/to/repo
+
+# Limit results
+pilot replay list --limit=10 --since=24h
+```
+
+**Output:**
+
+```
+ID                    Task       Status     Duration  Events
+─────────────────────────────────────────────────────────────
+TG-1738900000000      GH-123     completed  15m12s    247
+TG-1738890000000      GH-119     failed     8m43s     156
+TG-1738880000000      GH-117     completed  22m05s    412
+```
+
+### `pilot replay show <id>`
+
+Display recording metadata, token usage, and phase timings without loading the full event stream.
+
+```bash
+pilot replay show TG-1738900000000
+```
+
+**Output:**
+
+```
+Recording:  TG-1738900000000
+Task:       GH-123
+Status:     completed
+Duration:   15m12s
+Events:     247
+
+Metadata:
+  Branch:     pilot/GH-123
+  Commit:     a1b2c3d
+  PR:         https://github.com/you/repo/pull/456
+  Model:      claude-opus-4-6
+  Navigator:  true
+
+Token Usage:
+  Input:      48,200 tokens
+  Output:     12,350 tokens
+  Total:      60,550 tokens
+  Cost:       $0.5493
+```
+
+### `pilot replay play <id>`
+
+Launch the interactive TUI viewer for step-by-step event replay.
+
+```bash
+# Basic replay
+pilot replay play TG-1738900000000
+
+# Start from a specific event
+pilot replay play TG-1738900000000 --start=50
+
+# Real-time playback at 2x speed
+pilot replay play TG-1738900000000 --speed=2.0
+
+# Filter to tool calls only
+pilot replay play TG-1738900000000 --tools-only
+```
+
+See [TUI Viewer](#tui-viewer) below for keyboard controls.
+
+### `pilot replay analyze <id>`
+
+Generate a detailed analysis report with token and phase breakdowns.
+
+```bash
+pilot replay analyze TG-1738900000000
+```
+
+**Output:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXECUTION ANALYSIS REPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Recording:  TG-1738900000000
+Task:       GH-123
+Status:     completed
+Duration:   15m12s
+Events:     247
+
+TOKEN USAGE
+───────────────────────────────────────
+  Input:    48,200 tokens
+  Output:   12,350 tokens
+  Total:    60,550 tokens
+  Cost:     $0.5493
+
+PHASE ANALYSIS
+───────────────────────────────────────
+  Exploring:      3m20s ( 21.8%) 62 events
+  Implementing:   8m45s ( 57.6%) 134 events
+  Testing:        2m10s ( 14.3%) 38 events
+  Committing:       57s (  6.3%) 13 events
+
+TOOL USAGE
+───────────────────────────────────────
+  Read:          42 calls
+  Edit:          28 calls
+  Bash:          19 calls
+  Grep:          15 calls
+  Glob:          11 calls
+  Write:          7 calls (2 errors)
+
+ERRORS
+───────────────────────────────────────
+  #89  [14:26:12] Bash: exit code 1 — test failed
+  #134 [14:29:45] Write: permission denied
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+See [Analysis Reports](#analysis-reports) below for report details.
+
+### `pilot replay export <id>`
+
+Export a recording to HTML, JSON, or Markdown format.
+
+```bash
+# HTML interactive report (default)
+pilot replay export TG-1738900000000 --format=html --output=report.html
+
+# Raw JSON data
+pilot replay export TG-1738900000000 --format=json --output=recording.json
+
+# Markdown summary
+pilot replay export TG-1738900000000 --format=markdown --output=report.md
+```
+
+See [Export Formats](#export-formats) below for format details.
+
+### `pilot replay delete <id>`
+
+Delete a recording permanently.
+
+```bash
+pilot replay delete TG-1738900000000
+```
+
+<Callout type="warning">
+  Deletion is permanent. The entire recording directory (metadata, stream, diffs, summary) is removed.
+</Callout>
+
+## TUI Viewer
+
+The interactive viewer (`pilot replay play`) provides a full-screen terminal interface built
+with [Bubble Tea](https://github.com/charmbracelet/bubbletea) for stepping through execution
+events.
+
+### Layout
+
+```
+ ▶ TG-1738900000000  Task: GH-123
+⏸ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────── [42/247] 1.0x
+──────────────────────────────────────────────────────
+  14:23:01 #38  📖 Read: .../config/config.go
+  14:23:02 #39  💬 I see the config struct needs...
+  14:23:03 #40  📝 Edit: .../config/config.go
+  14:23:04 #41  📥 Tool result
+▶ 14:23:05 #42  💻 Bash: go build ./...
+  14:23:08 #43  ✅ Completed (2,100 in, 450 out)
+──────────────────────────────────────────────────────
+Showing: Tools, Text, Results, System, Errors
+Space: Play/Pause │ ←→: Navigate │ 1-4: Speed │ ?: Help
+```
+
+### Keyboard Controls
+
+| Key | Action |
+|-----|--------|
+| `Space`, `p` | Play/pause auto-playback |
+| `n`, `Enter`, `↓`, `j` | Next event |
+| `N`, `↑`, `k` | Previous event |
+| `g` | Jump to first event |
+| `G` | Jump to last event |
+| `PgUp`/`PgDn` | Jump 10 events |
+| `1`–`4` | Set speed: 0.5x, 1x, 2x, 4x |
+| `t` | Toggle tool call visibility |
+| `x` | Toggle assistant text visibility |
+| `r` | Toggle result visibility |
+| `s` | Toggle system event visibility |
+| `e` | Toggle error visibility |
+| `a` | Show all events (reset filters) |
+| `?`, `h` | Toggle help overlay |
+| `q`, `Ctrl+C` | Quit viewer |
+
+### Event Icons
+
+| Icon | Event Type |
+|------|------------|
+| 📖 | `Read` — file read |
+| ✏️ | `Write` — file create |
+| 📝 | `Edit` — file modify |
+| 💻 | `Bash` — command execution |
+| 🔍 | `Glob` / `WebSearch` — pattern/search |
+| 🔎 | `Grep` — content search |
+| 🤖 | `Task` — subagent |
+| ⚡ | `Skill` — skill invocation |
+| 🌐 | `WebFetch` — URL fetch |
+| 💬 | Assistant text |
+| 📥 | Tool result received |
+| ✅ | Execution completed |
+| ❌ | Error |
+| 🚀 | System initialized |
+| ⚙️ | System event |
+
+## Analysis Reports
+
+The `analyze` command generates a structured `AnalysisReport` with five sections:
+
+### Token Breakdown
+
+Token usage split by execution phase and by tool:
+
+- **By phase** — How many tokens each phase consumed (Research, Implementing, Verifying, etc.)
+- **By tool** — Token cost attributed to each tool (Read, Edit, Bash, Grep, etc.)
+- **Overhead** — System/initialization tokens not attributable to a specific phase
+
+### Phase Duration
+
+Wall-clock time spent in each detected phase as a percentage of total execution time. Phases
+are detected from tool usage patterns and Navigator phase markers in assistant text:
+
+| Phase | Detection Signal |
+|-------|-----------------|
+| Exploring | `Read`, `Glob`, `Grep` tool calls |
+| Implementing | `Write`, `Edit` tool calls |
+| Testing | `Bash` commands containing `test` |
+| Committing | `Bash` commands containing `git commit` |
+| Research | Navigator `PHASE: RESEARCH` text |
+| Verifying | Navigator `PHASE: VERIFY` text |
+| Completing | Navigator `PHASE: COMPLETE` text |
+
+### Tool Usage Statistics
+
+Per-tool metrics:
+
+| Metric | Description |
+|--------|-------------|
+| Call count | Number of times the tool was invoked |
+| Error count | Invocations that returned errors |
+| Total time | Cumulative time spent in the tool |
+| Average time | Mean duration per invocation |
+| Input tokens | Tokens consumed by tool inputs |
+| Output tokens | Tokens consumed by tool outputs |
+
+### Error Tracking
+
+All error events captured during execution with:
+
+- Timestamp and sequence number
+- Phase in which the error occurred
+- Tool that produced the error (if applicable)
+- Error message (truncated to 200 characters)
+
+### Decision Points
+
+Significant decisions detected from Navigator workflow patterns (`WORKFLOW CHECK`, `Decision:`,
+`Approach:` markers). These highlight moments where the agent chose between approaches.
+
+## Export Formats
+
+<Tabs items={['HTML', 'JSON', 'Markdown']}>
+  <Tabs.Tab>
+### HTML — Interactive Report
+
+A self-contained HTML file with dark-themed styling, summary cards, bar charts for phase
+timing and token breakdown, tool usage grid, error list, and a scrollable execution timeline.
+
+```bash
+pilot replay export TG-1738900000000 --format=html --output=report.html
+```
+
+Features:
+- Summary cards: duration, event count, total tokens, estimated cost, model name
+- Token breakdown bar chart by phase
+- Phase timing bar chart with percentage labels
+- Tool usage grid with call counts and error indicators
+- Error list with timestamps, phases, and messages
+- Full execution timeline with color-coded event types
+- Hover effects for timeline events
+
+Open the file in any browser — no server required.
+  </Tabs.Tab>
+  <Tabs.Tab>
+### JSON — Raw Data
+
+The complete recording metadata and event stream serialized as a single JSON file.
+
+```bash
+pilot replay export TG-1738900000000 --format=json --output=recording.json
+```
+
+Structure:
+
+```json
+{
+  "recording": {
+    "id": "TG-1738900000000",
+    "task_id": "GH-123",
+    "metadata": { "..." },
+    "token_usage": { "..." },
+    "phase_timings": [ "..." ]
+  },
+  "events": [
+    {
+      "timestamp": "2026-02-07T14:23:01.456Z",
+      "sequence": 1,
+      "type": "system",
+      "parsed": { "..." }
+    }
+  ]
+}
+```
+
+Use this format for programmatic analysis, custom dashboards, or feeding into other tools.
+  </Tabs.Tab>
+  <Tabs.Tab>
+### Markdown — Text Report
+
+A Markdown document with metadata table, token usage, phase timing table, tool usage table,
+error details, and a collapsible event timeline.
+
+```bash
+pilot replay export TG-1738900000000 --format=markdown --output=report.md
+```
+
+Sections:
+- **Summary** — Property/value table with task ID, project, duration, branch, commit, PR, model
+- **Token Usage** — Input, output, total, and estimated cost
+- **Phase Timing** — Table with phase, duration, percentage, and event count
+- **Tool Usage** — Table with tool, calls, errors, and tokens
+- **Errors** — Individual error blocks with timestamps and messages
+- **Event Timeline** — Full event log inside a `<details>` block
+
+Suitable for pasting into GitHub issues, PR descriptions, or team documentation.
+  </Tabs.Tab>
+</Tabs>
+
+## Use Cases
+
+### Debugging Failed Tasks
+
+When a task fails, replay the execution to find where things went wrong:
+
+```bash
+# Find the failed recording
+pilot replay list --status=failed --limit=5
+
+# Check the summary
+pilot replay show TG-1738890000000
+
+# Step through events interactively
+pilot replay play TG-1738890000000
+
+# Generate a report to share with the team
+pilot replay export TG-1738890000000 --format=html --output=failure-report.html
+```
+
+Filter to errors only in the TUI viewer by pressing `e` to toggle error visibility, then
+`t`, `x`, `r`, `s` to hide other event types.
+
+### Understanding Token Usage
+
+Compare token efficiency across executions:
+
+```bash
+# Analyze a specific recording
+pilot replay analyze TG-1738900000000
+
+# Export for comparison
+pilot replay export TG-1738900000000 --format=json --output=run1.json
+pilot replay export TG-1738910000000 --format=json --output=run2.json
+```
+
+The phase breakdown reveals where tokens are spent — if `Exploring` consumes 60%+ of tokens,
+the task might benefit from better Navigator documentation to reduce codebase search.
+
+### Sharing Execution Details
+
+Export recordings to share with teammates for review or post-mortems:
+
+```bash
+# Interactive HTML report for browsing
+pilot replay export TG-1738900000000 --format=html --output=report.html
+
+# Markdown for GitHub issues
+pilot replay export TG-1738900000000 --format=markdown --output=report.md
+```
+
+## Related
+
+- **[CLI Reference](/cli/commands)** — Full CLI command documentation
+- **[Autopilot Mode](/features/autopilot)** — Autonomous execution that generates recordings
+- **[Model Routing](/concepts/model-routing)** — How model selection affects token usage and cost
