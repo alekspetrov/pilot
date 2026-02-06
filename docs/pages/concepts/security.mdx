@@ -1,0 +1,267 @@
+import { Callout } from 'nextra/components'
+
+# Security & Privacy
+
+Pilot runs on your machine, with your credentials, against your repositories. There is no cloud service, no telemetry, and no data leaving your environment unless you explicitly configure external integrations.
+
+## Self-Hosted Architecture
+
+Pilot is a single Go binary that runs locally. Your code, prompts, and API keys never touch a third-party server (beyond the LLM API itself).
+
+```
+Your Machine
+┌─────────────────────────────────────────────┐
+│  Pilot Binary                               │
+│  ├── Config (~/.pilot/config.yaml)          │
+│  ├── SQLite Memory (local)                  │
+│  └── Claude Code (subprocess)               │
+│                                             │
+│  Outbound connections:                      │
+│  → Anthropic API (LLM requests)             │
+│  → GitHub API (issues, PRs, CI status)      │
+│  → Telegram API (optional, notifications)   │
+└─────────────────────────────────────────────┘
+```
+
+Your source code is sent to the Anthropic API as part of LLM prompts. No other service receives your code. If this is a concern, review [Anthropic's data retention policy](https://www.anthropic.com/policies/privacy) — API requests are not used for model training.
+
+## API Key Handling
+
+Pilot reads credentials from environment variables or config file references. Keys are held in memory during the session and never written to disk, logs, or external services.
+
+### Environment Variables (Recommended)
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GITHUB_TOKEN="ghp_..."
+export TELEGRAM_BOT_TOKEN="123456:ABC..."  # Optional
+```
+
+### Config File References
+
+```yaml
+# ~/.pilot/config.yaml
+github:
+  token: ${GITHUB_TOKEN}
+claude:
+  api_key: ${ANTHROPIC_API_KEY}
+telegram:
+  bot_token: ${TELEGRAM_BOT_TOKEN}
+```
+
+The `${VAR}` syntax expands environment variables at load time. The config file itself never contains raw secrets — only references.
+
+<Callout type="warning">
+  Never commit `~/.pilot/config.yaml` to version control if it contains raw tokens instead of `${VAR}` references.
+</Callout>
+
+## GitHub Token Scopes
+
+Pilot requires a GitHub Personal Access Token (classic) with these scopes:
+
+| Scope | Why |
+|-------|-----|
+| `repo` | Read issues, create branches, push commits, open/merge PRs |
+| `workflow` | Trigger and monitor GitHub Actions CI runs |
+
+### Creating the Token
+
+1. Go to **GitHub Settings > Developer settings > Personal access tokens > Tokens (classic)**
+2. Click **Generate new token (classic)**
+3. Select scopes: `repo` and `workflow`
+4. Set an expiration (90 days recommended)
+5. Copy the token and set it as `GITHUB_TOKEN`
+
+<Callout type="info">
+  Fine-grained tokens are not yet supported. Pilot needs classic PAT scopes for full PR lifecycle management.
+</Callout>
+
+## Telegram Access Control
+
+The Telegram bot enforces an allowlist of user IDs. Messages from unauthorized users are silently dropped.
+
+### Configuration
+
+```yaml
+# ~/.pilot/config.yaml
+telegram:
+  bot_token: ${TELEGRAM_BOT_TOKEN}
+  allowed_users:
+    - 123456789  # Your Telegram user ID
+    - 987654321  # Team member
+```
+
+### Managing Access
+
+```bash
+# Add a user
+pilot allow 123456789
+
+# Remove a user
+pilot allow --remove 123456789
+
+# List allowed users
+pilot allow --list
+```
+
+Both the sender's user ID and the chat ID are checked. If `allowed_users` is empty, the bot accepts messages from anyone — always set this in production.
+
+## Webhook Signature Validation
+
+When receiving GitHub webhooks, Pilot validates the `X-Hub-Signature-256` header using HMAC-SHA256 with constant-time comparison to prevent timing attacks.
+
+```yaml
+# ~/.pilot/config.yaml
+github:
+  webhook_secret: ${GITHUB_WEBHOOK_SECRET}
+```
+
+The validation flow:
+
+1. GitHub signs the payload with your webhook secret
+2. Pilot computes `HMAC-SHA256(secret, payload)`
+3. Compares using `hmac.Equal()` (constant-time)
+4. Rejects requests with missing or invalid signatures
+
+<Callout type="info">
+  If no webhook secret is configured, signature validation is skipped. This is acceptable for local development but should always be set in exposed environments.
+</Callout>
+
+## No Telemetry or Analytics
+
+Pilot collects zero telemetry. There are no analytics, crash reporting, usage tracking, or phone-home mechanisms. The binary makes no network requests beyond the APIs you explicitly configure (Anthropic, GitHub, Telegram).
+
+You can verify this by inspecting outbound connections:
+
+```bash
+# macOS: watch Pilot's network connections
+lsof -i -n -P | grep pilot
+
+# Linux
+ss -tnp | grep pilot
+```
+
+## Quality Gates as Safety Nets
+
+Before pushing code or creating PRs, Pilot runs configurable quality gates:
+
+```
+Implementation → Commit → Quality Gates → Push → PR
+                              ↓
+                         Build check
+                         Test suite
+                         Linter
+                         Coverage
+                              ↓
+                    Pass → Continue to PR
+                    Fail → Auto-fix (up to 2 retries)
+                           → Still failing → Stop, report error
+```
+
+Quality gates ensure Pilot never pushes code that doesn't build, fails tests, or violates lint rules. If gates fail, Pilot attempts automatic fixes (up to 2 retries). If auto-fix fails, execution stops — no broken code reaches your repository.
+
+## Autopilot Environment Tiers
+
+Autopilot mode controls how much autonomy Pilot has over merging. Three tiers provide escalating safety:
+
+| Environment | CI Required | Auto-Merge | Merge Delay | Use Case |
+|-------------|-------------|------------|-------------|----------|
+| `dev` | Yes | Yes | None | Personal projects, fast iteration |
+| `stage` | Yes | Yes | Configurable (default 5m) | Team staging, review window |
+| `prod` | Yes | No | N/A | Production — human approval required |
+
+```yaml
+# ~/.pilot/config.yaml
+autopilot:
+  enabled: true
+  environment: stage    # dev, stage, prod
+  auto_merge: true
+  require_ci: true
+  merge_delay: 5m
+  protected_branches:
+    - main
+    - production
+```
+
+<Callout type="error" emoji="🚨">
+  In `dev` mode, Pilot merges PRs automatically after CI passes with no human review. Only use this for personal projects or repos where you are the sole contributor.
+</Callout>
+
+**Protected branches** are never pushed to directly. Pilot always creates PRs, even in `dev` mode. The `auto_merge` setting only controls whether Pilot merges the PR after CI passes.
+
+## The `--dangerously-skip-permissions` Flag
+
+Pilot runs Claude Code as a subprocess with the `--dangerously-skip-permissions` flag. This is required for autonomous operation — without it, Claude Code would prompt for user confirmation on every file read, write, and command execution.
+
+### Why It's Necessary
+
+In interactive use, Claude Code asks before modifying files or running commands. Pilot runs unattended, so it cannot respond to permission prompts. The flag disables these prompts, allowing Claude Code to:
+
+- Read and write files in the repository
+- Run build, test, and lint commands
+- Execute git operations (commit, push, branch)
+
+### Why It's Safe in Pilot's Context
+
+1. **Scoped to the repository** — Claude Code operates within the cloned repository directory
+2. **Quality gates validate output** — Build, test, lint, and coverage checks run before any code is pushed
+3. **PR-based workflow** — Changes go through pull requests, not direct pushes to protected branches
+4. **Budget limits** — Per-task token and duration limits prevent runaway execution
+5. **CI as final check** — GitHub Actions validates the PR before any merge
+
+The flag is a necessary tradeoff: Pilot trades interactive permission prompts for automated safety checks (quality gates, CI, PR review) that provide equivalent or stronger protection for autonomous workflows.
+
+## Budget & Cost Controls
+
+Pilot enforces spending limits to prevent runaway costs:
+
+| Limit | Default | Description |
+|-------|---------|-------------|
+| Daily budget | $50 | Total spend across all tasks per day |
+| Monthly budget | $500 | Total spend across all tasks per month |
+| Per-task tokens | 100,000 | Maximum tokens per individual task |
+| Per-task duration | 30 minutes | Maximum wall-clock time per task |
+
+```yaml
+# ~/.pilot/config.yaml
+budget:
+  enabled: true
+  daily_limit: 50      # USD
+  monthly_limit: 500   # USD
+  per_task:
+    max_tokens: 100000
+    max_duration: 30m
+  on_exceed: pause      # warn, pause, stop
+  thresholds:
+    warning: 0.8        # Warn at 80% of limit
+```
+
+When a limit is hit, Pilot's behavior depends on `on_exceed`:
+- **warn** — Log a warning, continue execution
+- **pause** — Stop accepting new tasks, finish current task
+- **stop** — Terminate current task immediately
+
+## License: BSL 1.1
+
+Pilot is source-available under the [Business Source License 1.1](/LICENSE). Key terms:
+
+- **Free for production use** — You can run Pilot internally for your team
+- **No competing hosted service** — You cannot offer Pilot as a paid hosted/embedded service that competes with Pilot Cloud
+- **Converts to Apache 2.0** — After four years from first distribution, the license converts to Apache 2.0
+- **Open source/free projects** — Always permitted, regardless of whether they overlap with Pilot's features
+
+If you're using Pilot for your own development workflow, the BSL 1.1 imposes no restrictions. The license only restricts building a competing commercial service on top of Pilot's code.
+
+## Security Checklist
+
+Use this checklist when deploying Pilot:
+
+- [ ] `GITHUB_TOKEN` set with minimal required scopes (`repo`, `workflow`)
+- [ ] `ANTHROPIC_API_KEY` set via environment variable, not hardcoded
+- [ ] `allowed_users` configured for Telegram bot (if enabled)
+- [ ] `webhook_secret` configured for GitHub webhooks (if exposed to internet)
+- [ ] Autopilot environment set appropriately (`prod` for shared repos)
+- [ ] Budget limits configured to prevent runaway costs
+- [ ] Protected branches listed in autopilot config
+- [ ] Config file uses `${VAR}` references, not raw secrets
+- [ ] Quality gates enabled (default) — do not disable
