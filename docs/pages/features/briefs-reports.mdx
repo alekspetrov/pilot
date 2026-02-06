@@ -1,0 +1,212 @@
+import { Callout, Tabs } from 'nextra/components'
+
+# Daily & Weekly Briefs
+
+Automated progress reports delivered on a schedule to Slack, Telegram, or email.
+
+<Callout type="info">
+  Briefs summarize Pilot's activity — completed work, active tasks, blockers, and cost metrics — so your team stays informed without checking dashboards.
+</Callout>
+
+## What's in a Brief
+
+Every brief contains four task sections and a metrics summary:
+
+| Section | Contents |
+|---------|----------|
+| **Completed** | Tasks finished in the period, with PR links and duration |
+| **In Progress** | Active tasks with estimated progress (0–95%) |
+| **Blocked** | Failed tasks with error messages and retry counts |
+| **Upcoming** | Queued tasks awaiting execution |
+
+### Metrics
+
+Each brief includes aggregated metrics for the reporting period:
+
+- **Success rate** — ratio of completed to total tasks (0.0–1.0)
+- **PR count** — PRs created and merged
+- **Token usage** — total tokens consumed across all executions
+- **Estimated cost** — USD cost based on model pricing
+- **Average duration** — mean task completion time
+
+## Scheduling
+
+Briefs run on a cron schedule with timezone support.
+
+### Cron Syntax
+
+Standard five-field cron format:
+
+```
+┌───────────── minute (0–59)
+│ ┌─────────── hour (0–23)
+│ │ ┌───────── day of month (1–31)
+│ │ │ ┌─────── month (1–12)
+│ │ │ │ ┌───── day of week (0–6, Sun=0)
+│ │ │ │ │
+* * * * *
+```
+
+### Common Schedules
+
+| Schedule | Cron Expression | Description |
+|----------|----------------|-------------|
+| Weekday mornings | `0 9 * * 1-5` | 9 AM Mon–Fri (default) |
+| Every morning | `0 9 * * *` | 9 AM daily |
+| Monday morning | `0 9 * * 1` | Weekly on Monday at 9 AM |
+| Twice daily | `0 9,17 * * 1-5` | 9 AM and 5 PM weekdays |
+
+### Timezone
+
+Schedules execute in the configured timezone. Uses IANA timezone names.
+
+```yaml
+daily_brief:
+  timezone: "America/New_York"    # Eastern Time
+  # timezone: "Europe/London"     # GMT/BST
+  # timezone: "Asia/Tokyo"        # JST
+```
+
+## Manual Triggers
+
+Generate a brief on-demand without waiting for the schedule.
+
+### CLI
+
+```bash
+# Generate and deliver a daily brief immediately
+pilot brief --now
+
+# Generate a weekly summary
+pilot brief --weekly
+
+# Check scheduler status (next/last run, configured channels)
+pilot brief
+```
+
+### Telegram
+
+Send `/brief` to the Pilot bot in Telegram to generate an instant brief in the chat.
+
+```
+You: /brief
+
+Pilot: 📊 Daily Brief — Feb 7, 2026
+       ✅ Completed: 4 tasks
+       🔄 In Progress: 1 task
+       ❌ Failed: 0
+       📋 Queue: 2 tasks
+
+       Tokens: 245k | Cost: $1.23
+```
+
+## Multi-Channel Delivery
+
+Briefs are delivered simultaneously to all configured channels. Each channel receives a format optimized for that platform.
+
+### Slack
+
+Formatted with [Block Kit](https://api.slack.com/block-kit) — structured sections, progress bars using `▓░` characters, and linked PR references.
+
+### Email
+
+Full HTML email with inline CSS, color-coded sections, and responsive layout (600px max-width). A plaintext fallback is included for clients that don't render HTML.
+
+### Telegram
+
+Markdown-formatted message with emoji status indicators and compact token/cost display (k/M notation for large numbers).
+
+<Callout type="warning">
+  Email delivery requires an SMTP sender to be configured. Slack and Telegram work out of the box with their respective bot tokens.
+</Callout>
+
+## Configuration
+
+```yaml
+# ~/.pilot/config.yaml
+orchestrator:
+  daily_brief:
+    enabled: true
+    schedule: "0 9 * * 1-5"          # Cron expression
+    timezone: "America/New_York"
+
+    channels:
+      - type: slack
+        channel: "#dev-briefs"
+
+      - type: telegram
+        channel: "123456789"          # Chat ID
+
+      - type: email
+        recipients:
+          - "team-lead@company.com"
+          - "engineering@company.com"
+
+    content:
+      include_metrics: true           # Show tokens, cost, success rate
+      include_errors: true            # Show error details for blocked tasks
+      max_items_per_section: 10       # Cap items per section
+
+    filters:
+      projects: []                    # Empty = all projects
+      # projects:                     # Or filter to specific repos
+      #   - "myorg/frontend"
+      #   - "myorg/backend"
+```
+
+### Configuration Reference
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable brief scheduling |
+| `schedule` | string | `"0 9 * * 1-5"` | Cron expression for delivery |
+| `timezone` | string | `"UTC"` | IANA timezone for schedule |
+| `channels` | list | `[]` | Delivery targets (see below) |
+| `content.include_metrics` | bool | `true` | Include metrics section |
+| `content.include_errors` | bool | `true` | Include error details |
+| `content.max_items_per_section` | int | `10` | Max tasks per section |
+| `filters.projects` | list | `[]` | Project filter (empty = all) |
+
+### Channel Types
+
+<Tabs items={['Slack', 'Telegram', 'Email']}>
+  <Tabs.Tab>
+    ```yaml
+    channels:
+      - type: slack
+        channel: "#dev-briefs"    # Channel name or ID
+    ```
+    Requires `SLACK_BOT_TOKEN` and the bot invited to the channel.
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```yaml
+    channels:
+      - type: telegram
+        channel: "123456789"      # Chat ID (user or group)
+    ```
+    Requires `TELEGRAM_BOT_TOKEN` configured.
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```yaml
+    channels:
+      - type: email
+        recipients:
+          - "team@company.com"
+    ```
+    Requires SMTP sender configuration.
+  </Tabs.Tab>
+</Tabs>
+
+## Project Filtering
+
+By default, briefs include all projects. To scope briefs to specific repositories:
+
+```yaml
+daily_brief:
+  filters:
+    projects:
+      - "myorg/api-service"
+      - "myorg/web-app"
+```
+
+Tasks from repositories not in the list are excluded from the brief and its metrics.
