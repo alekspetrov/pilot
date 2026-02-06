@@ -247,6 +247,8 @@ type CompletedTask struct {
 	Status      string // "success" or "failed"
 	Duration    string
 	CompletedAt time.Time
+	ParentID    string // non-empty if this is a child of an epic
+	IsEpic      bool   // true if this task is an epic parent
 }
 
 // UpdateInfo contains information about an available update
@@ -1229,6 +1231,12 @@ func (m Model) renderHistory() string {
 			titleWidth = 10
 		}
 
+		// GH-577: Child tasks get extra indent (2 chars), narrower title
+		childTitleWidth := titleWidth - 2
+		if childTitleWidth < 10 {
+			childTitleWidth = 10
+		}
+
 		for i, task := range m.completedTasks {
 			if i > 0 {
 				content.WriteString("\n")
@@ -1245,13 +1253,25 @@ func (m Model) renderHistory() string {
 				style = statusFailedStyle
 			}
 
+			// GH-577: Epic parent uses "*" icon, child tasks are indented with "└" prefix
+			indent := "  "
+			tw := titleWidth
+			if task.IsEpic {
+				statusIcon = "*"
+			}
+			if task.ParentID != "" {
+				indent = "    "
+				tw = childTitleWidth
+			}
+
 			// Get plain text values for width calculation
 			timeAgoStr := formatTimeAgo(task.CompletedAt)
-			titleStr := padOrTruncate(task.Title, titleWidth)
+			titleStr := padOrTruncate(task.Title, tw)
 
 			// Build line with styles applied to specific parts only
 			// Don't use %-Ns with styled text - ANSI codes break padding
-			content.WriteString(fmt.Sprintf("  %s %-7s  %s  %8s",
+			content.WriteString(fmt.Sprintf("%s%s %-7s  %s  %8s",
+				indent,
 				style.Render(statusIcon),
 				task.ID,
 				titleStr,
@@ -1337,8 +1357,10 @@ func UpdateTokens(input, output int) tea.Cmd {
 	}
 }
 
-// AddCompletedTask sends a completed task to the TUI history
-func AddCompletedTask(id, title, status, duration string) tea.Cmd {
+// AddCompletedTask sends a completed task to the TUI history.
+// parentID is the parent epic's task ID (e.g. "GH-123") for sub-issues, or "" for top-level tasks.
+// isEpic marks the task as an epic parent.
+func AddCompletedTask(id, title, status, duration, parentID string, isEpic bool) tea.Cmd {
 	return func() tea.Msg {
 		return addCompletedTaskMsg(CompletedTask{
 			ID:          id,
@@ -1346,6 +1368,8 @@ func AddCompletedTask(id, title, status, duration string) tea.Cmd {
 			Status:      status,
 			Duration:    duration,
 			CompletedAt: time.Now(),
+			ParentID:    parentID,
+			IsEpic:      isEpic,
 		})
 	}
 }

@@ -986,6 +986,11 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 		runner.AddTokenCallback("dashboard", func(taskID string, inputTokens, outputTokens int64) {
 			program.Send(dashboard.UpdateTokens(int(inputTokens), int(outputTokens))())
 		})
+
+		// GH-577: Wire subtask completion to dashboard with parent context
+		runner.OnSubtaskCompleted(func(subtaskID, title, status, duration, parentID string) {
+			program.Send(dashboard.AddCompletedTask(subtaskID, title, status, duration, parentID, false)())
+		})
 	}
 
 	// Initialize Telegram handler if enabled
@@ -1671,6 +1676,17 @@ func parseAutopilotBranch(body string) string {
 	return ""
 }
 
+// parseParentID extracts the parent epic task ID from an issue body.
+// Epic sub-issues contain "Parent: GH-123" at the start of the body.
+// Returns empty string if no parent reference found.
+func parseParentID(body string) string {
+	re := regexp.MustCompile(`(?m)^Parent: (GH-\d+)`)
+	if m := re.FindStringSubmatch(body); len(m) > 1 {
+		return m[1]
+	}
+	return ""
+}
+
 // handleGitHubIssue processes a GitHub issue picked up by the poller
 func handleGitHubIssue(ctx context.Context, cfg *config.Config, client *github.Client, issue *github.Issue, projectPath string, dispatcher *executor.Dispatcher, runner *executor.Runner) error {
 	sourceRepo := cfg.Adapters.GitHub.Repo
@@ -1887,12 +1903,15 @@ func handleGitHubIssueWithMonitor(ctx context.Context, cfg *config.Config, clien
 	}
 
 	// Add completed task to dashboard history
+	// Note: In parallel mode (handleGitHubIssueWithMonitor), execution result is not
+	// available so isEpic defaults to false. Epic parents use sequential mode.
 	if program != nil {
 		status := "success"
 		if err != nil {
 			status = "failed"
 		}
-		program.Send(dashboard.AddCompletedTask(taskID, issue.Title, status, "")())
+		parentID := parseParentID(issue.Body)
+		program.Send(dashboard.AddCompletedTask(taskID, issue.Title, status, "", parentID, false)())
 	}
 
 	return err
@@ -2123,7 +2142,9 @@ func handleGitHubIssueWithResult(ctx context.Context, cfg *config.Config, client
 		if result != nil {
 			duration = result.Duration.String()
 		}
-		program.Send(dashboard.AddCompletedTask(taskID, issue.Title, status, duration)())
+		parentID := parseParentID(issue.Body)
+		isEpic := result != nil && result.IsEpic
+		program.Send(dashboard.AddCompletedTask(taskID, issue.Title, status, duration, parentID, isEpic)())
 	}
 
 	// Build the issue result
@@ -2369,7 +2390,8 @@ func handleLinearIssueWithResult(ctx context.Context, cfg *config.Config, client
 		} else if result != nil {
 			duration = result.Duration.String()
 		}
-		program.Send(dashboard.AddCompletedTask(taskID, issue.Title, status, duration)())
+		isEpic := result != nil && result.IsEpic
+		program.Send(dashboard.AddCompletedTask(taskID, issue.Title, status, duration, "", isEpic)())
 	}
 
 	// Build issue result

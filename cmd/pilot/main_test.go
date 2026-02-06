@@ -297,3 +297,56 @@ func TestParseAutopilotBranch(t *testing.T) {
 		})
 	}
 }
+
+func TestParseParentID(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "parent at start of body",
+			body: "Parent: GH-123\n\nImplement the feature...",
+			want: "GH-123",
+		},
+		{
+			name: "parent with larger number",
+			body: "Parent: GH-9999\n\nSub-issue details here",
+			want: "GH-9999",
+		},
+		{
+			name: "no parent reference",
+			body: "Some body text without parent",
+			want: "",
+		},
+		{
+			name: "empty body",
+			body: "",
+			want: "",
+		},
+		{
+			name: "parent in middle of line - no match",
+			body: "This issue has Parent: GH-456 mentioned inline",
+			want: "",
+		},
+		{
+			name: "parent at start of later line",
+			body: "Some intro text\nParent: GH-789\n\nDetails",
+			want: "GH-789",
+		},
+		{
+			name: "non-GH parent format - no match",
+			body: "Parent: LIN-123\n\nLinear issue",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseParentID(tt.body)
+			if got != tt.want {
+				t.Errorf("parseParentID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

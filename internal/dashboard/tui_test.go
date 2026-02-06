@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
@@ -331,6 +332,112 @@ func TestHydrateFromStore_LifetimeTokens(t *testing.T) {
 	}
 	if math.Abs(m.metricsCard.TotalCostUSD-wantCost) > 0.001 {
 		t.Errorf("TotalCostUSD = %.4f, want %.4f", m.metricsCard.TotalCostUSD, wantCost)
+	}
+}
+
+func TestRenderHistory_EpicAndChildren(t *testing.T) {
+	m := NewModel("test")
+
+	// Simulate an epic parent and two child tasks via Update
+	epicMsg := addCompletedTaskMsg(CompletedTask{
+		ID:          "GH-100",
+		Title:       "Epic: Add auth system",
+		Status:      "success",
+		CompletedAt: time.Now(),
+		IsEpic:      true,
+	})
+	updated, _ := m.Update(epicMsg)
+	m = updated.(Model)
+
+	child1Msg := addCompletedTaskMsg(CompletedTask{
+		ID:          "GH-101",
+		Title:       "Add login endpoint",
+		Status:      "success",
+		Duration:    "2m30s",
+		CompletedAt: time.Now(),
+		ParentID:    "GH-100",
+	})
+	updated, _ = m.Update(child1Msg)
+	m = updated.(Model)
+
+	child2Msg := addCompletedTaskMsg(CompletedTask{
+		ID:          "GH-102",
+		Title:       "Add logout endpoint",
+		Status:      "failed",
+		Duration:    "1m15s",
+		CompletedAt: time.Now(),
+		ParentID:    "GH-100",
+	})
+	updated, _ = m.Update(child2Msg)
+	m = updated.(Model)
+
+	output := m.renderHistory()
+
+	// Epic parent should use "*" icon
+	if !strings.Contains(output, "*") {
+		t.Error("epic parent should display '*' icon")
+	}
+
+	// Children should be indented (4 spaces instead of 2)
+	if !strings.Contains(output, "    ") {
+		t.Error("child tasks should be indented with 4 spaces")
+	}
+
+	// All task IDs should appear
+	for _, id := range []string{"GH-100", "GH-101", "GH-102"} {
+		if !strings.Contains(output, id) {
+			t.Errorf("output missing task ID %s", id)
+		}
+	}
+
+	// Panel header should be present
+	if !strings.Contains(output, "HISTORY") {
+		t.Error("output missing HISTORY panel header")
+	}
+}
+
+func TestRenderHistory_RegularTask(t *testing.T) {
+	m := NewModel("test")
+
+	msg := addCompletedTaskMsg(CompletedTask{
+		ID:          "GH-200",
+		Title:       "Fix typo in README",
+		Status:      "success",
+		CompletedAt: time.Now(),
+	})
+	updated, _ := m.Update(msg)
+	m = updated.(Model)
+
+	output := m.renderHistory()
+
+	// Regular tasks use "+" for success, no extra indent
+	if !strings.Contains(output, "GH-200") {
+		t.Error("output missing task ID GH-200")
+	}
+	// Should NOT contain epic marker
+	if strings.Contains(output, "*") {
+		t.Error("regular task should not use '*' icon")
+	}
+}
+
+func TestAddCompletedTask_ParentAndEpicFields(t *testing.T) {
+	cmd := AddCompletedTask("GH-50", "Test task", "success", "1m", "GH-49", true)
+	msg := cmd()
+
+	ct, ok := msg.(addCompletedTaskMsg)
+	if !ok {
+		t.Fatal("expected addCompletedTaskMsg type")
+	}
+
+	task := CompletedTask(ct)
+	if task.ParentID != "GH-49" {
+		t.Errorf("ParentID = %q, want %q", task.ParentID, "GH-49")
+	}
+	if !task.IsEpic {
+		t.Error("IsEpic should be true")
+	}
+	if task.ID != "GH-50" {
+		t.Errorf("ID = %q, want %q", task.ID, "GH-50")
 	}
 }
 

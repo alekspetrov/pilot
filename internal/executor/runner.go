@@ -203,6 +203,10 @@ type TokenCallback func(taskID string, inputTokens, outputTokens int64)
 // limit has been exceeded and execution should be cancelled.
 type TokenLimitCallback func(taskID string, deltaInput, deltaOutput int64) bool
 
+// SubtaskCompletedCallback is called when a subtask within a decomposed/epic task completes.
+// It receives the subtask ID, title, status ("success"/"failed"), duration, and the parent task ID.
+type SubtaskCompletedCallback func(subtaskID, title, status, duration, parentID string)
+
 // Runner executes development tasks using an AI backend (Claude Code, OpenCode, etc.).
 // It manages task lifecycle including branch creation, AI invocation,
 // progress tracking, PR creation, and execution recording. Runner is safe for
@@ -227,8 +231,9 @@ type Runner struct {
 	parallelRunner        *ParallelRunner       // Optional parallel research runner (GH-217)
 	decomposer            *TaskDecomposer       // Optional task decomposer for complex tasks (GH-218)
 	subtaskParser         *SubtaskParser        // Haiku-based subtask parser; nil falls back to regex (GH-501)
-	suppressProgressLogs  bool                  // Suppress slog output for progress (use when visual display is active)
-	tokenLimitCheck       TokenLimitCallback    // Optional per-task token/duration limit check (GH-539)
+	suppressProgressLogs  bool                       // Suppress slog output for progress (use when visual display is active)
+	tokenLimitCheck       TokenLimitCallback          // Optional per-task token/duration limit check (GH-539)
+	subtaskCompleted      SubtaskCompletedCallback    // Optional callback for decomposed subtask completion (GH-577)
 }
 
 // NewRunner creates a new Runner instance with Claude Code backend by default.
@@ -375,6 +380,13 @@ func (r *Runner) EnableDecomposition(config *DecomposeConfig) {
 // terminates with a budget-exceeded error.
 func (r *Runner) SetTokenLimitCheck(cb TokenLimitCallback) {
 	r.tokenLimitCheck = cb
+}
+
+// OnSubtaskCompleted registers a callback invoked when a subtask within a decomposed
+// task completes. Used to report individual subtask completion to the TUI dashboard
+// with the parent task ID for hierarchical rendering (GH-577).
+func (r *Runner) OnSubtaskCompleted(cb SubtaskCompletedCallback) {
+	r.subtaskCompleted = cb
 }
 
 // getRecordingsPath returns the recordings path, using default if not set
@@ -1463,6 +1475,10 @@ func (r *Runner) executeDecomposedTask(ctx context.Context, parentTask *Task, su
 			)
 			aggregateResult.Success = false
 			aggregateResult.Error = fmt.Sprintf("subtask %d/%d failed: %v", subtaskNum, totalSubtasks, err)
+			// GH-577: Report failed subtask to dashboard
+			if r.subtaskCompleted != nil {
+				r.subtaskCompleted(subtask.ID, subtask.Title, "failed", "", parentTask.ID)
+			}
 			break
 		}
 
@@ -1473,6 +1489,10 @@ func (r *Runner) executeDecomposedTask(ctx context.Context, parentTask *Task, su
 			)
 			aggregateResult.Success = false
 			aggregateResult.Error = fmt.Sprintf("subtask %d/%d failed: %s", subtaskNum, totalSubtasks, subtaskResult.Error)
+			// GH-577: Report failed subtask to dashboard
+			if r.subtaskCompleted != nil {
+				r.subtaskCompleted(subtask.ID, subtask.Title, "failed", subtaskResult.Duration.String(), parentTask.ID)
+			}
 			break
 		}
 
@@ -1506,6 +1526,11 @@ func (r *Runner) executeDecomposedTask(ctx context.Context, parentTask *Task, su
 			slog.Int("index", subtaskNum),
 			slog.Int("total", totalSubtasks),
 		)
+
+		// GH-577: Report subtask completion to dashboard with parent context
+		if r.subtaskCompleted != nil {
+			r.subtaskCompleted(subtask.ID, subtask.Title, "success", subtaskResult.Duration.String(), parentTask.ID)
+		}
 	}
 
 	aggregateResult.Duration = time.Since(start)
