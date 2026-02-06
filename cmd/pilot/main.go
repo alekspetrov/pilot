@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -508,6 +509,30 @@ Examples:
 					slog.Float64("daily_limit", cfg.Budget.DailyLimit),
 					slog.Float64("monthly_limit", cfg.Budget.MonthlyLimit),
 				)
+
+				// GH-539: Wire per-task token/duration limits into executor stream (gateway mode)
+				maxTokens, maxDuration := gwEnforcer.GetPerTaskLimits()
+				if gwRunner != nil && (maxTokens > 0 || maxDuration > 0) {
+					var gwTaskLimiters sync.Map
+					gwRunner.SetTokenLimitCheck(func(taskID string, deltaInput, deltaOutput int64) bool {
+						val, _ := gwTaskLimiters.LoadOrStore(taskID, budget.NewTaskLimiter(maxTokens, maxDuration))
+						limiter := val.(*budget.TaskLimiter)
+						totalDelta := deltaInput + deltaOutput
+						if totalDelta > 0 {
+							if !limiter.AddTokens(totalDelta) {
+								return false
+							}
+						}
+						if !limiter.CheckDuration() {
+							return false
+						}
+						return true
+					})
+					logging.WithComponent("start").Info("per-task budget limits enabled (gateway mode)",
+						slog.Int64("max_tokens", maxTokens),
+						slog.Duration("max_duration", maxDuration),
+					)
+				}
 			}
 
 			// Enable GitHub polling in gateway mode only if --github flag was explicitly passed (GH-350, GH-351)
@@ -1121,6 +1146,37 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 			slog.Float64("daily_limit", cfg.Budget.DailyLimit),
 			slog.Float64("monthly_limit", cfg.Budget.MonthlyLimit),
 		)
+
+		// GH-539: Wire per-task token/duration limits into executor stream
+		maxTokens, maxDuration := enforcer.GetPerTaskLimits()
+		if maxTokens > 0 || maxDuration > 0 {
+			var taskLimiters sync.Map // map[taskID]*budget.TaskLimiter
+			runner.SetTokenLimitCheck(func(taskID string, deltaInput, deltaOutput int64) bool {
+				// Get or create limiter for this task
+				val, _ := taskLimiters.LoadOrStore(taskID, budget.NewTaskLimiter(maxTokens, maxDuration))
+				limiter := val.(*budget.TaskLimiter)
+
+				// Feed token deltas into the limiter
+				totalDelta := deltaInput + deltaOutput
+				if totalDelta > 0 {
+					if !limiter.AddTokens(totalDelta) {
+						return false
+					}
+				}
+
+				// Also check duration on every event
+				if !limiter.CheckDuration() {
+					return false
+				}
+
+				return true
+			})
+			logging.WithComponent("start").Info("per-task budget limits enabled",
+				slog.Int64("max_tokens", maxTokens),
+				slog.Duration("max_duration", maxDuration),
+			)
+		}
+
 		if !dashboardMode {
 			fmt.Printf("💰 Budget enforcement enabled: $%.2f/day, $%.2f/month\n",
 				cfg.Budget.DailyLimit, cfg.Budget.MonthlyLimit)
@@ -2873,6 +2929,28 @@ Examples:
 					// Model routing (GH-215)
 					if cfg.Executor != nil {
 						runner.SetModelRouter(executor.NewModelRouterWithEffort(cfg.Executor.ModelRouting, cfg.Executor.Timeout, cfg.Executor.EffortRouting))
+					}
+
+					// GH-539: Wire per-task budget limits if configured
+					if cfg.Budget != nil && cfg.Budget.Enabled {
+						maxTokens := cfg.Budget.PerTask.MaxTokens
+						maxDuration := cfg.Budget.PerTask.MaxDuration
+						if maxTokens > 0 || maxDuration > 0 {
+							limiter := budget.NewTaskLimiter(maxTokens, maxDuration)
+							runner.SetTokenLimitCheck(func(_ string, deltaInput, deltaOutput int64) bool {
+								totalDelta := deltaInput + deltaOutput
+								if totalDelta > 0 {
+									if !limiter.AddTokens(totalDelta) {
+										return false
+									}
+								}
+								if !limiter.CheckDuration() {
+									return false
+								}
+								return true
+							})
+							fmt.Printf("   Per-task:  ✓ max %d tokens, %v duration\n", maxTokens, maxDuration)
+						}
 					}
 				}
 			}
