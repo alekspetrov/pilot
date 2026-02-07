@@ -1351,11 +1351,6 @@ func renderStandaloneLine(task CompletedTask) string {
 // Title = 65 - 2 - 1 - 1 - 7 - 2 - 2 - 19 = 31
 func renderActiveEpicLine(task CompletedTask) string {
 	const progressInnerWidth = 4
-	// Recalculate: total = indent(2)+icon(1)+sp(1)+id(7)+sp(2)+title+sp(2)+right(rightWidth) = 65
-	// title = 65 - 2 - 1 - 1 - 7 - 2 - 2 - rightWidth = 65 - 15 - rightWidth
-	// Let's be precise:
-	// indent(2) + icon(1) + sp(1) + id(7) + sp(2) + title + sp(1) + progress(6) + sp(1) + counts + sp(1) + time
-	// We need the right side to fit. Let's use fixed columns:
 
 	bar := renderEpicProgressBar(task.DoneSubs, task.TotalSubs, progressInnerWidth)
 	counts := fmt.Sprintf("%d/%d", task.DoneSubs, task.TotalSubs)
