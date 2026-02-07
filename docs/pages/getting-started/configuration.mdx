@@ -314,47 +314,290 @@ orchestrator:
 
 ## Quality
 
-Quality gates run before PR creation. Failed gates trigger retries or block the PR.
+Quality gates run **after** Pilot implements changes but **before** creating a PR. Each gate executes a shell command in the project directory. If a required gate fails, Pilot retries the implementation with the error output as feedback — the LLM sees what broke and fixes it.
 
+### How Quality Gates Work
+
+```
+Implementation complete
+  → Run gates in order: build → test → lint → coverage → ...
+  → All required gates pass? → Create PR
+  → Required gate fails?
+      → retry (default): feed error to LLM, re-implement, re-run gates
+      → fail: stop immediately, mark task as failed
+      → warn: log warning, create PR anyway
+```
+
+<Callout type="info">
+Even without explicit configuration, Pilot auto-detects your project type and runs a **minimal build gate** to catch compilation errors. Set `quality.enabled: true` to configure the full pipeline.
+</Callout>
+
+### Auto-Detection
+
+When quality gates are not explicitly configured, Pilot detects your project type by checking for marker files and applies a minimal build check:
+
+| Project Type | Marker File | Auto-Detected Command |
+|-------------|-------------|----------------------|
+| Go | `go.mod` | `go build ./...` |
+| Node.js (TypeScript) | `package.json` + `tsconfig.json` | `npm run build \|\| npx tsc --noEmit` |
+| Node.js (JavaScript) | `package.json` | `npm run build --if-present` |
+| Rust | `Cargo.toml` | `cargo check` |
+| Python | `pyproject.toml` or `setup.py` | `python -m py_compile` on changed files |
+
+To disable auto-detection, set `quality.enabled: false` explicitly.
+
+### Gate Types
+
+Seven built-in gate types with sensible default timeouts:
+
+| Type | Default Timeout | Purpose |
+|------|----------------|---------|
+| `build` | 5m | Compilation / build step |
+| `test` | 10m | Test suite execution |
+| `lint` | 2m | Static analysis and formatting |
+| `coverage` | 10m | Code coverage with threshold enforcement |
+| `security` | 5m | Security scanning (e.g. `gosec`, `npm audit`) |
+| `typecheck` | 3m | Type checking (e.g. `tsc --noEmit`, `mypy`) |
+| `custom` | 5m | Any arbitrary command |
+
+### Project-Specific Examples
+
+<Tabs items={['Go', 'Node.js / TypeScript', 'Python', 'Rust']}>
+  <Tabs.Tab>
 ```yaml
 quality:
   enabled: true
   gates:
     - name: build
       type: build
-      command: "make build"
+      command: "go build ./..."
       required: true
       timeout: 5m
       max_retries: 2
-      failure_hint: "Check compilation errors"
+      failure_hint: "Fix compilation errors in the changed files"
 
     - name: test
       type: test
-      command: "make test"
+      command: "go test ./... -count=1"
       required: true
       timeout: 10m
       max_retries: 2
+      failure_hint: "Fix failing tests or update test expectations"
 
     - name: lint
       type: lint
-      command: "make lint"
+      command: "golangci-lint run ./..."
       required: false
-      timeout: 2m
+      timeout: 3m
       max_retries: 1
+      failure_hint: "Fix linting errors: formatting, unused imports, etc."
+
+    - name: vet
+      type: custom
+      command: "go vet ./..."
+      required: true
+      timeout: 2m
+      failure_hint: "Fix go vet issues"
 
     - name: coverage
       type: coverage
-      command: "make coverage"
-      threshold: 80.0                     # minimum coverage percentage
+      command: "go test ./... -coverprofile=coverage.out && go tool cover -func=coverage.out"
+      threshold: 70.0
+      required: false
+      timeout: 10m
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: typecheck
+      type: typecheck
+      command: "npx tsc --noEmit"
+      required: true
+      timeout: 3m
+      max_retries: 2
+      failure_hint: "Fix TypeScript type errors"
+
+    - name: build
+      type: build
+      command: "npm run build"
+      required: true
+      timeout: 5m
+      max_retries: 1
+      failure_hint: "Fix build errors"
+
+    - name: test
+      type: test
+      command: "npm test -- --watchAll=false"
+      required: true
+      timeout: 10m
+      max_retries: 2
+      failure_hint: "Fix failing tests or update snapshots"
+
+    - name: lint
+      type: lint
+      command: "npx eslint . --max-warnings 0"
+      required: false
+      timeout: 2m
+      max_retries: 1
+      failure_hint: "Fix ESLint warnings and errors"
+
+    - name: coverage
+      type: coverage
+      command: "npm test -- --coverage --watchAll=false"
+      threshold: 80.0
+      required: false
+      timeout: 10m
+```
+
+<Callout type="warning">
+For monorepos using Turborepo or Nx, prefix commands with the workspace runner: `npx turbo build` or `npx nx run-many --target=build`.
+</Callout>
+  </Tabs.Tab>
+  <Tabs.Tab>
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: typecheck
+      type: typecheck
+      command: "mypy src/"
+      required: false
+      timeout: 3m
+      failure_hint: "Fix type annotation errors"
+
+    - name: test
+      type: test
+      command: "pytest -x --tb=short"
+      required: true
+      timeout: 10m
+      max_retries: 2
+      failure_hint: "Fix failing tests"
+
+    - name: lint
+      type: lint
+      command: "ruff check . && ruff format --check ."
+      required: false
+      timeout: 2m
+      max_retries: 1
+      failure_hint: "Run 'ruff format .' to fix formatting"
+
+    - name: coverage
+      type: coverage
+      command: "pytest --cov=src --cov-report=term-missing"
+      threshold: 75.0
       required: false
       timeout: 10m
 
-  on_failure:
-    action: "retry"                       # retry, fail, warn
-    max_retries: 3
-    notify_on:
-      - failed
+    - name: security
+      type: security
+      command: "bandit -r src/ -ll"
+      required: false
+      timeout: 3m
+      failure_hint: "Fix security issues flagged by bandit"
 ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: build
+      type: build
+      command: "cargo check"
+      required: true
+      timeout: 10m
+      max_retries: 2
+      failure_hint: "Fix compilation errors"
+
+    - name: test
+      type: test
+      command: "cargo test"
+      required: true
+      timeout: 15m
+      max_retries: 2
+      failure_hint: "Fix failing tests"
+
+    - name: lint
+      type: lint
+      command: "cargo clippy -- -D warnings"
+      required: false
+      timeout: 5m
+      max_retries: 1
+      failure_hint: "Fix clippy warnings"
+
+    - name: format
+      type: custom
+      command: "cargo fmt -- --check"
+      required: false
+      timeout: 1m
+      failure_hint: "Run 'cargo fmt' to fix formatting"
+```
+  </Tabs.Tab>
+</Tabs>
+
+### Coverage Thresholds
+
+Coverage gates parse output from common test runners to extract a percentage value. Supported output formats:
+
+| Runner | Output Pattern | Example |
+|--------|---------------|---------|
+| Go | `coverage: X.X% of statements` | `coverage: 85.3% of statements` |
+| Jest / NYC | `Statements : X.X%` or `Lines : X.X%` | `Statements   : 92.1%` |
+| pytest-cov | `TOTAL ... X%` | `TOTAL    450    38    92%` |
+
+Set `threshold` on a coverage gate to enforce a minimum:
+
+```yaml
+    - name: coverage
+      type: coverage
+      command: "go test ./... -coverprofile=c.out && go tool cover -func=c.out"
+      threshold: 80.0          # fail if coverage drops below 80%
+      required: true           # block PR creation
+      timeout: 10m
+```
+
+<Callout type="info">
+When a coverage gate is `required: false`, Pilot logs a warning if coverage is below the threshold but still creates the PR. Set `required: true` to enforce it as a hard gate.
+</Callout>
+
+### Failure Handling
+
+The `on_failure` block defines global behavior when any required gate fails:
+
+```yaml
+quality:
+  on_failure:
+    action: "retry"          # retry | fail | warn
+    max_retries: 3           # global retry limit across all gates
+    notify_on:
+      - failed               # send notification on these statuses
+```
+
+| Action | Behavior |
+|--------|----------|
+| `retry` | Feed the error output back to the LLM, re-implement, re-run all gates. Default. |
+| `fail` | Stop immediately. Mark the task as failed. Useful for CI-only validation. |
+| `warn` | Log the failure as a warning. Continue to PR creation. |
+
+**Per-gate retries** (`max_retries` on individual gates) control how many times a single gate retries before reporting failure. **Global retries** (`on_failure.max_retries`) control how many full implementation cycles run. These compose: a gate with `max_retries: 2` inside a pipeline with `on_failure.max_retries: 3` can attempt the gate up to 2×3 = 6 times total.
+
+### Failure Hints
+
+The `failure_hint` field on each gate is passed to the LLM as context when a gate fails. Write hints that help the AI fix the issue:
+
+```yaml
+    - name: lint
+      type: lint
+      command: "golangci-lint run ./..."
+      failure_hint: "Fix linting errors. Common issues: unused imports, missing error checks, formatting."
+```
+
+Good hints are specific and actionable. Bad hints are vague ("fix the errors").
+
+### Option Reference
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -363,14 +606,14 @@ quality:
 | `gates[].type` | string | — | Gate type: `build`, `test`, `lint`, `coverage`, `security`, `typecheck`, `custom` |
 | `gates[].command` | string | — | Shell command to run |
 | `gates[].required` | bool | `false` | Block PR if gate fails |
-| `gates[].timeout` | duration | varies | Max execution time |
+| `gates[].timeout` | duration | varies | Max execution time (see gate type defaults above) |
 | `gates[].threshold` | float64 | — | Minimum threshold (coverage gates) |
-| `gates[].max_retries` | int | `0` | Retry count on failure |
+| `gates[].max_retries` | int | `0` | Retry count per gate on failure |
 | `gates[].retry_delay` | duration | `0` | Delay between retries |
-| `gates[].failure_hint` | string | — | Hint message shown on failure |
+| `gates[].failure_hint` | string | — | Context message passed to LLM on failure |
 | `on_failure.action` | string | `"retry"` | Default action: `retry`, `fail`, `warn` |
-| `on_failure.max_retries` | int | — | Global retry limit |
-| `on_failure.notify_on` | []string | — | Statuses that trigger notifications |
+| `on_failure.max_retries` | int | — | Global retry limit (full re-implementation cycles) |
+| `on_failure.notify_on` | []string | — | Statuses that trigger notifications: `failed`, `passed`, `skipped` |
 
 ---
 
