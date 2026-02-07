@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -440,6 +441,13 @@ func (r *Runner) ExecuteSubIssues(ctx context.Context, parent *Task, issues []Cr
 			// Non-fatal, continue
 		}
 
+		// GH-595: Forward sub-issue PR creation to autopilot controller
+		if result.PRUrl != "" && r.onSubIssuePRCreated != nil {
+			if prNum := extractPRNumberFromURL(result.PRUrl); prNum > 0 {
+				r.onSubIssuePRCreated(prNum, result.PRUrl, issue.Number, result.CommitSHA, subTask.Branch)
+			}
+		}
+
 		r.log.Info("Sub-issue completed",
 			"parent_id", parent.ID,
 			"sub_issue", issue.Number,
@@ -462,4 +470,21 @@ func (r *Runner) ExecuteSubIssues(ctx context.Context, parent *Task, issues []Cr
 	)
 
 	return nil
+}
+
+// prNumberRegex matches /pull/123 or /pulls/123 in a GitHub PR URL.
+var prNumberRegex = regexp.MustCompile(`/pulls?/(\d+)`)
+
+// extractPRNumberFromURL extracts the PR number from a GitHub PR URL.
+// Returns 0 if the URL doesn't match the expected pattern.
+func extractPRNumberFromURL(prURL string) int {
+	matches := prNumberRegex.FindStringSubmatch(prURL)
+	if len(matches) < 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0
+	}
+	return n
 }

@@ -203,6 +203,10 @@ type TokenCallback func(taskID string, inputTokens, outputTokens int64)
 // limit has been exceeded and execution should be cancelled.
 type TokenLimitCallback func(taskID string, deltaInput, deltaOutput int64) bool
 
+// SubIssuePRCreatedCallback is called when a sub-issue execution creates a PR.
+// Parameters match autopilot.Controller.OnPRCreated so the callback can be wired directly.
+type SubIssuePRCreatedCallback func(prNumber int, prURL string, issueNumber int, headSHA string, branchName string)
+
 // Runner executes development tasks using an AI backend (Claude Code, OpenCode, etc.).
 // It manages task lifecycle including branch creation, AI invocation,
 // progress tracking, PR creation, and execution recording. Runner is safe for
@@ -227,8 +231,9 @@ type Runner struct {
 	parallelRunner        *ParallelRunner       // Optional parallel research runner (GH-217)
 	decomposer            *TaskDecomposer       // Optional task decomposer for complex tasks (GH-218)
 	subtaskParser         *SubtaskParser        // Haiku-based subtask parser; nil falls back to regex (GH-501)
-	suppressProgressLogs  bool                  // Suppress slog output for progress (use when visual display is active)
-	tokenLimitCheck       TokenLimitCallback    // Optional per-task token/duration limit check (GH-539)
+	suppressProgressLogs  bool                       // Suppress slog output for progress (use when visual display is active)
+	tokenLimitCheck       TokenLimitCallback         // Optional per-task token/duration limit check (GH-539)
+	onSubIssuePRCreated   SubIssuePRCreatedCallback  // Optional callback when sub-issue PR is created (GH-595)
 }
 
 // NewRunner creates a new Runner instance with Claude Code backend by default.
@@ -375,6 +380,13 @@ func (r *Runner) EnableDecomposition(config *DecomposeConfig) {
 // terminates with a budget-exceeded error.
 func (r *Runner) SetTokenLimitCheck(cb TokenLimitCallback) {
 	r.tokenLimitCheck = cb
+}
+
+// SetOnSubIssuePRCreated sets a callback invoked when a sub-issue execution
+// creates a PR. Used to forward sub-issue PR events to the autopilot controller
+// so it can track CI and merge them automatically (GH-595).
+func (r *Runner) SetOnSubIssuePRCreated(cb SubIssuePRCreatedCallback) {
+	r.onSubIssuePRCreated = cb
 }
 
 // getRecordingsPath returns the recordings path, using default if not set
