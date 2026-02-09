@@ -448,11 +448,11 @@ func TestAcknowledge(t *testing.T) {
 				CheckOrigin: func(r *http.Request) bool { return true },
 			}
 
-			var receivedMsg []byte
+			msgCh := make(chan []byte, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn, err := upgrader.Upgrade(w, r, nil)
 				if err != nil {
-					t.Fatalf("upgrade: %v", err)
+					t.Errorf("upgrade: %v", err)
 					return
 				}
 				defer func() { _ = conn.Close() }()
@@ -461,7 +461,10 @@ func TestAcknowledge(t *testing.T) {
 				if err != nil {
 					return
 				}
-				receivedMsg = msg
+				// Copy the message to avoid sharing the WebSocket read buffer.
+				cp := make([]byte, len(msg))
+				copy(cp, msg)
+				msgCh <- cp
 			}))
 			defer server.Close()
 
@@ -479,8 +482,13 @@ func TestAcknowledge(t *testing.T) {
 				t.Fatalf("acknowledge: %v", err)
 			}
 
-			// Give server time to receive
-			time.Sleep(50 * time.Millisecond)
+			// Wait for server to receive with timeout
+			var receivedMsg []byte
+			select {
+			case receivedMsg = <-msgCh:
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for server to receive ack message")
+			}
 
 			// Parse and verify
 			ack, err := parseAcknowledge(receivedMsg)
