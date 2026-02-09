@@ -381,7 +381,7 @@ func TestListenContextCancel(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		// Send hello envelope.
 		hello := `{"envelope_id":"","type":"hello"}`
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(hello))
@@ -455,7 +455,7 @@ func TestListenReceivesEvents(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Send hello.
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"envelope_id":"","type":"hello"}`))
@@ -543,7 +543,7 @@ func TestListenDisconnectTriggersReconnect(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Send disconnect immediately.
 		disc := `{"envelope_id":"","type":"disconnect","reason":"link_disabled"}`
@@ -588,7 +588,7 @@ func TestListenFiltersBotMessages(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Send a bot message (should be filtered).
 		botEnv := map[string]interface{}{
@@ -672,7 +672,7 @@ func TestAcknowledge(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Send event with envelope_id.
 		env := `{"envelope_id":"ack-test-123","type":"events_api","payload":{"event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1.1"}}}`
