@@ -2,50 +2,50 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://pilot.dev/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/DEPLOYMENT/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/llm/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/architecture/features/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/architecture/overview/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/cli/commands/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/features/autopilot/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/features/github/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/features/telegram/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/getting-started/config/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/getting-started/install/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
     <url>
          <loc>https://pilot.dev/getting-started/quickstart/</loc>
-         <lastmod>2026-02-07</lastmod>
+         <lastmod>2026-02-09</lastmod>
     </url>
 </urlset>
