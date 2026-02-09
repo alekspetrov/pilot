@@ -231,6 +231,34 @@ func (sc *SocketClient) runOnce(ctx context.Context) error {
 
 	sc.log.Info("socket mode connected", "url", wsURL)
 
+	// Start ping goroutine to keep connection alive.
+	stopPing := make(chan struct{})
+	pingDone := make(chan struct{})
+	go func() {
+		defer close(pingDone)
+		ticker := time.NewTicker(sc.pingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopPing:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					sc.log.Debug("ping failed", "error", err)
+					return
+				}
+			}
+		}
+	}()
+
+	// Ensure ping goroutine stops before conn cleanup.
+	defer func() {
+		close(stopPing)
+		<-pingDone
+	}()
+
 	// Read messages until error or context cancel.
 	for {
 		if ctx.Err() != nil {
