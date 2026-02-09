@@ -441,6 +441,12 @@ func (c *Config) Validate() error {
 	if c.Auth != nil && c.Auth.Type == gateway.AuthTypeAPIToken && c.Auth.Token == "" {
 		return fmt.Errorf("API token is required when auth type is api-token")
 	}
+	// Validate Slack socket mode: app_token required when socket_mode_enabled
+	if c.Adapters != nil && c.Adapters.Slack != nil && c.Adapters.Slack.SocketModeEnabled {
+		if c.Adapters.Slack.AppToken == "" {
+			return fmt.Errorf("slack app_token is required when socket_mode_enabled is true")
+		}
+	}
 	return nil
 }
 

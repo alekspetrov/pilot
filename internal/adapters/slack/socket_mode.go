@@ -11,20 +11,20 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// SocketEventType identifies the kind of event received over Socket Mode.
-type SocketEventType string
+// RawSocketEventType identifies the kind of event received over Socket Mode.
+type RawSocketEventType string
 
 const (
-	SocketEventMessage     SocketEventType = "events_api"
-	SocketEventInteraction SocketEventType = "interactive"
-	SocketEventSlashCmd    SocketEventType = "slash_commands"
-	SocketEventDisconnect  SocketEventType = "disconnect"
+	RawSocketEventMessage     RawSocketEventType = "events_api"
+	RawSocketEventInteraction RawSocketEventType = "interactive"
+	RawSocketEventSlashCmd    RawSocketEventType = "slash_commands"
+	RawSocketEventDisconnect  RawSocketEventType = "disconnect"
 )
 
-// SocketEvent is emitted on the events channel for each envelope received
+// RawSocketEvent is emitted on the events channel for each envelope received
 // from the Slack Socket Mode WebSocket connection.
-type SocketEvent struct {
-	Type       SocketEventType
+type RawSocketEvent struct {
+	Type       RawSocketEventType
 	EnvelopeID string
 	Payload    json.RawMessage // raw inner payload for caller to decode
 }
@@ -44,10 +44,10 @@ type envelopeAck struct {
 }
 
 // SocketModeHandler manages a Slack Socket Mode WebSocket connection.
-// It reads envelopes, acknowledges them, and emits SocketEvents on a channel.
+// It reads envelopes, acknowledges them, and emits RawSocketEvents on a channel.
 type SocketModeHandler struct {
 	conn   *websocket.Conn
-	events chan SocketEvent
+	events chan RawSocketEvent
 	done   chan struct{}
 	once   sync.Once
 	log    *slog.Logger
@@ -61,8 +61,8 @@ type SocketModeHandler struct {
 // NewSocketModeHandler wraps an established WebSocket connection and returns
 // the handler plus the channel that will receive parsed events.
 // Call Run() to start the read loop.
-func NewSocketModeHandler(conn *websocket.Conn) (*SocketModeHandler, <-chan SocketEvent) {
-	ch := make(chan SocketEvent, 64)
+func NewSocketModeHandler(conn *websocket.Conn) (*SocketModeHandler, <-chan RawSocketEvent) {
+	ch := make(chan RawSocketEvent, 64)
 	h := &SocketModeHandler{
 		conn:         conn,
 		events:       ch,
@@ -187,8 +187,8 @@ func (h *SocketModeHandler) handleRawMessage(data []byte) {
 		}
 		h.log.Info("disconnect envelope received", slog.String("reason", reason))
 
-		h.emit(SocketEvent{
-			Type:       SocketEventDisconnect,
+		h.emit(RawSocketEvent{
+			Type:       RawSocketEventDisconnect,
 			EnvelopeID: env.EnvelopeID,
 			Payload:    data, // full envelope so caller can inspect reason
 		})
@@ -203,7 +203,7 @@ func (h *SocketModeHandler) handleRawMessage(data []byte) {
 		return
 	}
 
-	h.emit(SocketEvent{
+	h.emit(RawSocketEvent{
 		Type:       evtType,
 		EnvelopeID: env.EnvelopeID,
 		Payload:    env.Payload,
@@ -219,7 +219,7 @@ func (h *SocketModeHandler) acknowledge(envelopeID string) error {
 	return h.conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func (h *SocketModeHandler) emit(evt SocketEvent) {
+func (h *SocketModeHandler) emit(evt RawSocketEvent) {
 	select {
 	case h.events <- evt:
 	default:
@@ -229,16 +229,16 @@ func (h *SocketModeHandler) emit(evt SocketEvent) {
 	}
 }
 
-func mapEnvelopeType(raw string) (SocketEventType, bool) {
+func mapEnvelopeType(raw string) (RawSocketEventType, bool) {
 	switch raw {
 	case "events_api":
-		return SocketEventMessage, true
+		return RawSocketEventMessage, true
 	case "interactive":
-		return SocketEventInteraction, true
+		return RawSocketEventInteraction, true
 	case "slash_commands":
-		return SocketEventSlashCmd, true
+		return RawSocketEventSlashCmd, true
 	case "disconnect":
-		return SocketEventDisconnect, true
+		return RawSocketEventDisconnect, true
 	default:
 		return "", false
 	}

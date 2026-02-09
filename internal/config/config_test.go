@@ -565,6 +565,55 @@ func TestValidate(t *testing.T) {
 			}(),
 			wantErr: false, // Nil auth is allowed
 		},
+		{
+			name: "SlackSocketModeWithoutAppToken",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketModeEnabled = true
+				c.Adapters.Slack.AppToken = ""
+				return c
+			}(),
+			wantErr:     true,
+			errContains: "slack app_token is required when socket_mode_enabled is true",
+		},
+		{
+			name: "SlackSocketModeWithAppToken",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketModeEnabled = true
+				c.Adapters.Slack.AppToken = "test-slack-app-token"
+				return c
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "SlackSocketModeDisabled",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketModeEnabled = false
+				c.Adapters.Slack.AppToken = ""
+				return c
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "SlackNilAdapters",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters = nil
+				return c
+			}(),
+			wantErr: false, // Nil adapters is allowed
+		},
+		{
+			name: "SlackNilConfig",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack = nil
+				return c
+			}(),
+			wantErr: false, // Nil Slack config is allowed
+		},
 	}
 
 	for _, tt := range tests {
@@ -1015,6 +1064,112 @@ func findSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestLoadSlackSocketModeConfig(t *testing.T) {
+	t.Run("socket mode enabled with app token", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		configContent := `
+version: "1.0"
+adapters:
+  slack:
+    enabled: true
+    bot_token: "test-slack-bot-token"
+    channel: "#engineering"
+    socket_mode_enabled: true
+    app_token: "test-slack-app-token"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("Failed to write test config: %v", err)
+		}
+
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		if cfg.Adapters.Slack == nil {
+			t.Fatal("Adapters.Slack is nil")
+		}
+		if !cfg.Adapters.Slack.Enabled {
+			t.Error("Slack.Enabled should be true")
+		}
+		if !cfg.Adapters.Slack.SocketModeEnabled {
+			t.Error("Slack.SocketModeEnabled should be true")
+		}
+		if cfg.Adapters.Slack.AppToken != "test-slack-app-token" {
+			t.Errorf("Slack.AppToken = %q, want %q", cfg.Adapters.Slack.AppToken, "test-slack-app-token")
+		}
+		if cfg.Adapters.Slack.BotToken != "test-slack-bot-token" {
+			t.Errorf("Slack.BotToken = %q, want %q", cfg.Adapters.Slack.BotToken, "test-slack-bot-token")
+		}
+		if cfg.Adapters.Slack.Channel != "#engineering" {
+			t.Errorf("Slack.Channel = %q, want %q", cfg.Adapters.Slack.Channel, "#engineering")
+		}
+	})
+
+	t.Run("socket mode disabled by default", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		configContent := `
+version: "1.0"
+adapters:
+  slack:
+    enabled: true
+    bot_token: "test-slack-bot-token"
+    channel: "#dev"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("Failed to write test config: %v", err)
+		}
+
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		if cfg.Adapters.Slack == nil {
+			t.Fatal("Adapters.Slack is nil")
+		}
+		if cfg.Adapters.Slack.SocketModeEnabled {
+			t.Error("Slack.SocketModeEnabled should be false when not specified")
+		}
+		if cfg.Adapters.Slack.AppToken != "" {
+			t.Errorf("Slack.AppToken = %q, want empty when not specified", cfg.Adapters.Slack.AppToken)
+		}
+	})
+
+	t.Run("socket mode with env var expansion", func(t *testing.T) {
+		t.Setenv("TEST_SLACK_APP_TOKEN", "test-expanded-app-token")
+
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		configContent := `
+version: "1.0"
+adapters:
+  slack:
+    enabled: true
+    bot_token: "test-slack-bot-token"
+    socket_mode_enabled: true
+    app_token: "${TEST_SLACK_APP_TOKEN}"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("Failed to write test config: %v", err)
+		}
+
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		if cfg.Adapters.Slack.AppToken != "test-expanded-app-token" {
+			t.Errorf("Slack.AppToken = %q, want %q (env var expansion failed)", cfg.Adapters.Slack.AppToken, "test-expanded-app-token")
+		}
+	})
 }
 
 func TestCheckDeprecations(t *testing.T) {

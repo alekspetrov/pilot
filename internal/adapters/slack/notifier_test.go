@@ -78,6 +78,69 @@ func TestDefaultConfig(t *testing.T) {
 	if config.BotToken != "" {
 		t.Errorf("BotToken = %q, want empty string", config.BotToken)
 	}
+	if config.SocketModeEnabled {
+		t.Error("SocketModeEnabled should be false by default")
+	}
+	if config.AppToken != "" {
+		t.Errorf("AppToken = %q, want empty string", config.AppToken)
+	}
+}
+
+// TestSocketModeConfigFields tests socket mode config field assignment and access
+func TestSocketModeConfigFields(t *testing.T) {
+	tests := []struct {
+		name              string
+		socketModeEnabled bool
+		appToken          string
+		botToken          string
+	}{
+		{
+			name:              "socket mode enabled with app token",
+			socketModeEnabled: true,
+			appToken:          testutil.FakeSlackAppToken,
+			botToken:          testutil.FakeSlackBotToken,
+		},
+		{
+			name:              "socket mode disabled",
+			socketModeEnabled: false,
+			appToken:          "",
+			botToken:          testutil.FakeSlackBotToken,
+		},
+		{
+			name:              "socket mode enabled without bot token",
+			socketModeEnabled: true,
+			appToken:          testutil.FakeSlackAppToken,
+			botToken:          "",
+		},
+		{
+			name:              "all empty",
+			socketModeEnabled: false,
+			appToken:          "",
+			botToken:          "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &Config{
+				Enabled:           true,
+				BotToken:          tt.botToken,
+				Channel:           "#test",
+				SocketModeEnabled: tt.socketModeEnabled,
+				AppToken:          tt.appToken,
+			}
+
+			if config.SocketModeEnabled != tt.socketModeEnabled {
+				t.Errorf("SocketModeEnabled = %v, want %v", config.SocketModeEnabled, tt.socketModeEnabled)
+			}
+			if config.AppToken != tt.appToken {
+				t.Errorf("AppToken = %q, want %q", config.AppToken, tt.appToken)
+			}
+			if config.BotToken != tt.botToken {
+				t.Errorf("BotToken = %q, want %q", config.BotToken, tt.botToken)
+			}
+		})
+	}
 }
 
 // TestConfigFields tests that config has expected fields

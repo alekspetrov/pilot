@@ -7,11 +7,13 @@ import (
 
 // Config holds Slack adapter configuration
 type Config struct {
-	Enabled       bool            `yaml:"enabled"`
-	BotToken      string          `yaml:"bot_token"`
-	Channel       string          `yaml:"channel"`
-	SigningSecret string          `yaml:"signing_secret"`
-	Approval      *ApprovalConfig `yaml:"approval,omitempty"`
+	Enabled           bool            `yaml:"enabled"`
+	BotToken          string          `yaml:"bot_token"`
+	Channel           string          `yaml:"channel"`
+	SigningSecret     string          `yaml:"signing_secret"`
+	SocketModeEnabled bool            `yaml:"socket_mode_enabled"`
+	AppToken          string          `yaml:"app_token"`
+	Approval          *ApprovalConfig `yaml:"approval,omitempty"`
 }
 
 // DefaultConfig returns default Slack configuration

@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	_ "modernc.org/sqlite"
 
+	"github.com/alekspetrov/pilot/internal/adapters/slack"
 	"github.com/alekspetrov/pilot/internal/config"
 	"github.com/alekspetrov/pilot/internal/executor"
 	"github.com/alekspetrov/pilot/internal/teams"
@@ -30,6 +31,7 @@ func TestStartCommandFlags(t *testing.T) {
 		{"telegram", ""},
 		{"github", ""},
 		{"linear", ""},
+		{"slack", ""},
 		{"team", ""},
 		{"team-member", ""},
 	}
@@ -685,6 +687,164 @@ func TestApplyTeamOverrides_BothFlagsSet(t *testing.T) {
 	}
 	if cfg.Team.MemberEmail != "dev@test.com" {
 		t.Errorf("expected MemberEmail 'dev@test.com', got %q", cfg.Team.MemberEmail)
+	}
+}
+
+// =============================================================================
+// GH-694: Slack CLI flag tests
+// =============================================================================
+
+// TestApplyInputOverrides_SlackFlag tests that the --slack flag correctly
+// overrides the Slack adapter config.
+func TestApplyInputOverrides_SlackFlag(t *testing.T) {
+	tests := []struct {
+		name        string
+		slackFlag   bool
+		flagChanged bool
+		initSlack   *slack.Config
+		wantEnabled bool
+	}{
+		{
+			name:        "slack flag enables adapter",
+			slackFlag:   true,
+			flagChanged: true,
+			initSlack:   slack.DefaultConfig(),
+			wantEnabled: true,
+		},
+		{
+			name:        "slack flag disables adapter",
+			slackFlag:   false,
+			flagChanged: true,
+			initSlack: func() *slack.Config {
+				c := slack.DefaultConfig()
+				c.Enabled = true
+				return c
+			}(),
+			wantEnabled: false,
+		},
+		{
+			name:        "slack flag not changed preserves config",
+			slackFlag:   false,
+			flagChanged: false,
+			initSlack: func() *slack.Config {
+				c := slack.DefaultConfig()
+				c.Enabled = true
+				return c
+			}(),
+			wantEnabled: true,
+		},
+		{
+			name:        "slack flag creates default config when nil",
+			slackFlag:   true,
+			flagChanged: true,
+			initSlack:   nil,
+			wantEnabled: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.Adapters.Slack = tt.initSlack
+
+			cmd := &cobra.Command{}
+			cmd.Flags().Bool("slack", false, "")
+			cmd.Flags().Bool("telegram", false, "")
+			cmd.Flags().Bool("github", false, "")
+			cmd.Flags().Bool("linear", false, "")
+			cmd.Flags().Bool("tunnel", false, "")
+
+			if tt.flagChanged {
+				val := "false"
+				if tt.slackFlag {
+					val = "true"
+				}
+				if err := cmd.Flags().Set("slack", val); err != nil {
+					t.Fatalf("failed to set slack flag: %v", err)
+				}
+			}
+
+			applyInputOverrides(cfg, cmd, false, false, false, false, tt.slackFlag)
+
+			if cfg.Adapters.Slack == nil {
+				if tt.flagChanged && tt.slackFlag {
+					t.Fatal("Slack config should not be nil after enabling")
+				}
+				return
+			}
+			if cfg.Adapters.Slack.Enabled != tt.wantEnabled {
+				t.Errorf("Slack.Enabled = %v, want %v", cfg.Adapters.Slack.Enabled, tt.wantEnabled)
+			}
+		})
+	}
+}
+
+// TestSlackFlagDefault tests that the --slack flag default is false.
+func TestSlackFlagDefault(t *testing.T) {
+	cmd := newStartCmd()
+
+	slackFlag := cmd.Flags().Lookup("slack")
+	if slackFlag == nil {
+		t.Fatal("--slack flag not registered on start command")
+	}
+	if slackFlag.DefValue != "false" {
+		t.Errorf("--slack default = %q, want %q", slackFlag.DefValue, "false")
+	}
+	if slackFlag.Usage == "" {
+		t.Error("--slack flag should have a usage description")
+	}
+}
+
+// TestSlackFlagParsing tests that the --slack flag is correctly parsed from args.
+func TestSlackFlagParsing(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantValue bool
+		wantErr   bool
+	}{
+		{
+			name:      "flag present",
+			args:      []string{"--slack"},
+			wantValue: true,
+		},
+		{
+			name:      "flag with explicit true",
+			args:      []string{"--slack=true"},
+			wantValue: true,
+		},
+		{
+			name:      "flag with explicit false",
+			args:      []string{"--slack=false"},
+			wantValue: false,
+		},
+		{
+			name:      "flag absent",
+			args:      []string{},
+			wantValue: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := &cobra.Command{Use: "test"}
+			cmd.Flags().Bool("slack", false, "Enable Slack adapter")
+
+			if err := cmd.ParseFlags(tt.args); err != nil {
+				if !tt.wantErr {
+					t.Fatalf("ParseFlags failed: %v", err)
+				}
+				return
+			}
+
+			val, err := cmd.Flags().GetBool("slack")
+			if err != nil {
+				t.Fatalf("GetBool failed: %v", err)
+			}
+			if val != tt.wantValue {
+				t.Errorf("slack flag = %v, want %v", val, tt.wantValue)
+			}
+		})
 	}
 }
 
