@@ -81,8 +81,8 @@ func TestSocketModeHandler_EventsAPI(t *testing.T) {
 	// Read the emitted event.
 	select {
 	case evt := <-events:
-		if evt.Type != SocketEventMessage {
-			t.Errorf("event type = %q, want %q", evt.Type, SocketEventMessage)
+		if evt.Type != SocketModeEventMessage {
+			t.Errorf("event type = %q, want %q", evt.Type, SocketModeEventMessage)
 		}
 		if evt.EnvelopeID != "evt-123" {
 			t.Errorf("event envelope_id = %q, want %q", evt.EnvelopeID, "evt-123")
@@ -117,8 +117,8 @@ func TestSocketModeHandler_InteractiveEnvelope(t *testing.T) {
 
 	select {
 	case evt := <-events:
-		if evt.Type != SocketEventInteraction {
-			t.Errorf("event type = %q, want %q", evt.Type, SocketEventInteraction)
+		if evt.Type != SocketModeEventInteraction {
+			t.Errorf("event type = %q, want %q", evt.Type, SocketModeEventInteraction)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for event")
@@ -149,8 +149,8 @@ func TestSocketModeHandler_SlashCommand(t *testing.T) {
 
 	select {
 	case evt := <-events:
-		if evt.Type != SocketEventSlashCmd {
-			t.Errorf("event type = %q, want %q", evt.Type, SocketEventSlashCmd)
+		if evt.Type != SocketModeEventSlashCmd {
+			t.Errorf("event type = %q, want %q", evt.Type, SocketModeEventSlashCmd)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for event")
@@ -179,8 +179,8 @@ func TestSocketModeHandler_Disconnect(t *testing.T) {
 	// Should receive disconnect event.
 	select {
 	case evt := <-events:
-		if evt.Type != SocketEventDisconnect {
-			t.Errorf("event type = %q, want %q", evt.Type, SocketEventDisconnect)
+		if evt.Type != SocketModeEventDisconnect {
+			t.Errorf("event type = %q, want %q", evt.Type, SocketModeEventDisconnect)
 		}
 		if evt.EnvelopeID != "disc-001" {
 			t.Errorf("envelope_id = %q, want %q", evt.EnvelopeID, "disc-001")
@@ -300,13 +300,13 @@ func TestSocketModeHandler_MissingEnvelopeID(t *testing.T) {
 func TestMapEnvelopeType(t *testing.T) {
 	tests := []struct {
 		input string
-		want  SocketEventType
+		want  SocketModeEventType
 		ok    bool
 	}{
-		{"events_api", SocketEventMessage, true},
-		{"interactive", SocketEventInteraction, true},
-		{"slash_commands", SocketEventSlashCmd, true},
-		{"disconnect", SocketEventDisconnect, true},
+		{"events_api", SocketModeEventMessage, true},
+		{"interactive", SocketModeEventInteraction, true},
+		{"slash_commands", SocketModeEventSlashCmd, true},
+		{"disconnect", SocketModeEventDisconnect, true},
 		{"unknown", "", false},
 		{"", "", false},
 	}

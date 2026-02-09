@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/alekspetrov/pilot/internal/gateway"
+	"github.com/alekspetrov/pilot/internal/testutil"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -61,6 +62,31 @@ func TestDefaultConfig(t *testing.T) {
 		}
 		if config.Adapters.Jira == nil {
 			t.Error("Adapters.Jira is nil")
+		}
+	})
+
+	t.Run("SlackSocketModeDefaults", func(t *testing.T) {
+		s := config.Adapters.Slack
+		if s == nil {
+			t.Fatal("Slack config is nil")
+		}
+		if s.SocketMode {
+			t.Error("Slack.SocketMode should be false by default")
+		}
+		if s.AppToken != "" {
+			t.Errorf("Slack.AppToken = %q, want empty", s.AppToken)
+		}
+		if s.AllowedUsers == nil {
+			t.Error("Slack.AllowedUsers should be initialized (not nil)")
+		}
+		if len(s.AllowedUsers) != 0 {
+			t.Errorf("Slack.AllowedUsers length = %d, want 0", len(s.AllowedUsers))
+		}
+		if s.AllowedChannels == nil {
+			t.Error("Slack.AllowedChannels should be initialized (not nil)")
+		}
+		if len(s.AllowedChannels) != 0 {
+			t.Errorf("Slack.AllowedChannels length = %d, want 0", len(s.AllowedChannels))
 		}
 	})
 
@@ -564,6 +590,46 @@ func TestValidate(t *testing.T) {
 				return c
 			}(),
 			wantErr: false, // Nil auth is allowed
+		},
+		{
+			name: "SlackSocketModeWithoutAppToken",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketMode = true
+				c.Adapters.Slack.AppToken = ""
+				return c
+			}(),
+			wantErr:     true,
+			errContains: "app_token is required when Slack socket_mode is enabled",
+		},
+		{
+			name: "SlackSocketModeWithAppToken",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketMode = true
+				c.Adapters.Slack.AppToken = testutil.FakeSlackAppToken
+				return c
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "SlackSocketModeDisabledNoAppToken",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketMode = false
+				c.Adapters.Slack.AppToken = ""
+				return c
+			}(),
+			wantErr: false, // No app_token needed when socket_mode is disabled
+		},
+		{
+			name: "NilSlackConfig",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack = nil
+				return c
+			}(),
+			wantErr: false, // Nil Slack config is allowed
 		},
 	}
 
@@ -1217,3 +1283,126 @@ team:
 		}
 	})
 }
+
+// TestLoadSlackSocketModeConfig tests loading Slack Socket Mode fields from YAML (GH-643)
+func TestLoadSlackSocketModeConfig(t *testing.T) {
+	t.Run("full socket mode config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		configContent := `
+version: "1.0"
+adapters:
+  slack:
+    enabled: true
+    bot_token: "` + testutil.FakeSlackBotToken + `"
+    channel: "#pilot"
+    app_token: "` + testutil.FakeSlackAppToken + `"
+    socket_mode: true
+    allowed_users:
+      - "U123"
+      - "U456"
+    allowed_channels:
+      - "C789"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("Failed to write test config: %v", err)
+		}
+
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		s := cfg.Adapters.Slack
+		if s == nil {
+			t.Fatal("Slack config should not be nil")
+		}
+		if !s.Enabled {
+			t.Error("Slack.Enabled should be true")
+		}
+		if s.BotToken != testutil.FakeSlackBotToken {
+			t.Errorf("Slack.BotToken = %q, want %q", s.BotToken, testutil.FakeSlackBotToken)
+		}
+		if s.Channel != "#pilot" {
+			t.Errorf("Slack.Channel = %q, want %q", s.Channel, "#pilot")
+		}
+		if s.AppToken != testutil.FakeSlackAppToken {
+			t.Errorf("Slack.AppToken = %q, want %q", s.AppToken, testutil.FakeSlackAppToken)
+		}
+		if !s.SocketMode {
+			t.Error("Slack.SocketMode should be true")
+		}
+		if len(s.AllowedUsers) != 2 {
+			t.Fatalf("Slack.AllowedUsers length = %d, want 2", len(s.AllowedUsers))
+		}
+		if s.AllowedUsers[0] != "U123" || s.AllowedUsers[1] != "U456" {
+			t.Errorf("Slack.AllowedUsers = %v, want [U123 U456]", s.AllowedUsers)
+		}
+		if len(s.AllowedChannels) != 1 || s.AllowedChannels[0] != "C789" {
+			t.Errorf("Slack.AllowedChannels = %v, want [C789]", s.AllowedChannels)
+		}
+	})
+
+	t.Run("socket mode disabled by default", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		configContent := `
+version: "1.0"
+adapters:
+  slack:
+    enabled: true
+    bot_token: "` + testutil.FakeSlackBotToken + `"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("Failed to write test config: %v", err)
+		}
+
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		s := cfg.Adapters.Slack
+		if s == nil {
+			t.Fatal("Slack config should not be nil")
+		}
+		if s.SocketMode {
+			t.Error("Slack.SocketMode should be false when not set in YAML")
+		}
+		if s.AppToken != "" {
+			t.Errorf("Slack.AppToken = %q, want empty", s.AppToken)
+		}
+	})
+
+	t.Run("validate rejects socket mode without app_token", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		configContent := `
+version: "1.0"
+adapters:
+  slack:
+    enabled: true
+    socket_mode: true
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("Failed to write test config: %v", err)
+		}
+
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		err = cfg.Validate()
+		if err == nil {
+			t.Error("Validate() should return error for socket_mode without app_token")
+		}
+		if err != nil && !contains(err.Error(), "app_token") {
+			t.Errorf("Validate() error = %q, want error containing 'app_token'", err.Error())
+		}
+	})
+}
+

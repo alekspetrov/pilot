@@ -78,6 +78,59 @@ func TestDefaultConfig(t *testing.T) {
 	if config.BotToken != "" {
 		t.Errorf("BotToken = %q, want empty string", config.BotToken)
 	}
+	if config.SocketMode {
+		t.Error("SocketMode should be false by default")
+	}
+	if config.AppToken != "" {
+		t.Errorf("AppToken = %q, want empty string", config.AppToken)
+	}
+	if config.AllowedUsers == nil {
+		t.Error("AllowedUsers should be initialized (not nil)")
+	}
+	if len(config.AllowedUsers) != 0 {
+		t.Errorf("AllowedUsers length = %d, want 0", len(config.AllowedUsers))
+	}
+	if config.AllowedChannels == nil {
+		t.Error("AllowedChannels should be initialized (not nil)")
+	}
+	if len(config.AllowedChannels) != 0 {
+		t.Errorf("AllowedChannels length = %d, want 0", len(config.AllowedChannels))
+	}
+}
+
+// TestSocketModeConfigFields tests that Socket Mode config fields work correctly (GH-643)
+func TestSocketModeConfigFields(t *testing.T) {
+	config := &Config{
+		Enabled:         true,
+		BotToken:        testutil.FakeSlackBotToken,
+		Channel:         "#pilot",
+		AppToken:        testutil.FakeSlackAppToken,
+		SocketMode:      true,
+		AllowedUsers:    []string{"U123", "U456"},
+		AllowedChannels: []string{"C789"},
+	}
+
+	if !config.Enabled {
+		t.Error("Enabled should be true")
+	}
+	if !config.SocketMode {
+		t.Error("SocketMode should be true")
+	}
+	if config.AppToken != testutil.FakeSlackAppToken {
+		t.Errorf("AppToken = %q, want %q", config.AppToken, testutil.FakeSlackAppToken)
+	}
+	if len(config.AllowedUsers) != 2 {
+		t.Errorf("AllowedUsers length = %d, want 2", len(config.AllowedUsers))
+	}
+	if config.AllowedUsers[0] != "U123" {
+		t.Errorf("AllowedUsers[0] = %q, want %q", config.AllowedUsers[0], "U123")
+	}
+	if len(config.AllowedChannels) != 1 {
+		t.Errorf("AllowedChannels length = %d, want 1", len(config.AllowedChannels))
+	}
+	if config.AllowedChannels[0] != "C789" {
+		t.Errorf("AllowedChannels[0] = %q, want %q", config.AllowedChannels[0], "C789")
+	}
 }
 
 // TestConfigFields tests that config has expected fields
@@ -748,9 +801,13 @@ func TestNotifierChannelConfiguration(t *testing.T) {
 func TestConfigYAMLTags(t *testing.T) {
 	// Verify the config can be represented in YAML-compatible format
 	config := &Config{
-		Enabled:  true,
-		BotToken: "xoxb-token",
-		Channel:  "#channel",
+		Enabled:         true,
+		BotToken:        "xoxb-token",
+		Channel:         "#channel",
+		AppToken:        "xapp-token",
+		SocketMode:      true,
+		AllowedUsers:    []string{"U1"},
+		AllowedChannels: []string{"C1"},
 	}
 
 	// Verify fields are accessible
@@ -762,6 +819,18 @@ func TestConfigYAMLTags(t *testing.T) {
 	}
 	if config.Channel == "" {
 		t.Error("Channel field not accessible")
+	}
+	if config.AppToken == "" {
+		t.Error("AppToken field not accessible")
+	}
+	if !config.SocketMode {
+		t.Error("SocketMode field not accessible")
+	}
+	if len(config.AllowedUsers) == 0 {
+		t.Error("AllowedUsers field not accessible")
+	}
+	if len(config.AllowedChannels) == 0 {
+		t.Error("AllowedChannels field not accessible")
 	}
 }
 

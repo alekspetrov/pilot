@@ -30,6 +30,7 @@ func TestStartCommandFlags(t *testing.T) {
 		{"telegram", ""},
 		{"github", ""},
 		{"linear", ""},
+		{"slack", ""},
 		{"team", ""},
 		{"team-member", ""},
 	}
@@ -132,7 +133,7 @@ func TestFlagParsing(t *testing.T) {
 		{
 			name:    "start with all adapter flags",
 			cmdFunc: newStartCmd,
-			args:    []string{"--telegram=true", "--github=true", "--linear=false"},
+			args:    []string{"--telegram=true", "--github=true", "--linear=false", "--slack=true"},
 			wantErr: false,
 		},
 		{
@@ -712,5 +713,145 @@ func TestApplyTeamOverrides_OverridesExistingConfig(t *testing.T) {
 	// MemberEmail should be preserved from existing config when --team-member not set
 	if cfg.Team.MemberEmail != "old@test.com" {
 		t.Errorf("expected MemberEmail preserved as 'old@test.com', got %q", cfg.Team.MemberEmail)
+	}
+}
+
+// TestApplyInputOverrides_SlackFlag tests --slack flag override behavior (GH-643)
+func TestApplyInputOverrides_SlackFlag(t *testing.T) {
+	t.Run("slack flag not set leaves config unchanged", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cmd := &cobra.Command{}
+		cmd.Flags().Bool("telegram", false, "")
+		cmd.Flags().Bool("github", false, "")
+		cmd.Flags().Bool("linear", false, "")
+		cmd.Flags().Bool("tunnel", false, "")
+		cmd.Flags().Bool("slack", false, "")
+
+		applyInputOverrides(cfg, cmd, false, false, false, false, false)
+
+		if cfg.Adapters.Slack.Enabled {
+			t.Error("Slack.Enabled should remain false when --slack not set")
+		}
+		if cfg.Adapters.Slack.SocketMode {
+			t.Error("Slack.SocketMode should remain false when --slack not set")
+		}
+	})
+
+	t.Run("slack flag enables slack and socket mode", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cmd := &cobra.Command{}
+		cmd.Flags().Bool("telegram", false, "")
+		cmd.Flags().Bool("github", false, "")
+		cmd.Flags().Bool("linear", false, "")
+		cmd.Flags().Bool("tunnel", false, "")
+		cmd.Flags().Bool("slack", false, "")
+		_ = cmd.Flags().Set("slack", "true")
+
+		applyInputOverrides(cfg, cmd, false, false, false, false, true)
+
+		if !cfg.Adapters.Slack.Enabled {
+			t.Error("Slack.Enabled should be true when --slack is set")
+		}
+		if !cfg.Adapters.Slack.SocketMode {
+			t.Error("Slack.SocketMode should be true when --slack is set")
+		}
+	})
+
+	t.Run("slack flag false disables slack and socket mode", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.Adapters.Slack.Enabled = true
+		cfg.Adapters.Slack.SocketMode = true
+		cmd := &cobra.Command{}
+		cmd.Flags().Bool("telegram", false, "")
+		cmd.Flags().Bool("github", false, "")
+		cmd.Flags().Bool("linear", false, "")
+		cmd.Flags().Bool("tunnel", false, "")
+		cmd.Flags().Bool("slack", false, "")
+		_ = cmd.Flags().Set("slack", "false")
+
+		applyInputOverrides(cfg, cmd, false, false, false, false, false)
+
+		if cfg.Adapters.Slack.Enabled {
+			t.Error("Slack.Enabled should be false when --slack=false is set")
+		}
+		if cfg.Adapters.Slack.SocketMode {
+			t.Error("Slack.SocketMode should be false when --slack=false is set")
+		}
+	})
+
+	t.Run("slack flag initializes nil slack config", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.Adapters.Slack = nil
+		cmd := &cobra.Command{}
+		cmd.Flags().Bool("telegram", false, "")
+		cmd.Flags().Bool("github", false, "")
+		cmd.Flags().Bool("linear", false, "")
+		cmd.Flags().Bool("tunnel", false, "")
+		cmd.Flags().Bool("slack", false, "")
+		_ = cmd.Flags().Set("slack", "true")
+
+		applyInputOverrides(cfg, cmd, false, false, false, false, true)
+
+		if cfg.Adapters.Slack == nil {
+			t.Fatal("Slack config should be initialized when --slack flag is set")
+		}
+		if !cfg.Adapters.Slack.Enabled {
+			t.Error("Slack.Enabled should be true")
+		}
+		if !cfg.Adapters.Slack.SocketMode {
+			t.Error("Slack.SocketMode should be true")
+		}
+	})
+}
+
+// TestSlackFlagDefault tests that --slack flag defaults to false (GH-643)
+func TestSlackFlagDefault(t *testing.T) {
+	cmd := newStartCmd()
+	flag := cmd.Flags().Lookup("slack")
+	if flag == nil {
+		t.Fatal("--slack flag not found")
+	}
+	if flag.DefValue != "false" {
+		t.Errorf("--slack default = %q, want %q", flag.DefValue, "false")
+	}
+}
+
+// TestSlackFlagParsing tests that --slack flag parses correctly (GH-643)
+func TestSlackFlagParsing(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr bool
+	}{
+		{
+			name:    "slack flag alone",
+			args:    []string{"--slack"},
+			wantErr: false,
+		},
+		{
+			name:    "slack flag true",
+			args:    []string{"--slack=true"},
+			wantErr: false,
+		},
+		{
+			name:    "slack flag false",
+			args:    []string{"--slack=false"},
+			wantErr: false,
+		},
+		{
+			name:    "slack with other adapters",
+			args:    []string{"--slack", "--telegram", "--github"},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newStartCmd()
+			err := cmd.ParseFlags(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseFlags(%v) error = %v, wantErr %v", tt.args, err, tt.wantErr)
+			}
+		})
 	}
 }
