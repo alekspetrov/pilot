@@ -12,6 +12,12 @@ type Config struct {
 	Channel       string          `yaml:"channel"`
 	SigningSecret string          `yaml:"signing_secret"`
 	Approval      *ApprovalConfig `yaml:"approval,omitempty"`
+
+	// Socket Mode fields (GH-643)
+	AppToken        string   `yaml:"app_token"`         // xapp-... app-level token for Socket Mode
+	SocketMode      bool     `yaml:"socket_mode"`       // Enable Socket Mode inbound communication
+	AllowedUsers    []string `yaml:"allowed_users"`     // Slack user IDs allowed to interact
+	AllowedChannels []string `yaml:"allowed_channels"`  // Channel IDs allowed to interact
 }
 
 // DefaultConfig returns default Slack configuration

@@ -267,6 +267,7 @@ func newStartCmd() *cobra.Command {
 		enableTelegram bool
 		enableGithub   bool
 		enableLinear   bool
+		enableSlack    bool
 		// Mode flags
 		noGateway    bool   // Lightweight mode: polling only, no HTTP gateway
 		sequential   bool   // Sequential execution mode (one issue at a time)
@@ -305,7 +306,7 @@ Examples:
 			}
 
 			// Apply flag overrides to config
-			applyInputOverrides(cfg, cmd, enableTelegram, enableGithub, enableLinear, enableTunnel)
+			applyInputOverrides(cfg, cmd, enableTelegram, enableGithub, enableLinear, enableTunnel, enableSlack)
 
 			// Apply team ID override if flag provided
 			if teamID != "" {
@@ -383,7 +384,8 @@ Examples:
 			//
 			// Note: Linear/Jira webhooks require gateway but don't block polling adapters.
 			// When both are needed, gateway starts in background within polling mode.
-			hasPollingAdapter := hasTelegram || hasGithubPolling
+			hasSlackSocketMode := cfg.Adapters.Slack != nil && cfg.Adapters.Slack.Enabled && cfg.Adapters.Slack.SocketMode
+			hasPollingAdapter := hasTelegram || hasGithubPolling || hasSlackSocketMode
 			if noGateway || hasPollingAdapter {
 				return runPollingMode(cfg, projectPath, replace, dashboardMode)
 			}
@@ -980,6 +982,7 @@ Examples:
 	cmd.Flags().BoolVar(&enableTelegram, "telegram", false, "Enable Telegram polling (overrides config)")
 	cmd.Flags().BoolVar(&enableGithub, "github", false, "Enable GitHub polling (overrides config)")
 	cmd.Flags().BoolVar(&enableLinear, "linear", false, "Enable Linear webhooks (overrides config)")
+	cmd.Flags().BoolVar(&enableSlack, "slack", false, "Enable Slack Socket Mode (overrides config)")
 	cmd.Flags().BoolVar(&enableTunnel, "tunnel", false, "Enable public tunnel for webhook ingress (Cloudflare/ngrok)")
 	cmd.Flags().StringVar(&teamID, "team", "", "Team ID or name for project access scoping (overrides config)")
 	cmd.Flags().StringVar(&teamMember, "team-member", "", "Member email for team access scoping (overrides config)")
@@ -989,7 +992,7 @@ Examples:
 
 // applyInputOverrides applies CLI flag overrides to config
 // Uses cmd.Flags().Changed() to only apply flags that were explicitly set
-func applyInputOverrides(cfg *config.Config, cmd *cobra.Command, telegramFlag, githubFlag, linearFlag, tunnelFlag bool) {
+func applyInputOverrides(cfg *config.Config, cmd *cobra.Command, telegramFlag, githubFlag, linearFlag, tunnelFlag, slackFlag bool) {
 	if cmd.Flags().Changed("telegram") {
 		if cfg.Adapters.Telegram == nil {
 			cfg.Adapters.Telegram = telegram.DefaultConfig()
@@ -1019,6 +1022,13 @@ func applyInputOverrides(cfg *config.Config, cmd *cobra.Command, telegramFlag, g
 		}
 		cfg.Tunnel.Enabled = tunnelFlag
 	}
+	if cmd.Flags().Changed("slack") {
+		if cfg.Adapters.Slack == nil {
+			cfg.Adapters.Slack = slack.DefaultConfig()
+		}
+		cfg.Adapters.Slack.Enabled = slackFlag
+		cfg.Adapters.Slack.SocketMode = slackFlag
+	}
 }
 
 // applyTeamOverrides applies --team and --team-member CLI flag overrides to config (GH-635).
@@ -1046,6 +1056,14 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 	hasTelegram := cfg.Adapters.Telegram != nil && cfg.Adapters.Telegram.Enabled
 	if hasTelegram && cfg.Adapters.Telegram.BotToken == "" {
 		return fmt.Errorf("telegram enabled but bot_token not configured")
+	}
+
+	// Check Slack Socket Mode config if enabled (GH-692)
+	if cfg.Adapters.Slack != nil && cfg.Adapters.Slack.Enabled && cfg.Adapters.Slack.SocketMode {
+		if cfg.Adapters.Slack.AppToken == "" {
+			logging.WithComponent("start").Warn("slack socket_mode enabled but app_token not configured; skipping Slack Socket Mode")
+			cfg.Adapters.Slack.SocketMode = false
+		}
 	}
 
 	// Suppress logging BEFORE creating runner in dashboard mode (GH-190)
