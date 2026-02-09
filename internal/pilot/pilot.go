@@ -172,6 +172,9 @@ func New(cfg *config.Config, opts ...Option) (*Pilot, error) {
 	if cfg.Adapters.Slack != nil && cfg.Adapters.Slack.Enabled {
 		p.slackNotify = slack.NewNotifier(cfg.Adapters.Slack)
 
+		// Validate Socket Mode configuration (warns + disables if app_token missing)
+		cfg.Adapters.Slack.ValidateSocketMode()
+
 		// Initialize Slack approval handler if enabled
 		if cfg.Adapters.Slack.Approval != nil && cfg.Adapters.Slack.Approval.Enabled {
 			p.slackClient = slack.NewClient(cfg.Adapters.Slack.BotToken)

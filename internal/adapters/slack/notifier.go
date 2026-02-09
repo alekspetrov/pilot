@@ -3,6 +3,9 @@ package slack
 import (
 	"context"
 	"fmt"
+	"log/slog"
+
+	"github.com/alekspetrov/pilot/internal/logging"
 )
 
 // Config holds Slack adapter configuration
@@ -11,7 +14,27 @@ type Config struct {
 	BotToken      string          `yaml:"bot_token"`
 	Channel       string          `yaml:"channel"`
 	SigningSecret string          `yaml:"signing_secret"`
+	SocketMode    bool            `yaml:"socket_mode"`
+	AppToken      string          `yaml:"app_token"`
 	Approval      *ApprovalConfig `yaml:"approval,omitempty"`
+}
+
+// ValidateSocketMode checks if Socket Mode can be started.
+// Returns true if Socket Mode is properly configured.
+// If SocketMode is enabled but AppToken is empty, logs a warning,
+// disables SocketMode on the config, and returns false.
+func (c *Config) ValidateSocketMode() bool {
+	if !c.SocketMode {
+		return false
+	}
+	if c.AppToken == "" {
+		log := logging.WithComponent("slack")
+		log.Warn("socket_mode is enabled but app_token is empty; disabling Socket Mode",
+			slog.String("hint", "set adapters.slack.app_token to an xapp-... app-level token"))
+		c.SocketMode = false
+		return false
+	}
+	return true
 }
 
 // DefaultConfig returns default Slack configuration

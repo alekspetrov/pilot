@@ -78,6 +78,12 @@ func TestDefaultConfig(t *testing.T) {
 	if config.BotToken != "" {
 		t.Errorf("BotToken = %q, want empty string", config.BotToken)
 	}
+	if config.SocketMode {
+		t.Error("SocketMode should be false by default")
+	}
+	if config.AppToken != "" {
+		t.Errorf("AppToken = %q, want empty string", config.AppToken)
+	}
 }
 
 // TestConfigFields tests that config has expected fields
@@ -762,6 +768,66 @@ func TestConfigYAMLTags(t *testing.T) {
 	}
 	if config.Channel == "" {
 		t.Error("Channel field not accessible")
+	}
+}
+
+// TestValidateSocketMode tests Socket Mode validation logic
+func TestValidateSocketMode(t *testing.T) {
+	tests := []struct {
+		name           string
+		socketMode     bool
+		appToken       string
+		wantResult     bool
+		wantSocketMode bool // expected SocketMode value after validation
+	}{
+		{
+			name:           "socket mode disabled",
+			socketMode:     false,
+			appToken:       "",
+			wantResult:     false,
+			wantSocketMode: false,
+		},
+		{
+			name:           "socket mode disabled with token",
+			socketMode:     false,
+			appToken:       testutil.FakeSlackAppToken,
+			wantResult:     false,
+			wantSocketMode: false,
+		},
+		{
+			name:           "socket mode enabled with token",
+			socketMode:     true,
+			appToken:       testutil.FakeSlackAppToken,
+			wantResult:     true,
+			wantSocketMode: true,
+		},
+		{
+			name:           "socket mode enabled without token — should warn and disable",
+			socketMode:     true,
+			appToken:       "",
+			wantResult:     false,
+			wantSocketMode: false, // ValidateSocketMode disables it
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Enabled:    true,
+				BotToken:   testutil.FakeSlackBotToken,
+				Channel:    "#test",
+				SocketMode: tt.socketMode,
+				AppToken:   tt.appToken,
+			}
+
+			got := cfg.ValidateSocketMode()
+			if got != tt.wantResult {
+				t.Errorf("ValidateSocketMode() = %v, want %v", got, tt.wantResult)
+			}
+			if cfg.SocketMode != tt.wantSocketMode {
+				t.Errorf("after validation, SocketMode = %v, want %v", cfg.SocketMode, tt.wantSocketMode)
+			}
+		})
 	}
 }
 
