@@ -11,6 +11,7 @@ type Config struct {
 	BotToken      string          `yaml:"bot_token"`
 	Channel       string          `yaml:"channel"`
 	SigningSecret string          `yaml:"signing_secret"`
+	SocketMode    bool            `yaml:"socket_mode"`
 	Approval      *ApprovalConfig `yaml:"approval,omitempty"`
 }
 
