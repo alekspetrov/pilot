@@ -554,6 +554,37 @@ Examples:
 						}
 					}
 
+					// Register webhook channels
+					for _, ch := range alertsCfg.Channels {
+						if ch.Type == "webhook" && ch.Enabled && ch.Webhook != nil {
+							webhookChannel := alerts.NewWebhookChannel(ch.Name, ch.Webhook)
+							alertsDispatcher.RegisterChannel(webhookChannel)
+						}
+					}
+
+					// Register email channels
+					for _, ch := range alertsCfg.Channels {
+						if ch.Type == "email" && ch.Enabled && ch.Email != nil && ch.Email.SMTPHost != "" {
+							sender := alerts.NewSMTPSender(
+								ch.Email.SMTPHost,
+								ch.Email.SMTPPort,
+								ch.Email.From,
+								ch.Email.Username,
+								ch.Email.Password,
+							)
+							emailChannel := alerts.NewEmailChannel(ch.Name, sender, ch.Email)
+							alertsDispatcher.RegisterChannel(emailChannel)
+						}
+					}
+
+					// Register PagerDuty channels
+					for _, ch := range alertsCfg.Channels {
+						if ch.Type == "pagerduty" && ch.Enabled && ch.PagerDuty != nil {
+							pdChannel := alerts.NewPagerDutyChannel(ch.Name, ch.PagerDuty)
+							alertsDispatcher.RegisterChannel(pdChannel)
+						}
+					}
+
 					ctx := context.Background()
 					gwAlertsEngine = alerts.NewEngine(alertsCfg, alerts.WithDispatcher(alertsDispatcher))
 					if alertErr := gwAlertsEngine.Start(ctx); alertErr != nil {
