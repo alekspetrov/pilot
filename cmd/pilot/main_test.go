@@ -30,6 +30,7 @@ func TestStartCommandFlags(t *testing.T) {
 		{"telegram", ""},
 		{"github", ""},
 		{"linear", ""},
+		{"slack", ""},
 		{"team", ""},
 		{"team-member", ""},
 	}
@@ -132,7 +133,7 @@ func TestFlagParsing(t *testing.T) {
 		{
 			name:    "start with all adapter flags",
 			cmdFunc: newStartCmd,
-			args:    []string{"--telegram=true", "--github=true", "--linear=false"},
+			args:    []string{"--telegram=true", "--github=true", "--linear=false", "--slack=true"},
 			wantErr: false,
 		},
 		{
@@ -200,6 +201,13 @@ func TestFlagDefaults(t *testing.T) {
 		if flag := cmd.Flags().Lookup("sequential"); flag != nil {
 			if flag.DefValue != "false" {
 				t.Errorf("sequential default should be false, got %s", flag.DefValue)
+			}
+		}
+
+		// slack should default to false
+		if flag := cmd.Flags().Lookup("slack"); flag != nil {
+			if flag.DefValue != "false" {
+				t.Errorf("slack default should be false, got %s", flag.DefValue)
 			}
 		}
 	})
@@ -712,5 +720,97 @@ func TestApplyTeamOverrides_OverridesExistingConfig(t *testing.T) {
 	// MemberEmail should be preserved from existing config when --team-member not set
 	if cfg.Team.MemberEmail != "old@test.com" {
 		t.Errorf("expected MemberEmail preserved as 'old@test.com', got %q", cfg.Team.MemberEmail)
+	}
+}
+
+// =============================================================================
+// GH-643/GH-686: --slack flag override tests
+// =============================================================================
+
+func TestApplyInputOverrides_SlackNotChanged(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("telegram", false, "")
+	cmd.Flags().Bool("github", false, "")
+	cmd.Flags().Bool("linear", false, "")
+	cmd.Flags().Bool("tunnel", false, "")
+	cmd.Flags().Bool("slack", false, "")
+
+	applyInputOverrides(cfg, cmd, false, false, false, false, false)
+
+	// Slack should remain at defaults
+	if cfg.Adapters.Slack.Enabled {
+		t.Error("Slack.Enabled should remain false when --slack not changed")
+	}
+	if cfg.Adapters.Slack.SocketMode {
+		t.Error("Slack.SocketMode should remain false when --slack not changed")
+	}
+}
+
+func TestApplyInputOverrides_SlackEnabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("telegram", false, "")
+	cmd.Flags().Bool("github", false, "")
+	cmd.Flags().Bool("linear", false, "")
+	cmd.Flags().Bool("tunnel", false, "")
+	cmd.Flags().Bool("slack", false, "")
+	_ = cmd.Flags().Set("slack", "true")
+
+	applyInputOverrides(cfg, cmd, false, false, false, false, true)
+
+	if !cfg.Adapters.Slack.Enabled {
+		t.Error("Slack.Enabled should be true when --slack is set")
+	}
+	if !cfg.Adapters.Slack.SocketMode {
+		t.Error("Slack.SocketMode should be true when --slack is set")
+	}
+}
+
+func TestApplyInputOverrides_SlackDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Adapters.Slack.Enabled = true
+	cfg.Adapters.Slack.SocketMode = true
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("telegram", false, "")
+	cmd.Flags().Bool("github", false, "")
+	cmd.Flags().Bool("linear", false, "")
+	cmd.Flags().Bool("tunnel", false, "")
+	cmd.Flags().Bool("slack", false, "")
+	_ = cmd.Flags().Set("slack", "false")
+
+	applyInputOverrides(cfg, cmd, false, false, false, false, false)
+
+	if cfg.Adapters.Slack.Enabled {
+		t.Error("Slack.Enabled should be false when --slack=false")
+	}
+	if cfg.Adapters.Slack.SocketMode {
+		t.Error("Slack.SocketMode should be false when --slack=false")
+	}
+}
+
+func TestApplyInputOverrides_SlackWithNilSlackConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Adapters.Slack = nil
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("telegram", false, "")
+	cmd.Flags().Bool("github", false, "")
+	cmd.Flags().Bool("linear", false, "")
+	cmd.Flags().Bool("tunnel", false, "")
+	cmd.Flags().Bool("slack", false, "")
+	_ = cmd.Flags().Set("slack", "true")
+
+	applyInputOverrides(cfg, cmd, false, false, false, false, true)
+
+	if cfg.Adapters.Slack == nil {
+		t.Fatal("Slack config should be created when nil and --slack is set")
+	}
+	if !cfg.Adapters.Slack.Enabled {
+		t.Error("Slack.Enabled should be true")
+	}
+	if !cfg.Adapters.Slack.SocketMode {
+		t.Error("Slack.SocketMode should be true")
 	}
 }

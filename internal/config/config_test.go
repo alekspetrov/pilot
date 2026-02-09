@@ -64,6 +64,37 @@ func TestDefaultConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("SlackSocketModeDefaults", func(t *testing.T) {
+		if config.Adapters == nil || config.Adapters.Slack == nil {
+			t.Fatal("Adapters.Slack is nil")
+		}
+		s := config.Adapters.Slack
+		if s.Enabled {
+			t.Error("Slack.Enabled should be false by default")
+		}
+		if s.SocketMode {
+			t.Error("Slack.SocketMode should be false by default")
+		}
+		if s.AppToken != "" {
+			t.Errorf("Slack.AppToken should be empty by default, got %q", s.AppToken)
+		}
+		if s.Channel != "#dev-notifications" {
+			t.Errorf("Slack.Channel = %q, want %q", s.Channel, "#dev-notifications")
+		}
+		if s.AllowedUsers == nil {
+			t.Error("Slack.AllowedUsers should not be nil")
+		}
+		if len(s.AllowedUsers) != 0 {
+			t.Errorf("Slack.AllowedUsers length = %d, want 0", len(s.AllowedUsers))
+		}
+		if s.AllowedChannels == nil {
+			t.Error("Slack.AllowedChannels should not be nil")
+		}
+		if len(s.AllowedChannels) != 0 {
+			t.Errorf("Slack.AllowedChannels length = %d, want 0", len(s.AllowedChannels))
+		}
+	})
+
 	t.Run("Orchestrator", func(t *testing.T) {
 		if config.Orchestrator == nil {
 			t.Fatal("Orchestrator config is nil")
@@ -564,6 +595,55 @@ func TestValidate(t *testing.T) {
 				return c
 			}(),
 			wantErr: false, // Nil auth is allowed
+		},
+		{
+			name: "SlackSocketModeWithoutAppToken",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketMode = true
+				c.Adapters.Slack.AppToken = ""
+				return c
+			}(),
+			wantErr:     true,
+			errContains: "slack app_token is required when socket_mode is enabled",
+		},
+		{
+			name: "SlackSocketModeWithAppToken",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketMode = true
+				c.Adapters.Slack.AppToken = "test-slack-app-token"
+				return c
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "SlackSocketModeDisabledNoAppToken",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketMode = false
+				c.Adapters.Slack.AppToken = ""
+				return c
+			}(),
+			wantErr: false, // No validation needed when socket_mode is off
+		},
+		{
+			name: "SlackNilAdapters",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters = nil
+				return c
+			}(),
+			wantErr: false, // Nil adapters is allowed
+		},
+		{
+			name: "SlackNilSlackConfig",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack = nil
+				return c
+			}(),
+			wantErr: false, // Nil Slack config is allowed
 		},
 	}
 
@@ -1133,6 +1213,129 @@ orchestrator:
 	if len(warnings) != 1 {
 		t.Errorf("Expected 1 deprecation warning, got %d", len(warnings))
 	}
+}
+
+func TestLoadSlackSocketModeConfig(t *testing.T) {
+	t.Run("full socket mode config from YAML", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		configContent := `
+version: "1.0"
+adapters:
+  slack:
+    enabled: true
+    bot_token: "test-slack-bot-token"
+    channel: "#engineering"
+    app_token: "test-slack-app-token"
+    socket_mode: true
+    allowed_users:
+      - "U001"
+      - "U002"
+    allowed_channels:
+      - "C001"
+      - "C002"
+      - "C003"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("Failed to write test config: %v", err)
+		}
+
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		if cfg.Adapters == nil || cfg.Adapters.Slack == nil {
+			t.Fatal("Adapters.Slack should not be nil")
+		}
+		s := cfg.Adapters.Slack
+		if !s.Enabled {
+			t.Error("Slack.Enabled should be true")
+		}
+		if s.BotToken != "test-slack-bot-token" {
+			t.Errorf("Slack.BotToken = %q, want %q", s.BotToken, "test-slack-bot-token")
+		}
+		if s.Channel != "#engineering" {
+			t.Errorf("Slack.Channel = %q, want %q", s.Channel, "#engineering")
+		}
+		if s.AppToken != "test-slack-app-token" {
+			t.Errorf("Slack.AppToken = %q, want %q", s.AppToken, "test-slack-app-token")
+		}
+		if !s.SocketMode {
+			t.Error("Slack.SocketMode should be true")
+		}
+		if len(s.AllowedUsers) != 2 {
+			t.Fatalf("Slack.AllowedUsers length = %d, want 2", len(s.AllowedUsers))
+		}
+		if s.AllowedUsers[0] != "U001" || s.AllowedUsers[1] != "U002" {
+			t.Errorf("Slack.AllowedUsers = %v, want [U001, U002]", s.AllowedUsers)
+		}
+		if len(s.AllowedChannels) != 3 {
+			t.Fatalf("Slack.AllowedChannels length = %d, want 3", len(s.AllowedChannels))
+		}
+		if s.AllowedChannels[0] != "C001" {
+			t.Errorf("Slack.AllowedChannels[0] = %q, want %q", s.AllowedChannels[0], "C001")
+		}
+	})
+
+	t.Run("socket mode disabled by default in YAML", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		configContent := `
+version: "1.0"
+adapters:
+  slack:
+    enabled: true
+    bot_token: "test-slack-bot-token"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("Failed to write test config: %v", err)
+		}
+
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		s := cfg.Adapters.Slack
+		if s.SocketMode {
+			t.Error("Slack.SocketMode should be false when not specified")
+		}
+		if s.AppToken != "" {
+			t.Errorf("Slack.AppToken should be empty when not specified, got %q", s.AppToken)
+		}
+	})
+
+	t.Run("validation fails for socket_mode without app_token", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		configContent := `
+version: "1.0"
+adapters:
+  slack:
+    enabled: true
+    socket_mode: true
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("Failed to write test config: %v", err)
+		}
+
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		err = cfg.Validate()
+		if err == nil {
+			t.Error("Validate() should fail when socket_mode is true without app_token")
+		}
+		if err != nil && !contains(err.Error(), "slack app_token is required") {
+			t.Errorf("Validate() error = %q, want error containing %q", err.Error(), "slack app_token is required")
+		}
+	})
 }
 
 func TestLoadTeamConfig(t *testing.T) {
