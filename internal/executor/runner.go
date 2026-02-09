@@ -242,6 +242,7 @@ type Runner struct {
 	suppressProgressLogs  bool                  // Suppress slog output for progress (use when visual display is active)
 	tokenLimitCheck       TokenLimitCallback    // Optional per-task token/duration limit check (GH-539)
 	onSubIssuePRCreated   SubIssuePRCallback    // Optional callback when a sub-issue PR is created (GH-596)
+	complexityClassifier  *ComplexityClassifier  // Optional LLM complexity classifier (GH-665)
 	intentJudge           *IntentJudge          // Optional intent judge for diff-vs-ticket alignment (GH-624)
 	teamChecker           TeamChecker           // Optional team RBAC checker (GH-633)
 	executeFunc           func(ctx context.Context, task *Task) (*ExecutionResult, error) // Internal override for testing
@@ -306,6 +307,22 @@ func NewRunnerWithConfig(config *BackendConfig) (*Runner, error) {
 			runner.intentJudge = NewIntentJudge(apiKey)
 			if config.IntentJudge.Model != "" {
 				runner.intentJudge.model = config.IntentJudge.Model
+			}
+		}
+	}
+
+	// Initialize LLM complexity classifier (GH-665)
+	if config != nil && config.ComplexityClassifier != nil && config.ComplexityClassifier.Enabled {
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if apiKey != "" {
+			runner.complexityClassifier = NewComplexityClassifier(apiKey)
+			if config.ComplexityClassifier.Model != "" {
+				runner.complexityClassifier.model = config.ComplexityClassifier.Model
+			}
+			if config.ComplexityClassifier.Timeout != "" {
+				if d, err := time.ParseDuration(config.ComplexityClassifier.Timeout); err == nil {
+					runner.complexityClassifier.httpClient.Timeout = d
+				}
 			}
 		}
 	}
@@ -423,6 +440,11 @@ func (r *Runner) SetIntentJudge(judge *IntentJudge) {
 	r.intentJudge = judge
 }
 
+// SetComplexityClassifier sets the LLM complexity classifier (GH-665).
+func (r *Runner) SetComplexityClassifier(classifier *ComplexityClassifier) {
+	r.complexityClassifier = classifier
+}
+
 // getRecordingsPath returns the recordings path, using default if not set
 func (r *Runner) getRecordingsPath() string {
 	if r.recordingsPath != "" {
@@ -534,7 +556,32 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 	}
 
 	// Detect complexity for routing decisions
+	// GH-665: Use LLM classifier when available, fall back to heuristics
 	complexity := DetectComplexity(task)
+	if r.complexityClassifier != nil {
+		classifyCtx, classifyCancel := context.WithTimeout(ctx, 15*time.Second)
+		classification, err := r.complexityClassifier.Classify(classifyCtx, task.Title, task.Description)
+		classifyCancel()
+		if err != nil {
+			r.log.Warn("LLM complexity classification failed, using heuristic fallback",
+				slog.String("task_id", task.ID),
+				slog.String("error", err.Error()),
+			)
+		} else {
+			r.log.Info("LLM complexity classification",
+				slog.String("task_id", task.ID),
+				slog.String("complexity", string(classification.Complexity)),
+				slog.Bool("should_decompose", classification.ShouldDecompose),
+				slog.String("reason", classification.Reason),
+			)
+			complexity = classification.Complexity
+			// Pass decomposition decision to the decomposer if configured
+			if r.decomposer != nil {
+				r.decomposer.SetLLMDecomposeDecision(classification.ShouldDecompose)
+				defer r.decomposer.ResetLLMDecomposeDecision()
+			}
+		}
+	}
 
 	// GH-405: Epic tasks trigger planning mode instead of execution
 	if complexity.IsEpic() {

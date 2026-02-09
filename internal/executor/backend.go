@@ -173,6 +173,9 @@ type BackendConfig struct {
 
 	// IntentJudge contains intent alignment settings for diff-vs-ticket verification
 	IntentJudge *IntentJudgeConfig `yaml:"intent_judge,omitempty"`
+
+	// ComplexityClassifier contains LLM-based complexity classification settings (GH-665)
+	ComplexityClassifier *ComplexityClassifierConfig `yaml:"complexity_classifier,omitempty"`
 }
 
 // ModelRoutingConfig controls which model to use based on task complexity.
@@ -342,8 +345,9 @@ func DefaultBackendConfig() *BackendConfig {
 		ModelRouting:  DefaultModelRoutingConfig(),
 		Timeout:       DefaultTimeoutConfig(),
 		EffortRouting: DefaultEffortRoutingConfig(),
-		Decompose:     DefaultDecomposeConfig(),
-		IntentJudge:   DefaultIntentJudgeConfig(),
+		Decompose:              DefaultDecomposeConfig(),
+		IntentJudge:            DefaultIntentJudgeConfig(),
+		ComplexityClassifier:   DefaultComplexityClassifierConfig(),
 	}
 }
 

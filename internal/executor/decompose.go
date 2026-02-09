@@ -50,6 +50,11 @@ type DecomposeResult struct {
 // TaskDecomposer handles breaking complex tasks into smaller subtasks.
 type TaskDecomposer struct {
 	config *DecomposeConfig
+
+	// llmShouldDecompose caches the LLM's decomposition decision for the current task.
+	// When set, overrides the heuristic-based shouldDecompose check.
+	// Reset per-task via SetLLMDecomposeDecision.
+	llmShouldDecompose *bool
 }
 
 // NewTaskDecomposer creates a decomposer with the given configuration.
@@ -81,23 +86,36 @@ func (d *TaskDecomposer) Decompose(task *Task) *DecomposeResult {
 		}
 	}
 
-	// Check complexity threshold
-	complexity := DetectComplexity(task)
-	if !d.shouldDecompose(complexity) {
-		return &DecomposeResult{
-			Decomposed: false,
-			Subtasks:   []*Task{task},
-			Reason:     "complexity below threshold: " + complexity.String(),
+	// GH-665: If the LLM classifier has explicitly decided, use its decision.
+	if d.llmShouldDecompose != nil {
+		if !*d.llmShouldDecompose {
+			return &DecomposeResult{
+				Decomposed: false,
+				Subtasks:   []*Task{task},
+				Reason:     "LLM classifier: should not decompose",
+			}
 		}
-	}
+		// LLM says decompose — skip heuristic checks, proceed to structural analysis
+	} else {
+		// Fallback: heuristic-based checks
+		// Check complexity threshold
+		complexity := DetectComplexity(task)
+		if !d.shouldDecompose(complexity) {
+			return &DecomposeResult{
+				Decomposed: false,
+				Subtasks:   []*Task{task},
+				Reason:     "complexity below threshold: " + complexity.String(),
+			}
+		}
 
-	// Check description length
-	wordCount := len(strings.Fields(task.Description))
-	if wordCount < d.config.MinDescriptionWords {
-		return &DecomposeResult{
-			Decomposed: false,
-			Subtasks:   []*Task{task},
-			Reason:     "description too short for decomposition",
+		// Check description length
+		wordCount := len(strings.Fields(task.Description))
+		if wordCount < d.config.MinDescriptionWords {
+			return &DecomposeResult{
+				Decomposed: false,
+				Subtasks:   []*Task{task},
+				Reason:     "description too short for decomposition",
+			}
 		}
 	}
 
@@ -116,6 +134,17 @@ func (d *TaskDecomposer) Decompose(task *Task) *DecomposeResult {
 		Subtasks:   subtasks,
 		Reason:     "decomposed into subtasks",
 	}
+}
+
+// SetLLMDecomposeDecision sets the LLM's decomposition decision for the current task.
+// This overrides the heuristic-based shouldDecompose check.
+func (d *TaskDecomposer) SetLLMDecomposeDecision(shouldDecompose bool) {
+	d.llmShouldDecompose = &shouldDecompose
+}
+
+// ResetLLMDecomposeDecision clears the LLM decomposition decision so heuristics are used.
+func (d *TaskDecomposer) ResetLLMDecomposeDecision() {
+	d.llmShouldDecompose = nil
 }
 
 // shouldDecompose checks if the complexity meets the threshold.

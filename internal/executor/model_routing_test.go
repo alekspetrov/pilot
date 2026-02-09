@@ -99,7 +99,7 @@ func TestModelRouter_SelectTimeout(t *testing.T) {
 		},
 		{
 			name:     "medium task gets 30m timeout",
-			task:     &Task{Description: "Implement new endpoint for user data with validation and error handling"},
+			task:     &Task{Description: "Implement a new REST endpoint for user data that includes proper input validation, error handling, pagination support, and response structure with appropriate HTTP status codes and JSON shape"},
 			expected: 30 * time.Minute,
 		},
 		{

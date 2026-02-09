@@ -146,20 +146,24 @@ func DetectComplexity(task *Task) Complexity {
 	}
 
 	// Heuristics based on description length (strip code blocks to get actual prose length)
+	// Thresholds raised in GH-665: word count is a poor proxy for complexity.
+	// A 500-word issue can be trivial (detailed instructions for one change),
+	// while a 30-word issue can be complex ("refactor auth system").
 	cleanDesc := stripCodeBlocks(desc)
 	wordCount := len(strings.Fields(cleanDesc))
 
 	// Very short descriptions are likely simple tasks
-	if wordCount < 10 {
+	if wordCount < 20 {
 		return ComplexitySimple
 	}
 
-	// Medium-length descriptions are standard feature work
-	if wordCount < 50 {
+	// Most descriptions up to 150 words are standard feature work
+	if wordCount < 150 {
 		return ComplexityMedium
 	}
 
-	// Long descriptions suggest complex requirements
+	// Long descriptions MAY suggest complex requirements, but the LLM classifier
+	// (when enabled) provides much better accuracy. This is the fallback path.
 	return ComplexityComplex
 }
 

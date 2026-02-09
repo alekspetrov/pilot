@@ -174,7 +174,7 @@ Phase 5: Deploy and monitor`},
 Phase 1: Setup
 Phase 2: Core logic
 Phase 3: Testing`},
-			expected: ComplexityMedium,
+			expected: ComplexitySimple,
 		},
 		{
 			name: "300+ words with structural markers and phases IS epic",
@@ -274,9 +274,9 @@ Regular sync meetings with stakeholders will be necessary to ensure alignment on
 			expected: ComplexityMedium,
 		},
 		{
-			name:     "feature without keywords",
+			name:     "short feature without keywords",
 			task:     &Task{Description: "Create new component for displaying charts with proper styling and responsive design"},
-			expected: ComplexityMedium,
+			expected: ComplexitySimple,
 		},
 
 		// Edge cases
@@ -296,15 +296,32 @@ Regular sync meetings with stakeholders will be necessary to ensure alignment on
 			expected: ComplexityTrivial,
 		},
 
-		// Long description triggers complex
+		// GH-665: Raised thresholds — 71 words is medium, not complex.
+		// Word count is a poor proxy for complexity.
 		{
-			name: "very long description",
+			name: "medium-length description without keywords",
 			task: &Task{Description: `This task requires implementing a comprehensive solution that spans multiple files and components.
 				We need to update the data layer, add new API endpoints, modify the frontend components, update tests,
 				and ensure backward compatibility. The implementation should follow our coding standards and include
 				proper documentation. We also need to consider performance implications and add appropriate caching
 				where necessary. The feature should support both authenticated and anonymous users with different
 				permission levels.`},
+			expected: ComplexityMedium,
+		},
+		// 150+ words without keywords triggers complex (fallback path)
+		{
+			name: "very long description triggers complex",
+			task: &Task{Description: `This task requires implementing a comprehensive solution that spans multiple files and components.
+				We need to update the data layer, add new API endpoints, modify the frontend components, update tests,
+				and ensure backward compatibility. The implementation should follow our coding standards and include
+				proper documentation. We also need to consider performance implications and add appropriate caching
+				where necessary. The feature should support both authenticated and anonymous users with different
+				permission levels. Additionally, we need to add proper error handling throughout the codebase, implement
+				retry logic for external API calls, update the monitoring dashboards, configure alerting thresholds,
+				document all the new endpoints in the API reference, update the changelog, add migration scripts for
+				the database schema changes, validate the solution against our security requirements, perform load
+				testing to verify performance targets are met, and coordinate with the frontend team for the UI
+				updates that depend on the new backend capabilities being deployed.`},
 			expected: ComplexityComplex,
 		},
 	}
