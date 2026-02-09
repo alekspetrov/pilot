@@ -3173,6 +3173,37 @@ Examples:
 					}
 				}
 
+				// Register webhook channels
+				for _, ch := range alertsCfg.Channels {
+					if ch.Type == "webhook" && ch.Enabled && ch.Webhook != nil {
+						webhookChannel := alerts.NewWebhookChannel(ch.Name, ch.Webhook)
+						dispatcher.RegisterChannel(webhookChannel)
+					}
+				}
+
+				// Register email channels
+				for _, ch := range alertsCfg.Channels {
+					if ch.Type == "email" && ch.Enabled && ch.Email != nil && ch.Email.SMTPHost != "" {
+						sender := alerts.NewSMTPSender(
+							ch.Email.SMTPHost,
+							ch.Email.SMTPPort,
+							ch.Email.From,
+							ch.Email.Username,
+							ch.Email.Password,
+						)
+						emailChannel := alerts.NewEmailChannel(ch.Name, sender, ch.Email)
+						dispatcher.RegisterChannel(emailChannel)
+					}
+				}
+
+				// Register PagerDuty channels
+				for _, ch := range alertsCfg.Channels {
+					if ch.Type == "pagerduty" && ch.Enabled && ch.PagerDuty != nil {
+						pdChannel := alerts.NewPagerDutyChannel(ch.Name, ch.PagerDuty)
+						dispatcher.RegisterChannel(pdChannel)
+					}
+				}
+
 				alertsEngine = alerts.NewEngine(alertsCfg, alerts.WithDispatcher(dispatcher))
 				if err := alertsEngine.Start(ctx); err != nil {
 					return fmt.Errorf("failed to start alerts engine: %w", err)
