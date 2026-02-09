@@ -45,7 +45,7 @@ type envelopeAck struct {
 }
 
 // SocketModeHandler manages a Slack Socket Mode WebSocket connection.
-// It reads envelopes, acknowledges them, and emits SocketEvents on a channel.
+// It reads envelopes, acknowledges them, and emits RawSocketEvents on a channel.
 type SocketModeHandler struct {
 	conn   *websocket.Conn
 	events chan RawSocketEvent
