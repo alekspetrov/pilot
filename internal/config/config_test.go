@@ -565,6 +565,37 @@ func TestValidate(t *testing.T) {
 			}(),
 			wantErr: false, // Nil auth is allowed
 		},
+		{
+			name: "SlackSocketModeWithoutAppToken",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketMode = true
+				c.Adapters.Slack.AppToken = ""
+				return c
+			}(),
+			wantErr:     true,
+			errContains: "slack app_token is required when socket_mode is enabled",
+		},
+		{
+			name: "SlackSocketModeWithAppToken",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketMode = true
+				c.Adapters.Slack.AppToken = "test-slack-app-token"
+				return c
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "SlackSocketModeDisabled",
+			config: func() *Config {
+				c := DefaultConfig()
+				c.Adapters.Slack.SocketMode = false
+				c.Adapters.Slack.AppToken = ""
+				return c
+			}(),
+			wantErr: false, // No app_token needed when socket_mode is off
+		},
 	}
 
 	for _, tt := range tests {
