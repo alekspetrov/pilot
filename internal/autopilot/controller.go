@@ -886,6 +886,84 @@ func (c *Controller) checkExternalMergeOrClose(ctx context.Context, prState *PRS
 	return false
 }
 
+// WaitForPRMerge polls GetPRState every 10s until the PR reaches a terminal
+// state (merged/post-merge CI, CI failed, or pipeline failed) or the timeout
+// expires. The caller's context is also respected for cancellation.
+func (c *Controller) WaitForPRMerge(ctx context.Context, prNumber int, timeout time.Duration) (PRMergeResult, error) {
+	start := time.Now()
+
+	deadline, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	// Check immediately before first tick
+	if result, done := c.checkMergeState(prNumber, start); done {
+		return result, nil
+	}
+
+	for {
+		select {
+		case <-deadline.Done():
+			// Distinguish between parent context cancellation and our timeout
+			if ctx.Err() != nil {
+				return PRMergeResult{}, ctx.Err()
+			}
+			// Our timeout fired
+			pr, _ := c.GetPRState(prNumber)
+			finalStage := PRStage("")
+			if pr != nil {
+				finalStage = pr.Stage
+			}
+			return PRMergeResult{
+				Outcome:    MergeOutcomeTimeout,
+				PRNumber:   prNumber,
+				FinalStage: finalStage,
+				Duration:   time.Since(start),
+			}, nil
+		case <-ticker.C:
+			if result, done := c.checkMergeState(prNumber, start); done {
+				return result, nil
+			}
+		}
+	}
+}
+
+// checkMergeState inspects the current PR stage and returns a result if terminal.
+func (c *Controller) checkMergeState(prNumber int, start time.Time) (PRMergeResult, bool) {
+	pr, ok := c.GetPRState(prNumber)
+	if !ok {
+		// PR was removed from tracking — treat as merged (removePR happens after merge)
+		return PRMergeResult{
+			Outcome:    MergeOutcomeMerged,
+			PRNumber:   prNumber,
+			FinalStage: StageMerged,
+			Duration:   time.Since(start),
+		}, true
+	}
+
+	switch pr.Stage {
+	case StageMerged, StagePostMergeCI:
+		return PRMergeResult{
+			Outcome:    MergeOutcomeMerged,
+			PRNumber:   prNumber,
+			FinalStage: pr.Stage,
+			Duration:   time.Since(start),
+		}, true
+	case StageCIFailed, StageFailed:
+		return PRMergeResult{
+			Outcome:    MergeOutcomeFailed,
+			PRNumber:   prNumber,
+			FinalStage: pr.Stage,
+			Error:      pr.Error,
+			Duration:   time.Since(start),
+		}, true
+	default:
+		return PRMergeResult{}, false
+	}
+}
+
 // notifyExternalMerge sends notification when a PR is merged externally.
 func (c *Controller) notifyExternalMerge(ctx context.Context, prState *PRState) {
 	if c.notifier == nil {

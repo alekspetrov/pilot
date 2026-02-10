@@ -1298,3 +1298,272 @@ func TestController_ProcessPR_StaleSHAWithoutRefreshWouldStayPending(t *testing.
 		t.Errorf("actual SHA status = %s, want %s", actualStatus, CISuccess)
 	}
 }
+
+// --- WaitForPRMerge tests ---
+
+func TestWaitForPRMerge_AlreadyMerged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	// Register PR and set stage to merged
+	c.OnPRCreated(100, "http://pr/100", 50, "abc123", "pilot/GH-50")
+	c.mu.Lock()
+	c.activePRs[100].Stage = StageMerged
+	c.mu.Unlock()
+
+	result, err := c.WaitForPRMerge(context.Background(), 100, 5*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge returned error: %v", err)
+	}
+	if result.Outcome != MergeOutcomeMerged {
+		t.Errorf("Outcome = %s, want %s", result.Outcome, MergeOutcomeMerged)
+	}
+	if result.PRNumber != 100 {
+		t.Errorf("PRNumber = %d, want 100", result.PRNumber)
+	}
+	if result.FinalStage != StageMerged {
+		t.Errorf("FinalStage = %s, want %s", result.FinalStage, StageMerged)
+	}
+}
+
+func TestWaitForPRMerge_PostMergeCICountsAsMerged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	c.OnPRCreated(101, "http://pr/101", 51, "abc123", "pilot/GH-51")
+	c.mu.Lock()
+	c.activePRs[101].Stage = StagePostMergeCI
+	c.mu.Unlock()
+
+	result, err := c.WaitForPRMerge(context.Background(), 101, 5*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge returned error: %v", err)
+	}
+	if result.Outcome != MergeOutcomeMerged {
+		t.Errorf("Outcome = %s, want %s", result.Outcome, MergeOutcomeMerged)
+	}
+	if result.FinalStage != StagePostMergeCI {
+		t.Errorf("FinalStage = %s, want %s", result.FinalStage, StagePostMergeCI)
+	}
+}
+
+func TestWaitForPRMerge_CIFailed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	c.OnPRCreated(102, "http://pr/102", 52, "abc123", "pilot/GH-52")
+	c.mu.Lock()
+	c.activePRs[102].Stage = StageCIFailed
+	c.activePRs[102].Error = "lint check failed"
+	c.mu.Unlock()
+
+	result, err := c.WaitForPRMerge(context.Background(), 102, 5*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge returned error: %v", err)
+	}
+	if result.Outcome != MergeOutcomeFailed {
+		t.Errorf("Outcome = %s, want %s", result.Outcome, MergeOutcomeFailed)
+	}
+	if result.Error != "lint check failed" {
+		t.Errorf("Error = %q, want %q", result.Error, "lint check failed")
+	}
+}
+
+func TestWaitForPRMerge_PipelineFailed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	c.OnPRCreated(103, "http://pr/103", 53, "abc123", "pilot/GH-53")
+	c.mu.Lock()
+	c.activePRs[103].Stage = StageFailed
+	c.activePRs[103].Error = "merge conflict"
+	c.mu.Unlock()
+
+	result, err := c.WaitForPRMerge(context.Background(), 103, 5*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge returned error: %v", err)
+	}
+	if result.Outcome != MergeOutcomeFailed {
+		t.Errorf("Outcome = %s, want %s", result.Outcome, MergeOutcomeFailed)
+	}
+	if result.FinalStage != StageFailed {
+		t.Errorf("FinalStage = %s, want %s", result.FinalStage, StageFailed)
+	}
+}
+
+func TestWaitForPRMerge_Timeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	// PR stays in waiting_ci — never reaches terminal state
+	c.OnPRCreated(104, "http://pr/104", 54, "abc123", "pilot/GH-54")
+	c.mu.Lock()
+	c.activePRs[104].Stage = StageWaitingCI
+	c.mu.Unlock()
+
+	// Use a very short timeout so the test doesn't block
+	result, err := c.WaitForPRMerge(context.Background(), 104, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge returned error: %v", err)
+	}
+	if result.Outcome != MergeOutcomeTimeout {
+		t.Errorf("Outcome = %s, want %s", result.Outcome, MergeOutcomeTimeout)
+	}
+	if result.FinalStage != StageWaitingCI {
+		t.Errorf("FinalStage = %s, want %s", result.FinalStage, StageWaitingCI)
+	}
+	if result.Duration < 100*time.Millisecond {
+		t.Errorf("Duration = %v, expected >= 100ms", result.Duration)
+	}
+}
+
+func TestWaitForPRMerge_ContextCancelled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	c.OnPRCreated(105, "http://pr/105", 55, "abc123", "pilot/GH-55")
+	c.mu.Lock()
+	c.activePRs[105].Stage = StageWaitingCI
+	c.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := c.WaitForPRMerge(ctx, 105, 30*time.Second)
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+	if err != context.Canceled {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestWaitForPRMerge_PRRemovedTreatedAsMerged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	// Don't register the PR at all — simulates removal after merge
+	result, err := c.WaitForPRMerge(context.Background(), 999, 5*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge returned error: %v", err)
+	}
+	if result.Outcome != MergeOutcomeMerged {
+		t.Errorf("Outcome = %s, want %s", result.Outcome, MergeOutcomeMerged)
+	}
+}
+
+func TestWaitForPRMerge_TransitionsToMergedDuringWait(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	c.OnPRCreated(106, "http://pr/106", 56, "abc123", "pilot/GH-56")
+	c.mu.Lock()
+	c.activePRs[106].Stage = StageWaitingCI
+	c.mu.Unlock()
+
+	// Transition to merged after a short delay (before the 10s tick,
+	// so we need to test that eventually we pick it up)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		c.mu.Lock()
+		c.activePRs[106].Stage = StageMerged
+		c.mu.Unlock()
+	}()
+
+	// Timeout of 15s gives room for the 10s ticker to fire
+	result, err := c.WaitForPRMerge(context.Background(), 106, 15*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge returned error: %v", err)
+	}
+	if result.Outcome != MergeOutcomeMerged {
+		t.Errorf("Outcome = %s, want %s", result.Outcome, MergeOutcomeMerged)
+	}
+}
+
+func TestWaitForPRMerge_DurationIsAccurate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	// Already merged — should return almost immediately
+	c.OnPRCreated(107, "http://pr/107", 57, "abc123", "pilot/GH-57")
+	c.mu.Lock()
+	c.activePRs[107].Stage = StageMerged
+	c.mu.Unlock()
+
+	start := time.Now()
+	result, err := c.WaitForPRMerge(context.Background(), 107, 30*time.Second)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("WaitForPRMerge returned error: %v", err)
+	}
+	if result.Duration > 1*time.Second {
+		t.Errorf("Duration = %v, expected < 1s for already-merged PR", result.Duration)
+	}
+	if elapsed > 1*time.Second {
+		t.Errorf("Wall time = %v, expected < 1s for already-merged PR", elapsed)
+	}
+}

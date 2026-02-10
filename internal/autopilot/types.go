@@ -208,6 +208,32 @@ func ShortSHA(sha string) string {
 	return sha[:7]
 }
 
+// PRMergeOutcome represents the outcome of waiting for a PR merge.
+type PRMergeOutcome string
+
+const (
+	// MergeOutcomeMerged indicates the PR was successfully merged.
+	MergeOutcomeMerged PRMergeOutcome = "merged"
+	// MergeOutcomeFailed indicates the PR failed (CI failure or pipeline error).
+	MergeOutcomeFailed PRMergeOutcome = "failed"
+	// MergeOutcomeTimeout indicates the wait timed out before reaching a terminal state.
+	MergeOutcomeTimeout PRMergeOutcome = "timeout"
+)
+
+// PRMergeResult is the structured result from WaitForPRMerge.
+type PRMergeResult struct {
+	// Outcome is the terminal outcome of the wait.
+	Outcome PRMergeOutcome
+	// PRNumber is the PR that was waited on.
+	PRNumber int
+	// FinalStage is the PR stage when the wait ended.
+	FinalStage PRStage
+	// Error holds details if Outcome is MergeOutcomeFailed.
+	Error string
+	// Duration is how long the wait took.
+	Duration time.Duration
+}
+
 // PRState tracks a PR through the autopilot pipeline.
 type PRState struct {
 	// PRNumber is the GitHub PR number.
