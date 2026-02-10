@@ -749,11 +749,18 @@ Examples:
 							slog.Int("attempt", pendingTask.Attempts),
 						)
 
+						var result *github.IssueResult
 						if execMode == github.ExecutionModeSequential {
-							_, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
+							result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
 						} else {
-							err = handleGitHubIssueWithMonitor(retryCtx, cfg, client, issue, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
+							result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
 						}
+
+						// GH-797: Call OnPRCreated for retried issues so autopilot tracks their PRs
+						if result != nil && result.PRNumber > 0 && gwAutopilotController != nil {
+							gwAutopilotController.OnPRCreated(result.PRNumber, result.PRURL, issue.Number, result.HeadSHA, result.BranchName)
+						}
+
 						return err
 					})
 					rateLimitScheduler.SetExpiredCallback(func(expiredCtx context.Context, pendingTask *executor.PendingTask) {
@@ -1561,11 +1568,18 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 				)
 
 				// Re-process the issue
+				var result *github.IssueResult
 				if execMode == github.ExecutionModeSequential {
-					_, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
+					result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
 				} else {
-					err = handleGitHubIssueWithMonitor(retryCtx, cfg, client, issue, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
+					result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
 				}
+
+				// GH-797: Call OnPRCreated for retried issues so autopilot tracks their PRs
+				if result != nil && result.PRNumber > 0 && autopilotController != nil {
+					autopilotController.OnPRCreated(result.PRNumber, result.PRURL, issue.Number, result.HeadSHA, result.BranchName)
+				}
+
 				return err
 			})
 			rateLimitScheduler.SetExpiredCallback(func(expiredCtx context.Context, pendingTask *executor.PendingTask) {
