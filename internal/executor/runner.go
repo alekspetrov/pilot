@@ -215,6 +215,21 @@ type TokenLimitCallback func(taskID string, deltaInput, deltaOutput int64) bool
 // Signature matches Controller.OnPRCreated so it can be wired directly.
 type SubIssuePRCallback func(prNumber int, prURL string, issueNumber int, headSHA string, branchName string)
 
+// PRMergeResult represents the outcome of waiting for a PR to merge.
+type PRMergeResult struct {
+	Merged    bool   // True if PR was successfully merged
+	Closed    bool   // True if PR was closed without merge
+	Failed    bool   // True if merge failed (CI failure, timeout, etc.)
+	Error     string // Error message if Failed is true
+	MergeSHA  string // Merge commit SHA if Merged is true
+	TimedOut  bool   // True if wait timed out
+}
+
+// SubIssueMergeWaiter is called during epic execution to wait for a sub-issue PR to merge.
+// It blocks until the PR is merged, closed, or the timeout expires.
+// Signature allows wiring to autopilotController.WaitForPRMerge.
+type SubIssueMergeWaiter func(prNumber int, timeout time.Duration) (PRMergeResult, error)
+
 // Runner executes development tasks using an AI backend (Claude Code, OpenCode, etc.).
 // It manages task lifecycle including branch creation, AI invocation,
 // progress tracking, PR creation, and execution recording. Runner is safe for
@@ -242,6 +257,7 @@ type Runner struct {
 	suppressProgressLogs  bool                  // Suppress slog output for progress (use when visual display is active)
 	tokenLimitCheck       TokenLimitCallback    // Optional per-task token/duration limit check (GH-539)
 	onSubIssuePRCreated   SubIssuePRCallback    // Optional callback when a sub-issue PR is created (GH-596)
+	onSubIssueMergeWaiter SubIssueMergeWaiter   // Optional callback to wait for sub-issue PR merge (GH-742)
 	intentJudge           *IntentJudge          // Optional intent judge for diff-vs-ticket alignment (GH-624)
 	teamChecker           TeamChecker           // Optional team RBAC checker (GH-633)
 	executeFunc           func(ctx context.Context, task *Task) (*ExecutionResult, error) // Internal override for testing
@@ -416,6 +432,13 @@ func (r *Runner) SetTokenLimitCheck(cb TokenLimitCallback) {
 // each sub-issue PR individually for CI monitoring and auto-merge.
 func (r *Runner) SetOnSubIssuePRCreated(fn SubIssuePRCallback) {
 	r.onSubIssuePRCreated = fn
+}
+
+// SetOnSubIssueMergeWaiter sets the callback used to wait for sub-issue PRs to merge
+// during sequential epic execution (GH-742). This allows the executor to block until
+// a sub-issue PR is merged before proceeding to the next sub-issue.
+func (r *Runner) SetOnSubIssueMergeWaiter(fn SubIssueMergeWaiter) {
+	r.onSubIssueMergeWaiter = fn
 }
 
 // SetIntentJudge sets the intent judge for diff-vs-ticket alignment verification (GH-624).

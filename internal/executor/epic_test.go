@@ -731,6 +731,56 @@ func TestSetOnSubIssuePRCreated(t *testing.T) {
 	}
 }
 
+func TestSetOnSubIssueMergeWaiter(t *testing.T) {
+	runner := NewRunner()
+
+	// Callback should be nil by default
+	if runner.onSubIssueMergeWaiter != nil {
+		t.Error("onSubIssueMergeWaiter should be nil by default")
+	}
+
+	// Set callback
+	var called bool
+	var capturedPR int
+	var capturedTimeout time.Duration
+
+	runner.SetOnSubIssueMergeWaiter(func(prNumber int, timeout time.Duration) (PRMergeResult, error) {
+		called = true
+		capturedPR = prNumber
+		capturedTimeout = timeout
+		return PRMergeResult{
+			Merged:   true,
+			MergeSHA: "abc123def",
+		}, nil
+	})
+
+	if runner.onSubIssueMergeWaiter == nil {
+		t.Fatal("onSubIssueMergeWaiter should be set after SetOnSubIssueMergeWaiter")
+	}
+
+	// Invoke callback
+	result, err := runner.onSubIssueMergeWaiter(42, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !called {
+		t.Error("callback was not invoked")
+	}
+	if capturedPR != 42 {
+		t.Errorf("prNumber = %d, want 42", capturedPR)
+	}
+	if capturedTimeout != 5*time.Minute {
+		t.Errorf("timeout = %v, want 5m", capturedTimeout)
+	}
+	if !result.Merged {
+		t.Error("result.Merged should be true")
+	}
+	if result.MergeSHA != "abc123def" {
+		t.Errorf("result.MergeSHA = %q, want abc123def", result.MergeSHA)
+	}
+}
+
 func TestParseIssueNumber(t *testing.T) {
 	tests := []struct {
 		name     string

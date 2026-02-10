@@ -1298,3 +1298,178 @@ func TestController_ProcessPR_StaleSHAWithoutRefreshWouldStayPending(t *testing.
 		t.Errorf("actual SHA status = %s, want %s", actualStatus, CISuccess)
 	}
 }
+
+func TestController_WaitForPRMerge_Merged(t *testing.T) {
+	// Test WaitForPRMerge returns when PR is merged
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/42":
+			resp := github.PullRequest{
+				Number:         42,
+				State:          "closed",
+				Merged:         true,
+				MergeCommitSHA: "merge123abc",
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	result, err := c.WaitForPRMerge(42, 1*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge error: %v", err)
+	}
+
+	if !result.Merged {
+		t.Error("result.Merged should be true")
+	}
+	if result.MergeSHA != "merge123abc" {
+		t.Errorf("result.MergeSHA = %q, want merge123abc", result.MergeSHA)
+	}
+	if result.Closed {
+		t.Error("result.Closed should be false for merged PR")
+	}
+	if result.Failed {
+		t.Error("result.Failed should be false")
+	}
+	if result.TimedOut {
+		t.Error("result.TimedOut should be false")
+	}
+}
+
+func TestController_WaitForPRMerge_Closed(t *testing.T) {
+	// Test WaitForPRMerge returns when PR is closed without merge
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/42":
+			resp := github.PullRequest{
+				Number: 42,
+				State:  "closed",
+				Merged: false,
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	result, err := c.WaitForPRMerge(42, 1*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge error: %v", err)
+	}
+
+	if result.Merged {
+		t.Error("result.Merged should be false")
+	}
+	if !result.Closed {
+		t.Error("result.Closed should be true")
+	}
+	if result.Error == "" {
+		t.Error("result.Error should explain closure")
+	}
+}
+
+func TestController_WaitForPRMerge_Timeout(t *testing.T) {
+	// Test WaitForPRMerge returns timeout when PR stays open
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/42":
+			resp := github.PullRequest{
+				Number: 42,
+				State:  "open",
+				Merged: false,
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	// Use a very short timeout
+	result, err := c.WaitForPRMerge(42, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge error: %v", err)
+	}
+
+	if result.Merged {
+		t.Error("result.Merged should be false")
+	}
+	if !result.TimedOut {
+		t.Error("result.TimedOut should be true")
+	}
+	if result.Error == "" {
+		t.Error("result.Error should explain timeout")
+	}
+}
+
+func TestController_WaitForPRMerge_Failed(t *testing.T) {
+	// Test WaitForPRMerge returns failure when internal state shows failed
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/42":
+			resp := github.PullRequest{
+				Number: 42,
+				State:  "open",
+				Merged: false,
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	// Register PR and mark as failed
+	c.OnPRCreated(42, "https://github.com/owner/repo/pull/42", 10, "abc123", "pilot/GH-10")
+	c.mu.Lock()
+	c.activePRs[42].Stage = StageFailed
+	c.activePRs[42].Error = "CI failed"
+	c.mu.Unlock()
+
+	result, err := c.WaitForPRMerge(42, 1*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForPRMerge error: %v", err)
+	}
+
+	if result.Merged {
+		t.Error("result.Merged should be false")
+	}
+	if !result.Failed {
+		t.Error("result.Failed should be true")
+	}
+	if result.Error != "CI failed" {
+		t.Errorf("result.Error = %q, want 'CI failed'", result.Error)
+	}
+}

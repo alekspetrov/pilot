@@ -700,6 +700,18 @@ Examples:
 						pollerOpts = append(pollerOpts, github.WithOnPRCreated(gwAutopilotController.OnPRCreated))
 						// Wire sub-issue PR callback so epic sub-PRs are tracked by autopilot (GH-594)
 						gwRunner.SetOnSubIssuePRCreated(gwAutopilotController.OnPRCreated)
+						// Wire sub-issue merge waiter for sequential epic execution (GH-742)
+						gwRunner.SetOnSubIssueMergeWaiter(func(prNumber int, timeout time.Duration) (executor.PRMergeResult, error) {
+							result, err := gwAutopilotController.WaitForPRMerge(prNumber, timeout)
+							return executor.PRMergeResult{
+								Merged:   result.Merged,
+								Closed:   result.Closed,
+								Failed:   result.Failed,
+								Error:    result.Error,
+								MergeSHA: result.MergeSHA,
+								TimedOut: result.TimedOut,
+							}, err
+						})
 					}
 
 					// Create rate limit retry scheduler
@@ -1485,6 +1497,18 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 				)
 				// Wire sub-issue PR callback so epic sub-PRs are tracked by autopilot (GH-594)
 				runner.SetOnSubIssuePRCreated(autopilotController.OnPRCreated)
+				// Wire sub-issue merge waiter for sequential epic execution (GH-742)
+				runner.SetOnSubIssueMergeWaiter(func(prNumber int, timeout time.Duration) (executor.PRMergeResult, error) {
+					result, err := autopilotController.WaitForPRMerge(prNumber, timeout)
+					return executor.PRMergeResult{
+						Merged:   result.Merged,
+						Closed:   result.Closed,
+						Failed:   result.Failed,
+						Error:    result.Error,
+						MergeSHA: result.MergeSHA,
+						TimedOut: result.TimedOut,
+					}, err
+				})
 			}
 
 			// Create rate limit retry scheduler

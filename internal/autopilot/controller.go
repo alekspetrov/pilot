@@ -12,6 +12,17 @@ import (
 	"github.com/alekspetrov/pilot/internal/approval"
 )
 
+// PRMergeResult represents the outcome of waiting for a PR to merge.
+// This type mirrors executor.PRMergeResult to avoid import cycles.
+type PRMergeResult struct {
+	Merged   bool   // True if PR was successfully merged
+	Closed   bool   // True if PR was closed without merge
+	Failed   bool   // True if merge failed (CI failure, timeout, etc.)
+	Error    string // Error message if Failed is true
+	MergeSHA string // Merge commit SHA if Merged is true
+	TimedOut bool   // True if wait timed out
+}
+
 // Notifier sends autopilot notifications for PR lifecycle events.
 type Notifier interface {
 	// NotifyMerged sends notification when a PR is successfully merged.
@@ -587,6 +598,70 @@ func (c *Controller) GetPRState(prNumber int) (*PRState, bool) {
 
 	pr, ok := c.activePRs[prNumber]
 	return pr, ok
+}
+
+// WaitForPRMerge blocks until the specified PR is merged, closed, or the timeout expires.
+// This method is used for sequential epic sub-issue execution (GH-742) where each
+// sub-issue PR must be merged before the next sub-issue is executed.
+func (c *Controller) WaitForPRMerge(prNumber int, timeout time.Duration) (PRMergeResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	c.log.Info("waiting for PR to merge",
+		"pr", prNumber,
+		"timeout", timeout,
+	)
+
+	ticker := time.NewTicker(c.config.CIPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			c.log.Warn("timeout waiting for PR merge", "pr", prNumber)
+			return PRMergeResult{TimedOut: true, Error: "timeout waiting for PR merge"}, nil
+
+		case <-ticker.C:
+			// Check PR state from GitHub directly
+			ghPR, err := c.ghClient.GetPullRequest(ctx, c.owner, c.repo, prNumber)
+			if err != nil {
+				c.log.Warn("failed to get PR state", "pr", prNumber, "error", err)
+				// Continue polling on transient errors
+				continue
+			}
+
+			// Check if merged
+			if ghPR.Merged {
+				c.log.Info("PR merged", "pr", prNumber, "merge_sha", ShortSHA(ghPR.MergeCommitSHA))
+				return PRMergeResult{
+					Merged:   true,
+					MergeSHA: ghPR.MergeCommitSHA,
+				}, nil
+			}
+
+			// Check if closed without merge
+			if ghPR.State == "closed" {
+				c.log.Info("PR closed without merge", "pr", prNumber)
+				return PRMergeResult{
+					Closed: true,
+					Error:  "PR closed without merge",
+				}, nil
+			}
+
+			// Check internal state for failures
+			prState, ok := c.GetPRState(prNumber)
+			if ok && prState.Stage == StageFailed {
+				c.log.Info("PR failed", "pr", prNumber, "error", prState.Error)
+				return PRMergeResult{
+					Failed: true,
+					Error:  prState.Error,
+				}, nil
+			}
+
+			// Still open, keep waiting
+			c.log.Debug("PR still open, waiting", "pr", prNumber, "state", ghPR.State)
+		}
+	}
 }
 
 // ResetCircuitBreaker resets the consecutive failure counter.
