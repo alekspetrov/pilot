@@ -449,7 +449,7 @@ func TestUserCacheValid(t *testing.T) {
 		t.Error("expected cache hit for valid entry")
 	}
 	if result == nil {
-		t.Error("expected non-nil result for valid entry")
+		t.Fatal("expected non-nil result for valid entry")
 	}
 	if result.ID != user.ID {
 		t.Errorf("ID = %q, want %q", result.ID, user.ID)
