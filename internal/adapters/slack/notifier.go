@@ -18,6 +18,16 @@ type Config struct {
 	Approval        *ApprovalConfig `yaml:"approval,omitempty"`
 }
 
+// ValidateSocketMode checks if Socket Mode configuration is valid.
+// Returns true if Socket Mode can be started, false if it should be skipped.
+// Socket Mode requires a non-empty app_token (xapp-... app-level token).
+func (c *Config) ValidateSocketMode() bool {
+	if !c.SocketMode {
+		return false
+	}
+	return c.AppToken != ""
+}
+
 // DefaultConfig returns default Slack configuration
 func DefaultConfig() *Config {
 	return &Config{

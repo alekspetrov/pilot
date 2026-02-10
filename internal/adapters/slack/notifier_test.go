@@ -798,3 +798,54 @@ func TestNotifierEdgeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateSocketMode tests Socket Mode config validation (GH-710)
+func TestValidateSocketMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     *Config
+		wantValid  bool
+	}{
+		{
+			name: "socket mode disabled",
+			config: &Config{
+				SocketMode: false,
+				AppToken:   "",
+			},
+			wantValid: false,
+		},
+		{
+			name: "socket mode enabled with app token",
+			config: &Config{
+				SocketMode: true,
+				AppToken:   "xapp-1-test-token",
+			},
+			wantValid: true,
+		},
+		{
+			name: "socket mode enabled without app token",
+			config: &Config{
+				SocketMode: true,
+				AppToken:   "",
+			},
+			wantValid: false,
+		},
+		{
+			name: "socket mode disabled with app token",
+			config: &Config{
+				SocketMode: false,
+				AppToken:   "xapp-1-test-token",
+			},
+			wantValid: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.config.ValidateSocketMode()
+			if got != tt.wantValid {
+				t.Errorf("ValidateSocketMode() = %v, want %v", got, tt.wantValid)
+			}
+		})
+	}
+}

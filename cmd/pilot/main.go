@@ -503,6 +503,13 @@ Examples:
 					}
 				}
 
+				// Validate Slack Socket Mode configuration (GH-710)
+				if cfg.Adapters.Slack != nil && cfg.Adapters.Slack.Enabled && cfg.Adapters.Slack.SocketMode {
+					if !cfg.Adapters.Slack.ValidateSocketMode() {
+						slog.Warn("slack socket mode enabled but app_token is empty, skipping socket mode startup")
+					}
+				}
+
 				// Create autopilot controller if enabled
 				if cfg.Orchestrator.Autopilot != nil && cfg.Orchestrator.Autopilot.Enabled {
 					ghToken := ""
@@ -1111,6 +1118,13 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 			approvalMgr.RegisterHandler(slackApprovalHandler)
 			logging.WithComponent("start").Info("registered Slack approval handler",
 				slog.String("channel", slackChannel))
+		}
+	}
+
+	// Validate Slack Socket Mode configuration (GH-710)
+	if cfg.Adapters.Slack != nil && cfg.Adapters.Slack.Enabled && cfg.Adapters.Slack.SocketMode {
+		if !cfg.Adapters.Slack.ValidateSocketMode() {
+			slog.Warn("slack socket mode enabled but app_token is empty, skipping socket mode startup")
 		}
 	}
 
