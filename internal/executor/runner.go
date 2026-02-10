@@ -215,6 +215,11 @@ type TokenLimitCallback func(taskID string, deltaInput, deltaOutput int64) bool
 // Signature matches Controller.OnPRCreated so it can be wired directly.
 type SubIssuePRCallback func(prNumber int, prURL string, issueNumber int, headSHA string, branchName string)
 
+// MergeWaiterCallback waits for a PR to be merged or returns an error on timeout/failure.
+// Returns (merged bool, error). If merged is false and error is nil, the PR was closed without merge.
+// This callback is invoked by ExecuteSubIssues after creating a sub-issue PR to block until merge.
+type MergeWaiterCallback func(ctx context.Context, prNumber int, timeout time.Duration) (merged bool, err error)
+
 // Runner executes development tasks using an AI backend (Claude Code, OpenCode, etc.).
 // It manages task lifecycle including branch creation, AI invocation,
 // progress tracking, PR creation, and execution recording. Runner is safe for
@@ -242,6 +247,7 @@ type Runner struct {
 	suppressProgressLogs  bool                  // Suppress slog output for progress (use when visual display is active)
 	tokenLimitCheck       TokenLimitCallback    // Optional per-task token/duration limit check (GH-539)
 	onSubIssuePRCreated   SubIssuePRCallback    // Optional callback when a sub-issue PR is created (GH-596)
+	mergeWaiter           MergeWaiterCallback   // Optional callback to wait for PR merge (GH-743)
 	intentJudge           *IntentJudge          // Optional intent judge for diff-vs-ticket alignment (GH-624)
 	teamChecker           TeamChecker           // Optional team RBAC checker (GH-633)
 	executeFunc           func(ctx context.Context, task *Task) (*ExecutionResult, error) // Internal override for testing
@@ -418,6 +424,12 @@ func (r *Runner) SetOnSubIssuePRCreated(fn SubIssuePRCallback) {
 	r.onSubIssuePRCreated = fn
 }
 
+// SetMergeWaiter sets the callback used by ExecuteSubIssues to wait for PR merges (GH-743).
+// This enables sequential epic execution: execute → PR → wait for merge → next sub-issue.
+func (r *Runner) SetMergeWaiter(fn MergeWaiterCallback) {
+	r.mergeWaiter = fn
+}
+
 // SetIntentJudge sets the intent judge for diff-vs-ticket alignment verification (GH-624).
 func (r *Runner) SetIntentJudge(judge *IntentJudge) {
 	r.intentJudge = judge
@@ -574,8 +586,9 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 
 		r.reportProgress(task.ID, "Executing", 50, fmt.Sprintf("Executing %d sub-issues sequentially...", len(issues)))
 
-		// GH-412: Execute sub-issues sequentially
-		if err := r.ExecuteSubIssues(ctx, task, issues); err != nil {
+		// GH-412, GH-743: Execute sub-issues sequentially with merge-then-next flow
+		epicExecResult, err := r.ExecuteSubIssues(ctx, task, issues)
+		if err != nil {
 			return &ExecutionResult{
 				TaskID:   task.ID,
 				Success:  false,
@@ -588,10 +601,15 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 
 		// GH-539: Epic sub-executions may have created commits on the branch.
 		// Push branch and create PR to propagate deliverables.
+		// GH-743: Report succeeded/failed counts in output
+		epicOutput := fmt.Sprintf("Epic completed: %d/%d sub-issues succeeded", epicExecResult.Succeeded, epicExecResult.Total)
+		if epicExecResult.Failed > 0 {
+			epicOutput = fmt.Sprintf("Epic completed with issues: %d/%d succeeded, %d failed", epicExecResult.Succeeded, epicExecResult.Total, epicExecResult.Failed)
+		}
 		epicResult := &ExecutionResult{
 			TaskID:   task.ID,
-			Success:  true,
-			Output:   fmt.Sprintf("Epic completed: %d sub-issues executed", len(issues)),
+			Success:  epicExecResult.Failed == 0, // Only fully successful if no failures
+			Output:   epicOutput,
 			Duration: time.Since(start),
 			IsEpic:   true,
 			EpicPlan: plan,

@@ -91,6 +91,8 @@ func newSequentialRunner(
 // TestSequentialEpicFlow is a table-driven integration test covering
 // the full ExecuteSubIssues lifecycle: execution ordering, callback
 // invocation, progress tracking, and failure handling.
+//
+// GH-743: Updated for new behavior where failures don't abort the entire epic.
 func TestSequentialEpicFlow(t *testing.T) {
 	tests := []struct {
 		name string
@@ -101,11 +103,17 @@ func TestSequentialEpicFlow(t *testing.T) {
 		// resultFn returns the ExecutionResult for the i-th sub-issue (0-indexed).
 		resultFn func(idx int, task *Task) (*ExecutionResult, error)
 
-		// wantErr is true if ExecuteSubIssues should return an error.
+		// wantErr is true if ExecuteSubIssues should return an error (only context cancellation).
 		wantErr bool
 
 		// wantErrContains is a substring expected in the error message (if wantErr).
 		wantErrContains string
+
+		// wantSucceeded is the expected number of successful sub-issues.
+		wantSucceeded int
+
+		// wantFailed is the expected number of failed sub-issues.
+		wantFailed int
 
 		// wantExecCount is the expected number of executeFunc invocations.
 		wantExecCount int
@@ -133,6 +141,8 @@ func TestSequentialEpicFlow(t *testing.T) {
 				}, nil
 			},
 			wantErr:             false,
+			wantSucceeded:       3,
+			wantFailed:          0,
 			wantExecCount:       3,
 			wantPRCallbackCount: 3,
 			wantPRNumbers:       []int{200, 201, 202},
@@ -143,7 +153,7 @@ func TestSequentialEpicFlow(t *testing.T) {
 			},
 		},
 		{
-			name:         "middle sub-issue fails - execution stops at failure",
+			name:         "middle sub-issue fails - continues to next (GH-743)",
 			numSubIssues: 3,
 			resultFn: func(idx int, task *Task) (*ExecutionResult, error) {
 				if idx == 1 { // second sub-issue fails
@@ -162,20 +172,21 @@ func TestSequentialEpicFlow(t *testing.T) {
 					CommitSHA: fmt.Sprintf("sha-%d", idx),
 				}, nil
 			},
-			wantErr:         true,
-			wantErrContains: "sub-issue 101 failed",
-			// Current behavior: abort on first failure.
-			// First sub-issue succeeds (exec+callback), second fails (exec only), third never runs.
-			wantExecCount:       2,
-			wantPRCallbackCount: 1,
-			wantPRNumbers:       []int{300},
+			wantErr:       false, // GH-743: no longer returns error on sub-issue failure
+			wantSucceeded: 2,     // First and third succeed
+			wantFailed:    1,     // Second fails
+			// GH-743: All 3 sub-issues execute now (no abort on failure)
+			wantExecCount:       3,
+			wantPRCallbackCount: 2, // First and third trigger callbacks
+			wantPRNumbers:       []int{300, 302},
 			wantBranches: []string{
 				"pilot/GH-100",
 				"pilot/GH-101",
+				"pilot/GH-102",
 			},
 		},
 		{
-			name:         "first sub-issue returns exec error - immediate abort",
+			name:         "first sub-issue returns exec error - continues to next (GH-743)",
 			numSubIssues: 3,
 			resultFn: func(idx int, task *Task) (*ExecutionResult, error) {
 				if idx == 0 {
@@ -184,21 +195,24 @@ func TestSequentialEpicFlow(t *testing.T) {
 				return &ExecutionResult{
 					TaskID:    task.ID,
 					Success:   true,
-					PRUrl:     "https://github.com/owner/repo/pull/999",
-					CommitSHA: "sha-x",
+					PRUrl:     fmt.Sprintf("https://github.com/owner/repo/pull/%d", 999+idx),
+					CommitSHA: fmt.Sprintf("sha-%d", idx),
 				}, nil
 			},
-			wantErr:             true,
-			wantErrContains:     "sub-issue 100 failed",
-			wantExecCount:       1,
-			wantPRCallbackCount: 0,
-			wantPRNumbers:       nil,
+			wantErr:             false, // GH-743: no longer returns error
+			wantSucceeded:       2,     // Second and third succeed
+			wantFailed:          1,     // First fails
+			wantExecCount:       3,
+			wantPRCallbackCount: 2,
+			wantPRNumbers:       []int{1000, 1001},
 			wantBranches: []string{
 				"pilot/GH-100",
+				"pilot/GH-101",
+				"pilot/GH-102",
 			},
 		},
 		{
-			name:         "all sub-issues fail - first failure stops execution",
+			name:         "all sub-issues fail - tracks all failures (GH-743)",
 			numSubIssues: 3,
 			resultFn: func(idx int, task *Task) (*ExecutionResult, error) {
 				return &ExecutionResult{
@@ -207,17 +221,20 @@ func TestSequentialEpicFlow(t *testing.T) {
 					Error:   fmt.Sprintf("compilation error in sub-issue %d", idx+1),
 				}, nil
 			},
-			wantErr:             true,
-			wantErrContains:     "sub-issue 100 failed",
-			wantExecCount:       1, // Stops at first failure
+			wantErr:             false, // GH-743: no longer returns error
+			wantSucceeded:       0,
+			wantFailed:          3, // All 3 fail
+			wantExecCount:       3, // All 3 execute
 			wantPRCallbackCount: 0,
 			wantPRNumbers:       nil,
 			wantBranches: []string{
 				"pilot/GH-100",
+				"pilot/GH-101",
+				"pilot/GH-102",
 			},
 		},
 		{
-			name:         "context cancellation - stops before next sub-issue",
+			name:         "context cancellation - stops at cancellation point",
 			numSubIssues: 3,
 			resultFn: func(idx int, task *Task) (*ExecutionResult, error) {
 				// All would succeed, but context gets cancelled externally
@@ -233,6 +250,8 @@ func TestSequentialEpicFlow(t *testing.T) {
 			// See test body below for override.
 			wantErr:             true,
 			wantErrContains:     "execution cancelled",
+			wantSucceeded:       1, // First succeeds before cancel
+			wantFailed:          0,
 			wantExecCount:       1,
 			wantPRCallbackCount: 1,
 			wantPRNumbers:       []int{400},
@@ -263,6 +282,8 @@ func TestSequentialEpicFlow(t *testing.T) {
 				}, nil
 			},
 			wantErr:             false,
+			wantSucceeded:       2,
+			wantFailed:          0,
 			wantExecCount:       2,
 			wantPRCallbackCount: 1, // Only second sub-issue triggers callback
 			wantPRNumbers:       []int{500},
@@ -282,7 +303,7 @@ func TestSequentialEpicFlow(t *testing.T) {
 			}
 
 			// Special case: context cancellation test
-			if tt.name == "context cancellation - stops before next sub-issue" {
+			if tt.name == "context cancellation - stops at cancellation point" {
 				ctx, cancel := context.WithCancel(context.Background())
 
 				callCount := 0
@@ -296,7 +317,7 @@ func TestSequentialEpicFlow(t *testing.T) {
 					return result, err
 				})
 
-				err := sr.Runner.ExecuteSubIssues(ctx, parent, issues)
+				epicResult, err := sr.Runner.ExecuteSubIssues(ctx, parent, issues)
 
 				if err == nil {
 					t.Fatal("expected error from cancelled context")
@@ -310,11 +331,15 @@ func TestSequentialEpicFlow(t *testing.T) {
 				if len(sr.PRCalls) != tt.wantPRCallbackCount {
 					t.Errorf("PR callback count = %d, want %d", len(sr.PRCalls), tt.wantPRCallbackCount)
 				}
+				// Check result counts (may be partial due to cancellation)
+				if epicResult != nil && epicResult.Succeeded != tt.wantSucceeded {
+					t.Errorf("epicResult.Succeeded = %d, want %d", epicResult.Succeeded, tt.wantSucceeded)
+				}
 				return
 			}
 
 			sr := newSequentialRunner(tt.resultFn)
-			err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
+			epicResult, err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
 
 			// Check error expectation
 			if tt.wantErr {
@@ -328,6 +353,14 @@ func TestSequentialEpicFlow(t *testing.T) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
+			}
+
+			// Verify result counts
+			if epicResult.Succeeded != tt.wantSucceeded {
+				t.Errorf("epicResult.Succeeded = %d, want %d", epicResult.Succeeded, tt.wantSucceeded)
+			}
+			if epicResult.Failed != tt.wantFailed {
+				t.Errorf("epicResult.Failed = %d, want %d", epicResult.Failed, tt.wantFailed)
 			}
 
 			// Verify execution count
@@ -402,9 +435,12 @@ func TestSequentialEpicFlow_ExecutionOrder(t *testing.T) {
 		}, nil
 	})
 
-	err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
+	result, err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Succeeded != 3 {
+		t.Errorf("result.Succeeded = %d, want 3", result.Succeeded)
 	}
 
 	// Verify strict sequential ordering: start-0, end-0, start-1, end-1, start-2, end-2
@@ -448,9 +484,12 @@ func TestSequentialEpicFlow_TaskConstruction(t *testing.T) {
 		}, nil
 	})
 
-	err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
+	result, err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Succeeded != 3 {
+		t.Errorf("result.Succeeded = %d, want 3", result.Succeeded)
 	}
 
 	if len(capturedTasks) != 3 {
@@ -502,9 +541,12 @@ func TestSequentialEpicFlow_PRCallbackFields(t *testing.T) {
 		}, nil
 	})
 
-	err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
+	result, err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Succeeded != 3 {
+		t.Errorf("result.Succeeded = %d, want 3", result.Succeeded)
 	}
 
 	if len(sr.PRCalls) != 3 {
@@ -552,7 +594,7 @@ func TestSequentialEpicFlow_EmptyIssuesList(t *testing.T) {
 	})
 
 	parent := &Task{ID: "GH-EMPTY", Title: "[epic] Empty test"}
-	err := sr.Runner.ExecuteSubIssues(context.Background(), parent, nil)
+	_, err := sr.Runner.ExecuteSubIssues(context.Background(), parent, nil)
 
 	if err == nil {
 		t.Fatal("expected error for empty issues")
@@ -564,6 +606,7 @@ func TestSequentialEpicFlow_EmptyIssuesList(t *testing.T) {
 
 // TestSequentialEpicFlow_PartialSuccessThenFailure verifies that when the
 // last sub-issue fails, all previous sub-issues' PR callbacks were still fired.
+// GH-743: Execution continues after failures.
 func TestSequentialEpicFlow_PartialSuccessThenFailure(t *testing.T) {
 	issues := makeSubIssues(4, 500)
 	parent := &Task{
@@ -588,9 +631,18 @@ func TestSequentialEpicFlow_PartialSuccessThenFailure(t *testing.T) {
 		}, nil
 	})
 
-	err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
-	if err == nil {
-		t.Fatal("expected error from last sub-issue failure")
+	// GH-743: ExecuteSubIssues no longer returns error on sub-issue failure
+	result, err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify result counts
+	if result.Succeeded != 3 {
+		t.Errorf("result.Succeeded = %d, want 3", result.Succeeded)
+	}
+	if result.Failed != 1 {
+		t.Errorf("result.Failed = %d, want 1", result.Failed)
 	}
 
 	// 3 succeeded + 1 failed = 4 exec calls
@@ -601,11 +653,6 @@ func TestSequentialEpicFlow_PartialSuccessThenFailure(t *testing.T) {
 	// Only 3 PR callbacks (the failing one doesn't get a callback)
 	if len(sr.PRCalls) != 3 {
 		t.Errorf("PR callback count = %d, want 3", len(sr.PRCalls))
-	}
-
-	// Error should mention the failing issue number
-	if !strings.Contains(err.Error(), "sub-issue 503 failed") {
-		t.Errorf("error = %q, want mention of sub-issue 503", err.Error())
 	}
 }
 
@@ -644,7 +691,7 @@ func TestSequentialEpicFlow_ContextDeadline(t *testing.T) {
 		}, nil
 	})
 
-	err := sr.Runner.ExecuteSubIssues(ctx, parent, issues)
+	_, err := sr.Runner.ExecuteSubIssues(ctx, parent, issues)
 	if err == nil {
 		t.Fatal("expected error from context deadline")
 	}
@@ -679,11 +726,17 @@ func TestSequentialEpicFlow_SingleSubIssue(t *testing.T) {
 		}, nil
 	})
 
-	err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
+	result, err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if result.Succeeded != 1 {
+		t.Errorf("result.Succeeded = %d, want 1", result.Succeeded)
+	}
+	if result.Failed != 0 {
+		t.Errorf("result.Failed = %d, want 0", result.Failed)
+	}
 	if len(sr.ExecCalls) != 1 {
 		t.Errorf("exec call count = %d, want 1", len(sr.ExecCalls))
 	}
@@ -692,5 +745,156 @@ func TestSequentialEpicFlow_SingleSubIssue(t *testing.T) {
 	}
 	if sr.PRCalls[0].CommitSHA != "sha-single" {
 		t.Errorf("commit SHA = %q, want %q", sr.PRCalls[0].CommitSHA, "sha-single")
+	}
+}
+
+// TestSequentialEpicFlow_MergeWaiter tests the merge-then-next flow (GH-743).
+func TestSequentialEpicFlow_MergeWaiter(t *testing.T) {
+	issues := makeSubIssues(3, 800)
+	parent := &Task{
+		ID:    "GH-MERGE",
+		Title: "[epic] Merge waiter test",
+	}
+
+	var mergeWaitCalls []int
+	sr := newSequentialRunner(func(idx int, task *Task) (*ExecutionResult, error) {
+		return &ExecutionResult{
+			TaskID:    task.ID,
+			Success:   true,
+			PRUrl:     fmt.Sprintf("https://github.com/owner/repo/pull/%d", 1100+idx),
+			CommitSHA: fmt.Sprintf("sha-%d", idx),
+		}, nil
+	})
+
+	// Set up merge waiter that succeeds
+	sr.Runner.SetMergeWaiter(func(ctx context.Context, prNumber int, timeout time.Duration) (bool, error) {
+		mergeWaitCalls = append(mergeWaitCalls, prNumber)
+		return true, nil
+	})
+
+	result, err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Succeeded != 3 {
+		t.Errorf("result.Succeeded = %d, want 3", result.Succeeded)
+	}
+
+	// Verify merge waiter was called for each PR
+	if len(mergeWaitCalls) != 3 {
+		t.Errorf("merge wait call count = %d, want 3", len(mergeWaitCalls))
+	}
+
+	expectedPRs := []int{1100, 1101, 1102}
+	for i, pr := range expectedPRs {
+		if i >= len(mergeWaitCalls) {
+			t.Errorf("missing merge wait call at index %d", i)
+			continue
+		}
+		if mergeWaitCalls[i] != pr {
+			t.Errorf("mergeWaitCalls[%d] = %d, want %d", i, mergeWaitCalls[i], pr)
+		}
+	}
+
+	// Verify results have merged=true
+	for i, subResult := range result.Results {
+		if !subResult.Merged {
+			t.Errorf("result.Results[%d].Merged = false, want true", i)
+		}
+	}
+}
+
+// TestSequentialEpicFlow_MergeWaiterTimeout tests that merge timeout doesn't abort epic (GH-743).
+func TestSequentialEpicFlow_MergeWaiterTimeout(t *testing.T) {
+	issues := makeSubIssues(3, 900)
+	parent := &Task{
+		ID:    "GH-MERGE-TIMEOUT",
+		Title: "[epic] Merge timeout test",
+	}
+
+	sr := newSequentialRunner(func(idx int, task *Task) (*ExecutionResult, error) {
+		return &ExecutionResult{
+			TaskID:    task.ID,
+			Success:   true,
+			PRUrl:     fmt.Sprintf("https://github.com/owner/repo/pull/%d", 1200+idx),
+			CommitSHA: fmt.Sprintf("sha-%d", idx),
+		}, nil
+	})
+
+	// Set up merge waiter that times out on second PR
+	sr.Runner.SetMergeWaiter(func(ctx context.Context, prNumber int, timeout time.Duration) (bool, error) {
+		if prNumber == 1201 {
+			return false, fmt.Errorf("timed out waiting for PR merge")
+		}
+		return true, nil
+	})
+
+	result, err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// First and third succeed, second fails on merge timeout
+	if result.Succeeded != 2 {
+		t.Errorf("result.Succeeded = %d, want 2", result.Succeeded)
+	}
+	if result.Failed != 1 {
+		t.Errorf("result.Failed = %d, want 1", result.Failed)
+	}
+
+	// Verify the failure was for the second sub-issue
+	if len(result.Results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(result.Results))
+	}
+	if result.Results[1].Success {
+		t.Error("result.Results[1].Success = true, want false")
+	}
+	if !strings.Contains(result.Results[1].Error, "merge wait error") {
+		t.Errorf("result.Results[1].Error = %q, want to contain 'merge wait error'", result.Results[1].Error)
+	}
+}
+
+// TestSequentialEpicFlow_MergeWaiterClosedWithoutMerge tests PR closed without merge (GH-743).
+func TestSequentialEpicFlow_MergeWaiterClosedWithoutMerge(t *testing.T) {
+	issues := makeSubIssues(2, 1000)
+	parent := &Task{
+		ID:    "GH-MERGE-CLOSED",
+		Title: "[epic] PR closed test",
+	}
+
+	sr := newSequentialRunner(func(idx int, task *Task) (*ExecutionResult, error) {
+		return &ExecutionResult{
+			TaskID:    task.ID,
+			Success:   true,
+			PRUrl:     fmt.Sprintf("https://github.com/owner/repo/pull/%d", 1300+idx),
+			CommitSHA: fmt.Sprintf("sha-%d", idx),
+		}, nil
+	})
+
+	// Set up merge waiter where first PR is closed without merge
+	sr.Runner.SetMergeWaiter(func(ctx context.Context, prNumber int, timeout time.Duration) (bool, error) {
+		if prNumber == 1300 {
+			return false, nil // Closed without merge
+		}
+		return true, nil
+	})
+
+	result, err := sr.Runner.ExecuteSubIssues(context.Background(), parent, issues)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// First fails (closed), second succeeds
+	if result.Succeeded != 1 {
+		t.Errorf("result.Succeeded = %d, want 1", result.Succeeded)
+	}
+	if result.Failed != 1 {
+		t.Errorf("result.Failed = %d, want 1", result.Failed)
+	}
+
+	// Verify first has error about closing
+	if !strings.Contains(result.Results[0].Error, "closed without merge") {
+		t.Errorf("result.Results[0].Error = %q, want to contain 'closed without merge'", result.Results[0].Error)
 	}
 }

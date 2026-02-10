@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // EpicPlan represents the result of planning an epic task.
@@ -377,12 +378,41 @@ func (r *Runner) CloseIssueWithComment(ctx context.Context, projectPath string, 
 	return nil
 }
 
-// ExecuteSubIssues executes created sub-issues sequentially and tracks progress on the parent.
-// Each sub-issue is executed as a separate task, and the parent issue is updated with progress.
-// Returns an error if any sub-issue fails; completed sub-issues remain done.
-func (r *Runner) ExecuteSubIssues(ctx context.Context, parent *Task, issues []CreatedIssue) error {
+// SubIssueResult tracks the outcome of a single sub-issue execution.
+type SubIssueResult struct {
+	IssueNumber int    // GitHub issue number
+	PRNumber    int    // PR number (0 if no PR created)
+	PRUrl       string // PR URL
+	Success     bool   // Whether execution + merge succeeded
+	Merged      bool   // Whether PR was merged (false if no PR or merge failed/timed out)
+	Error       string // Error message if failed
+}
+
+// EpicExecutionResult contains the aggregate results of executing all sub-issues.
+type EpicExecutionResult struct {
+	Total     int               // Total sub-issues
+	Succeeded int               // Sub-issues that executed + merged successfully
+	Failed    int               // Sub-issues that failed execution or merge
+	Results   []SubIssueResult  // Individual results
+}
+
+// ExecuteSubIssues executes created sub-issues sequentially with merge-then-next flow.
+//
+// For each sub-issue:
+//  1. Execute the sub-issue as a task
+//  2. Create PR via existing flow
+//  3. Call onSubIssuePRCreated callback
+//  4. Call mergeWaiter callback with configured timeout (default 30m)
+//  5. On merge success: switch to default branch, pull latest, proceed to next
+//  6. On merge failure/timeout: log error, skip to next sub-issue (don't abort epic)
+//
+// Sub-issues are only closed after merge confirms. The parent issue is updated with progress
+// and closed when all sub-issues complete (regardless of individual failures).
+//
+// Returns EpicExecutionResult with per-sub-issue outcomes.
+func (r *Runner) ExecuteSubIssues(ctx context.Context, parent *Task, issues []CreatedIssue) (*EpicExecutionResult, error) {
 	if len(issues) == 0 {
-		return fmt.Errorf("no sub-issues to execute")
+		return nil, fmt.Errorf("no sub-issues to execute")
 	}
 
 	total := len(issues)
@@ -391,29 +421,50 @@ func (r *Runner) ExecuteSubIssues(ctx context.Context, parent *Task, issues []Cr
 		projectPath = parent.ProjectPath
 	}
 
-	r.log.Info("Starting sequential sub-issue execution",
+	// Determine merge timeout from config
+	mergeTimeout := 30 * time.Minute
+	if r.config != nil && r.config.Epic != nil && r.config.Epic.SubIssueMergeTimeout > 0 {
+		mergeTimeout = r.config.Epic.SubIssueMergeTimeout
+	}
+
+	r.log.Info("Starting sequential sub-issue execution with merge-then-next",
 		"parent_id", parent.ID,
 		"total_issues", total,
+		"merge_timeout", mergeTimeout,
 	)
 
 	// Update parent with start message
-	startMsg := fmt.Sprintf("🚀 Starting sequential execution of %d sub-issues", total)
+	startMsg := fmt.Sprintf("🚀 Starting sequential execution of %d sub-issues (merge-then-next)", total)
 	if err := r.UpdateIssueProgress(ctx, projectPath, parent.ID, startMsg); err != nil {
 		r.log.Warn("Failed to update parent progress", "error", err)
-		// Non-fatal, continue execution
 	}
 
+	result := &EpicExecutionResult{
+		Total:   total,
+		Results: make([]SubIssueResult, 0, total),
+	}
+
+	// Create git operations for branch switching
+	git := NewGitOperations(projectPath)
+
 	for i, issue := range issues {
+		subResult := SubIssueResult{
+			IssueNumber: issue.Number,
+		}
+
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("execution cancelled: %w", ctx.Err())
+			subResult.Error = fmt.Sprintf("context cancelled: %v", ctx.Err())
+			result.Results = append(result.Results, subResult)
+			result.Failed++
+			return result, fmt.Errorf("execution cancelled: %w", ctx.Err())
 		default:
 		}
 
 		// Update parent with current progress
 		progressMsg := fmt.Sprintf("⏳ Progress: %d/%d - Starting: **%s** (#%d)",
-			i, total, issue.Subtask.Title, issue.Number)
+			i+1, total, issue.Subtask.Title, issue.Number)
 		if err := r.UpdateIssueProgress(ctx, projectPath, parent.ID, progressMsg); err != nil {
 			r.log.Warn("Failed to update parent progress", "error", err)
 		}
@@ -440,61 +491,176 @@ func (r *Runner) ExecuteSubIssues(ctx context.Context, parent *Task, issues []Cr
 		if r.executeFunc != nil {
 			execFn = r.executeFunc
 		}
-		result, err := execFn(ctx, subTask)
+		execResult, err := execFn(ctx, subTask)
 		if err != nil {
+			subResult.Error = fmt.Sprintf("execution error: %v", err)
+			result.Results = append(result.Results, subResult)
+			result.Failed++
+
 			failMsg := fmt.Sprintf("❌ Failed on %d/%d: %s - Error: %v",
 				i+1, total, issue.Subtask.Title, err)
 			_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, failMsg)
-			return fmt.Errorf("sub-issue %d failed: %w", issue.Number, err)
+
+			r.log.Warn("Sub-issue execution failed, skipping to next",
+				"sub_issue", issue.Number,
+				"error", err,
+			)
+			continue // Skip to next sub-issue instead of aborting
 		}
 
-		if !result.Success {
+		if !execResult.Success {
+			subResult.Error = fmt.Sprintf("execution failed: %s", execResult.Error)
+			result.Results = append(result.Results, subResult)
+			result.Failed++
+
 			failMsg := fmt.Sprintf("❌ Failed on %d/%d: %s - %s",
-				i+1, total, issue.Subtask.Title, result.Error)
+				i+1, total, issue.Subtask.Title, execResult.Error)
 			_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, failMsg)
-			return fmt.Errorf("sub-issue %d failed: %s", issue.Number, result.Error)
+
+			r.log.Warn("Sub-issue execution failed, skipping to next",
+				"sub_issue", issue.Number,
+				"error", execResult.Error,
+			)
+			continue // Skip to next sub-issue instead of aborting
 		}
+
+		subResult.PRUrl = execResult.PRUrl
 
 		// Register sub-issue PR with autopilot controller (GH-596)
-		if result.PRUrl != "" && r.onSubIssuePRCreated != nil {
-			if prNum := parsePRNumberFromURL(result.PRUrl); prNum > 0 {
-				r.onSubIssuePRCreated(prNum, result.PRUrl, issue.Number, result.CommitSHA, subTask.Branch)
-			} else {
+		prNum := 0
+		if execResult.PRUrl != "" {
+			prNum = parsePRNumberFromURL(execResult.PRUrl)
+			subResult.PRNumber = prNum
+			if prNum > 0 && r.onSubIssuePRCreated != nil {
+				r.onSubIssuePRCreated(prNum, execResult.PRUrl, issue.Number, execResult.CommitSHA, subTask.Branch)
+			} else if prNum == 0 {
 				r.log.Warn("Failed to extract PR number from sub-issue PR URL",
-					"pr_url", result.PRUrl)
+					"pr_url", execResult.PRUrl)
 			}
 		}
 
-		// Close completed sub-issue
+		// Wait for PR merge if mergeWaiter is configured (GH-743)
+		if prNum > 0 && r.mergeWaiter != nil {
+			r.log.Info("Waiting for sub-issue PR to merge",
+				"sub_issue", issue.Number,
+				"pr_number", prNum,
+				"timeout", mergeTimeout,
+			)
+
+			progressMsg := fmt.Sprintf("⏳ Progress: %d/%d - Waiting for PR #%d to merge...",
+				i+1, total, prNum)
+			_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, progressMsg)
+
+			merged, mergeErr := r.mergeWaiter(ctx, prNum, mergeTimeout)
+			if mergeErr != nil {
+				subResult.Error = fmt.Sprintf("merge wait error: %v", mergeErr)
+				result.Results = append(result.Results, subResult)
+				result.Failed++
+
+				failMsg := fmt.Sprintf("❌ PR #%d merge failed on %d/%d: %s - %v",
+					prNum, i+1, total, issue.Subtask.Title, mergeErr)
+				_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, failMsg)
+
+				r.log.Warn("Sub-issue PR merge failed/timed out, skipping to next",
+					"sub_issue", issue.Number,
+					"pr_number", prNum,
+					"error", mergeErr,
+				)
+				continue // Skip to next sub-issue instead of aborting
+			}
+
+			if !merged {
+				subResult.Error = "PR closed without merge"
+				result.Results = append(result.Results, subResult)
+				result.Failed++
+
+				failMsg := fmt.Sprintf("❌ PR #%d was closed without merge on %d/%d: %s",
+					prNum, i+1, total, issue.Subtask.Title)
+				_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, failMsg)
+
+				r.log.Warn("Sub-issue PR closed without merge, skipping to next",
+					"sub_issue", issue.Number,
+					"pr_number", prNum,
+				)
+				continue // Skip to next sub-issue instead of aborting
+			}
+
+			subResult.Merged = true
+
+			r.log.Info("Sub-issue PR merged successfully",
+				"sub_issue", issue.Number,
+				"pr_number", prNum,
+			)
+
+			// Switch to default branch and pull to get merged changes (GH-743)
+			defaultBranch, err := git.SwitchToDefaultBranchAndPull(ctx)
+			if err != nil {
+				r.log.Warn("Failed to switch to default branch after merge, continuing",
+					"sub_issue", issue.Number,
+					"error", err,
+				)
+			} else {
+				r.log.Debug("Switched to default branch after merge",
+					"branch", defaultBranch,
+				)
+			}
+		} else if prNum > 0 && r.mergeWaiter == nil {
+			// No mergeWaiter configured - mark as success without merge confirmation
+			r.log.Debug("No mergeWaiter configured, skipping merge wait",
+				"sub_issue", issue.Number,
+				"pr_number", prNum,
+			)
+		}
+
+		// Close completed sub-issue only after merge confirms (or if no mergeWaiter)
+		subResult.Success = true
+		result.Succeeded++
+
 		closeComment := fmt.Sprintf("✅ Completed as part of %s", parent.ID)
-		if result.PRUrl != "" {
-			closeComment = fmt.Sprintf("✅ Completed as part of %s\nPR: %s", parent.ID, result.PRUrl)
+		if execResult.PRUrl != "" {
+			if subResult.Merged {
+				closeComment = fmt.Sprintf("✅ Completed and merged as part of %s\nPR: %s", parent.ID, execResult.PRUrl)
+			} else {
+				closeComment = fmt.Sprintf("✅ Completed as part of %s\nPR: %s", parent.ID, execResult.PRUrl)
+			}
 		}
 		if err := r.CloseIssueWithComment(ctx, projectPath, fmt.Sprintf("%d", issue.Number), closeComment); err != nil {
 			r.log.Warn("Failed to close sub-issue", "issue", issue.Number, "error", err)
-			// Non-fatal, continue
 		}
+
+		result.Results = append(result.Results, subResult)
 
 		r.log.Info("Sub-issue completed",
 			"parent_id", parent.ID,
 			"sub_issue", issue.Number,
-			"pr_url", result.PRUrl,
+			"pr_url", execResult.PRUrl,
+			"merged", subResult.Merged,
 		)
 	}
 
 	// All done - update and close parent
-	completeMsg := fmt.Sprintf("✅ Completed: %d/%d sub-issues done\n\nAll sub-tasks executed successfully.", total, total)
+	var completeMsg string
+	if result.Failed == 0 {
+		completeMsg = fmt.Sprintf("✅ Completed: %d/%d sub-issues done\n\nAll sub-tasks executed and merged successfully.", result.Succeeded, total)
+	} else {
+		completeMsg = fmt.Sprintf("⚠️ Completed with issues: %d/%d succeeded, %d failed\n\nSee individual sub-issues for details.", result.Succeeded, total, result.Failed)
+	}
 	_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, completeMsg)
 
-	if err := r.CloseIssueWithComment(ctx, projectPath, parent.ID, "All sub-issues completed successfully."); err != nil {
+	closeComment := "Epic execution completed."
+	if result.Failed > 0 {
+		closeComment = fmt.Sprintf("Epic execution completed with %d/%d sub-issues successful.", result.Succeeded, total)
+	}
+	if err := r.CloseIssueWithComment(ctx, projectPath, parent.ID, closeComment); err != nil {
 		r.log.Warn("Failed to close parent issue", "error", err)
-		// Non-fatal
 	}
 
 	r.log.Info("Epic execution completed",
 		"parent_id", parent.ID,
-		"total_completed", total,
+		"total", total,
+		"succeeded", result.Succeeded,
+		"failed", result.Failed,
 	)
 
-	return nil
+	return result, nil
 }

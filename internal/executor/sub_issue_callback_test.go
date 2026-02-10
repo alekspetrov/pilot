@@ -105,9 +105,12 @@ func TestExecuteSubIssues_CallbackFiresForEachPR(t *testing.T) {
 		Title: "[epic] Build auth system",
 	}
 
-	err := runner.ExecuteSubIssues(context.Background(), parent, subIssues)
+	result, err := runner.ExecuteSubIssues(context.Background(), parent, subIssues)
 	if err != nil {
 		t.Fatalf("ExecuteSubIssues returned error: %v", err)
+	}
+	if result.Succeeded != 3 {
+		t.Errorf("expected 3 succeeded, got %d", result.Succeeded)
 	}
 
 	// Assert callback fired exactly 3 times
@@ -164,9 +167,12 @@ func TestExecuteSubIssues_NilCallbackNoPanic(t *testing.T) {
 		},
 	}
 
-	err := runner.ExecuteSubIssues(context.Background(), parent, issues)
+	result, err := runner.ExecuteSubIssues(context.Background(), parent, issues)
 	if err != nil {
 		t.Fatalf("ExecuteSubIssues should not error with nil callback: %v", err)
+	}
+	if result.Succeeded != 1 {
+		t.Errorf("expected 1 succeeded, got %d", result.Succeeded)
 	}
 }
 
@@ -202,9 +208,12 @@ func TestExecuteSubIssues_CallbackNotFiredOnNoPRUrl(t *testing.T) {
 		},
 	}
 
-	err := runner.ExecuteSubIssues(context.Background(), parent, issues)
+	result, err := runner.ExecuteSubIssues(context.Background(), parent, issues)
 	if err != nil {
 		t.Fatalf("ExecuteSubIssues returned error: %v", err)
+	}
+	if result.Succeeded != 1 {
+		t.Errorf("expected 1 succeeded, got %d", result.Succeeded)
 	}
 
 	if callbackFired {
@@ -214,6 +223,7 @@ func TestExecuteSubIssues_CallbackNotFiredOnNoPRUrl(t *testing.T) {
 
 func TestExecuteSubIssues_CallbackNotFiredOnFailure(t *testing.T) {
 	// First sub-issue succeeds with PR, second fails — callback should fire once
+	// GH-743: Failures no longer abort; both sub-issues execute, but only first succeeds
 	callCount := 0
 	execFn := func(ctx context.Context, task *Task) (*ExecutionResult, error) {
 		callCount++
@@ -255,9 +265,18 @@ func TestExecuteSubIssues_CallbackNotFiredOnFailure(t *testing.T) {
 		{Number: 41, Subtask: PlannedSubtask{Title: "Bad task", Order: 2}},
 	}
 
-	err := runner.ExecuteSubIssues(context.Background(), parent, issues)
-	if err == nil {
-		t.Fatal("ExecuteSubIssues should return error when sub-issue fails")
+	// GH-743: ExecuteSubIssues no longer returns error on sub-issue failure; it continues
+	result, err := runner.ExecuteSubIssues(context.Background(), parent, issues)
+	if err != nil {
+		t.Fatalf("ExecuteSubIssues returned unexpected error: %v", err)
+	}
+
+	// Verify result counts
+	if result.Succeeded != 1 {
+		t.Errorf("expected 1 succeeded, got %d", result.Succeeded)
+	}
+	if result.Failed != 1 {
+		t.Errorf("expected 1 failed, got %d", result.Failed)
 	}
 
 	// Callback should have fired exactly once (for the successful sub-issue)
@@ -274,6 +293,7 @@ func TestExecuteSubIssues_CallbackNotFiredOnFailure(t *testing.T) {
 
 func TestExecuteSubIssues_CallbackNotFiredOnExecError(t *testing.T) {
 	// Execute returns an error (not just unsuccessful result)
+	// GH-743: Execution errors no longer abort; they are tracked as failures
 	execFn := func(ctx context.Context, task *Task) (*ExecutionResult, error) {
 		return nil, fmt.Errorf("backend unavailable")
 	}
@@ -290,9 +310,18 @@ func TestExecuteSubIssues_CallbackNotFiredOnExecError(t *testing.T) {
 		{Number: 50, Subtask: PlannedSubtask{Title: "Task", Order: 1}},
 	}
 
-	err := runner.ExecuteSubIssues(context.Background(), parent, issues)
-	if err == nil {
-		t.Fatal("expected error from ExecuteSubIssues")
+	// GH-743: ExecuteSubIssues no longer returns error; it continues and tracks failures
+	result, err := runner.ExecuteSubIssues(context.Background(), parent, issues)
+	if err != nil {
+		t.Fatalf("ExecuteSubIssues returned unexpected error: %v", err)
+	}
+
+	// Verify failure was tracked
+	if result.Failed != 1 {
+		t.Errorf("expected 1 failed, got %d", result.Failed)
+	}
+	if result.Succeeded != 0 {
+		t.Errorf("expected 0 succeeded, got %d", result.Succeeded)
 	}
 
 	if callbackFired {

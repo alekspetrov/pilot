@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"time"
 )
 
 // Backend defines the interface for AI execution backends.
@@ -173,6 +174,9 @@ type BackendConfig struct {
 
 	// IntentJudge contains intent alignment settings for diff-vs-ticket verification
 	IntentJudge *IntentJudgeConfig `yaml:"intent_judge,omitempty"`
+
+	// Epic contains settings for epic decomposition and sub-issue execution
+	Epic *EpicConfig `yaml:"epic,omitempty"`
 }
 
 // ModelRoutingConfig controls which model to use based on task complexity.
@@ -294,6 +298,34 @@ func DefaultIntentJudgeConfig() *IntentJudgeConfig {
 	}
 }
 
+// EpicConfig configures epic decomposition and sub-issue execution.
+//
+// Example YAML configuration:
+//
+//	executor:
+//	  epic:
+//	    sub_issue_merge_timeout: 30m
+//	    poll_interval: 30s
+type EpicConfig struct {
+	// SubIssueMergeTimeout is the max time to wait for a sub-issue PR to merge.
+	// When waiting for merge, if this timeout is exceeded, the sub-issue is
+	// marked as failed and execution continues with the next sub-issue.
+	// Default: 30m.
+	SubIssueMergeTimeout time.Duration `yaml:"sub_issue_merge_timeout,omitempty"`
+
+	// PollInterval is how often to check PR merge status.
+	// Default: 30s.
+	PollInterval time.Duration `yaml:"poll_interval,omitempty"`
+}
+
+// DefaultEpicConfig returns default epic configuration.
+func DefaultEpicConfig() *EpicConfig {
+	return &EpicConfig{
+		SubIssueMergeTimeout: 30 * time.Minute,
+		PollInterval:         30 * time.Second,
+	}
+}
+
 // ClaudeCodeConfig contains Claude Code backend configuration.
 type ClaudeCodeConfig struct {
 	// Command is the path to the claude CLI (default: "claude")
@@ -344,6 +376,7 @@ func DefaultBackendConfig() *BackendConfig {
 		EffortRouting: DefaultEffortRoutingConfig(),
 		Decompose:     DefaultDecomposeConfig(),
 		IntentJudge:   DefaultIntentJudgeConfig(),
+		Epic:          DefaultEpicConfig(),
 	}
 }
 
