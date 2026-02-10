@@ -88,7 +88,7 @@ func TestComplexityClassifier_Classify(t *testing.T) {
 						{Text: string(responseJSON)},
 					},
 				}
-				json.NewEncoder(w).Encode(resp)
+				_ = json.NewEncoder(w).Encode(resp)
 			}))
 			defer server.Close()
 
@@ -148,7 +148,7 @@ func TestComplexityClassifier_MalformedJSON(t *testing.T) {
 				{Text: "this is not json"},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -169,7 +169,7 @@ func TestComplexityClassifier_InvalidComplexity(t *testing.T) {
 				{Text: `{"complexity":"impossible","should_decompose":false,"reason":"test"}`},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -209,7 +209,7 @@ func TestComplexityClassifier_MarkdownWrappedJSON(t *testing.T) {
 				{Text: "```json\n{\"complexity\":\"simple\",\"should_decompose\":false,\"reason\":\"small fix\"}\n```"},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -227,7 +227,7 @@ func TestComplexityClassifier_TruncatesLongInput(t *testing.T) {
 	var receivedContent string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var reqBody haikuRequest
-		json.NewDecoder(r.Body).Decode(&reqBody)
+		_ = json.NewDecoder(r.Body).Decode(&reqBody)
 		if len(reqBody.Messages) > 0 {
 			receivedContent = reqBody.Messages[0].Content
 		}
@@ -239,7 +239,7 @@ func TestComplexityClassifier_TruncatesLongInput(t *testing.T) {
 				{Text: `{"complexity":"medium","should_decompose":false,"reason":"truncated"}`},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
