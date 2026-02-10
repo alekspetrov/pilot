@@ -115,6 +115,73 @@ func FormatTaskConfirmation(taskID, description string) []interface{} {
 	return blocks
 }
 
+// FormatPlanWithActions returns blocks for a plan with Execute/Cancel buttons.
+func FormatPlanWithActions(taskID, planSummary string) []interface{} {
+	// Truncate plan summary for display
+	displaySummary := planSummary
+	if len(displaySummary) > 2500 {
+		displaySummary = displaySummary[:2500] + "\n\n_(truncated)_"
+	}
+
+	blocks := []interface{}{
+		Block{
+			Type: "header",
+			Text: &TextObject{
+				Type:  "plain_text",
+				Text:  ":clipboard: Implementation Plan",
+				Emoji: true,
+			},
+		},
+		Block{
+			Type: "section",
+			Text: &TextObject{
+				Type: "mrkdwn",
+				Text: displaySummary,
+			},
+		},
+		Block{
+			Type: "divider",
+		},
+		Block{
+			Type: "section",
+			Text: &TextObject{
+				Type: "mrkdwn",
+				Text: "*Ready to execute this plan?*",
+			},
+		},
+		ActionsBlock{
+			Type:    "actions",
+			BlockID: fmt.Sprintf("plan_confirm_%s", taskID),
+			Elements: []ButtonElement{
+				{
+					Type: "button",
+					Text: &TextObject{
+						Type:  "plain_text",
+						Text:  "Execute Plan",
+						Emoji: true,
+					},
+					ActionID: "execute_plan",
+					Value:    taskID,
+					Style:    "primary",
+				},
+				{
+					Type: "button",
+					Text: &TextObject{
+						Type:  "plain_text",
+						Text:  "Cancel",
+						Emoji: true,
+					},
+					ActionID: "cancel_plan",
+					Value:    taskID,
+					Style:    "danger",
+				},
+			},
+		},
+	}
+
+	return blocks
+}
+
 // FormatProgressUpdate returns blocks for a progress update.
 func FormatProgressUpdate(phase string, progress int, elapsed time.Duration) []Block {
 	// Clamp progress

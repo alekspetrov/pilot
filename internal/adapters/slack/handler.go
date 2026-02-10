@@ -666,6 +666,7 @@ func (h *Handler) saveResearchFile(projectPath, query, content string) string {
 }
 
 // handlePlanning handles planning/design requests
+// Creates a plan and presents Execute/Cancel buttons for user approval
 func (h *Handler) handlePlanning(ctx context.Context, channelID, threadTS, text string) {
 	// Send acknowledgment
 	h.sendReply(ctx, channelID, threadTS, ":triangular_ruler: Drafting plan...")
@@ -713,12 +714,7 @@ DO NOT make any code changes. Only explore and plan.`, text),
 		return
 	}
 
-	// Send plan summary
-	summary := extractPlanSummary(planContent)
-	blocks := FormatQuestionAnswer(":clipboard: *Implementation Plan*\n\n" + summary)
-	h.sendBlocksReply(ctx, channelID, threadTS, blocks, "Implementation Plan")
-
-	// Store as pending task for potential execution
+	// Store as pending task for potential execution (before sending buttons)
 	h.mu.Lock()
 	key := makeConversationKey(channelID, threadTS)
 	h.pendingTasks[key] = &PendingTask{
@@ -729,6 +725,29 @@ DO NOT make any code changes. Only explore and plan.`, text),
 		CreatedAt:   time.Now(),
 	}
 	h.mu.Unlock()
+
+	// Send plan summary with Execute/Cancel buttons
+	summary := extractPlanSummary(planContent)
+	blocks := FormatPlanWithActions(taskID, summary)
+
+	msg := &InteractiveMessage{
+		Channel: channelID,
+		Text:    "Implementation Plan",
+		Blocks:  blocks,
+	}
+	if threadTS != "" {
+		// Add thread_ts for threading - InteractiveMessage doesn't have it, use raw post
+		h.sendInteractiveReply(ctx, channelID, threadTS, blocks, "Implementation Plan")
+	} else {
+		if _, err := h.apiClient.PostInteractiveMessage(ctx, msg); err != nil {
+			h.log.Error("Failed to send plan with buttons",
+				slog.String("channel_id", channelID),
+				slog.Any("error", err))
+			// Fall back to plain message
+			plainBlocks := FormatQuestionAnswer(":clipboard: *Implementation Plan*\n\n" + summary)
+			h.sendBlocksReply(ctx, channelID, threadTS, plainBlocks, "Implementation Plan")
+		}
+	}
 }
 
 // extractPlanSummary extracts key points from a plan for display
@@ -759,18 +778,442 @@ func extractPlanSummary(plan string) string {
 	return result
 }
 
-// handleTask handles task requests (placeholder for now)
+// handleTask handles task requests with confirmation flow
+// Presents a confirmation message with Execute/Cancel buttons before executing
 func (h *Handler) handleTask(ctx context.Context, channelID, threadTS, text, userID string) {
-	// TODO: Implement full task execution with confirmation flow
-	h.sendReply(ctx, channelID, threadTS,
-		":rocket: Task execution coming soon. For now, create a GitHub issue with the `pilot` label.")
+	// Generate task ID
+	taskID := fmt.Sprintf("TASK-%d", time.Now().Unix())
+
+	// Store as pending task
+	h.mu.Lock()
+	key := makeConversationKey(channelID, threadTS)
+	h.pendingTasks[key] = &PendingTask{
+		TaskID:      taskID,
+		Description: text,
+		ChannelID:   channelID,
+		ThreadTS:    threadTS,
+		UserID:      userID,
+		CreatedAt:   time.Now(),
+	}
+	h.mu.Unlock()
+
+	h.log.Info("Created pending task",
+		slog.String("task_id", taskID),
+		slog.String("channel_id", channelID),
+		slog.String("user_id", userID))
+
+	// Send confirmation message with Execute/Cancel buttons
+	blocks := FormatTaskConfirmation(taskID, text)
+	h.sendInteractiveReply(ctx, channelID, threadTS, blocks, "Confirm task execution")
 }
 
 // handleCommand handles slash commands
 func (h *Handler) handleCommand(ctx context.Context, channelID, threadTS, text string) {
-	// TODO: Implement command handling
-	h.sendReply(ctx, channelID, threadTS,
-		"Commands not yet implemented. Type a message to chat with Pilot.")
+	// Parse and execute command
+	cmd := ParseCommand(text)
+	response := h.executeCommand(ctx, channelID, cmd)
+	h.sendReply(ctx, channelID, threadTS, response)
+}
+
+// executeCommand executes a parsed command and returns the response
+func (h *Handler) executeCommand(ctx context.Context, channelID string, cmd *Command) string {
+	if cmd == nil {
+		return "Unknown command. Try `/help` for available commands."
+	}
+
+	switch cmd.Name {
+	case "help":
+		return formatHelpMessage()
+	case "status":
+		return h.getStatusMessage(channelID)
+	case "queue":
+		return h.getQueueMessage(channelID)
+	case "switch":
+		return h.switchProject(channelID, cmd.Args)
+	case "cancel":
+		return h.cancelRunningTask(ctx, channelID, cmd.Args)
+	default:
+		return fmt.Sprintf("Unknown command: `%s`. Try `/help` for available commands.", cmd.Name)
+	}
+}
+
+// getStatusMessage returns the current status for a channel
+func (h *Handler) getStatusMessage(channelID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var sb strings.Builder
+	sb.WriteString(":bar_chart: *Pilot Status*\n\n")
+
+	// Current project
+	projectPath := h.projectPath
+	if path, ok := h.activeProject[channelID]; ok {
+		projectPath = path
+	}
+	sb.WriteString(fmt.Sprintf("*Project:* `%s`\n", filepath.Base(projectPath)))
+
+	// Running tasks count
+	runningCount := 0
+	for _, task := range h.runningTasks {
+		if task.ChannelID == channelID {
+			runningCount++
+		}
+	}
+	sb.WriteString(fmt.Sprintf("*Running tasks:* %d\n", runningCount))
+
+	// Pending tasks count
+	pendingCount := 0
+	for key := range h.pendingTasks {
+		if strings.HasPrefix(key, channelID) {
+			pendingCount++
+		}
+	}
+	sb.WriteString(fmt.Sprintf("*Pending tasks:* %d\n", pendingCount))
+
+	return sb.String()
+}
+
+// getQueueMessage returns the task queue for a channel
+func (h *Handler) getQueueMessage(channelID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var sb strings.Builder
+	sb.WriteString(":clipboard: *Task Queue*\n\n")
+
+	// Running tasks
+	hasItems := false
+	for _, task := range h.runningTasks {
+		if task.ChannelID == channelID {
+			elapsed := time.Since(task.StartedAt).Round(time.Second)
+			sb.WriteString(fmt.Sprintf(":gear: *Running:* `%s` (%s elapsed)\n", task.TaskID, elapsed))
+			hasItems = true
+		}
+	}
+
+	// Pending tasks
+	for key, task := range h.pendingTasks {
+		if strings.HasPrefix(key, channelID) {
+			age := time.Since(task.CreatedAt).Round(time.Second)
+			sb.WriteString(fmt.Sprintf(":hourglass: *Pending:* `%s` (%s ago)\n", task.TaskID, age))
+			hasItems = true
+		}
+	}
+
+	if !hasItems {
+		sb.WriteString("_No tasks in queue_")
+	}
+
+	return sb.String()
+}
+
+// switchProject switches the active project for a channel
+func (h *Handler) switchProject(channelID string, args string) string {
+	projectName := strings.TrimSpace(args)
+	if projectName == "" {
+		// List available projects
+		if h.projects == nil {
+			return fmt.Sprintf(":file_folder: Current project: `%s`\n\nNo project source configured for switching.", filepath.Base(h.projectPath))
+		}
+
+		projects := h.projects.ListProjects()
+		if len(projects) == 0 {
+			return ":warning: No projects available."
+		}
+
+		var sb strings.Builder
+		sb.WriteString(":file_folder: *Available Projects*\n\n")
+		for _, p := range projects {
+			sb.WriteString(fmt.Sprintf("• `%s` - %s\n", p.Name, p.WorkDir))
+		}
+		sb.WriteString("\nUse `/switch <project-name>` to switch.")
+		return sb.String()
+	}
+
+	// Find and switch to project
+	if h.projects == nil {
+		return ":warning: No project source configured."
+	}
+
+	projects := h.projects.ListProjects()
+	for _, p := range projects {
+		if strings.EqualFold(p.Name, projectName) {
+			h.mu.Lock()
+			h.activeProject[channelID] = p.WorkDir
+			h.mu.Unlock()
+			return fmt.Sprintf(":white_check_mark: Switched to project `%s`\nPath: `%s`", p.Name, p.WorkDir)
+		}
+	}
+
+	return fmt.Sprintf(":x: Project `%s` not found. Use `/switch` to list available projects.", projectName)
+}
+
+// cancelRunningTask cancels a running task
+func (h *Handler) cancelRunningTask(ctx context.Context, channelID string, args string) string {
+	taskID := strings.TrimSpace(args)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// If no task ID specified, cancel the most recent running task in this channel
+	if taskID == "" {
+		for key, task := range h.runningTasks {
+			if task.ChannelID == channelID && task.Cancel != nil {
+				task.Cancel()
+				delete(h.runningTasks, key)
+				return fmt.Sprintf(":stop_sign: Cancelled task `%s`", task.TaskID)
+			}
+		}
+		return ":info_source: No running tasks to cancel."
+	}
+
+	// Find and cancel specific task
+	for key, task := range h.runningTasks {
+		if task.TaskID == taskID && task.ChannelID == channelID {
+			if task.Cancel != nil {
+				task.Cancel()
+			}
+			delete(h.runningTasks, key)
+			return fmt.Sprintf(":stop_sign: Cancelled task `%s`", taskID)
+		}
+	}
+
+	return fmt.Sprintf(":x: Task `%s` not found or not running.", taskID)
+}
+
+// sendInteractiveReply sends a Block Kit message with interactive elements
+func (h *Handler) sendInteractiveReply(ctx context.Context, channelID, threadTS string, blocks []interface{}, fallbackText string) {
+	// Build payload manually to include thread_ts
+	payload := struct {
+		Channel  string        `json:"channel"`
+		Text     string        `json:"text,omitempty"`
+		Blocks   []interface{} `json:"blocks,omitempty"`
+		ThreadTS string        `json:"thread_ts,omitempty"`
+	}{
+		Channel:  channelID,
+		Text:     fallbackText,
+		Blocks:   blocks,
+		ThreadTS: threadTS,
+	}
+
+	if err := h.apiClient.postJSON(ctx, "/chat.postMessage", payload); err != nil {
+		h.log.Error("Failed to send interactive reply",
+			slog.String("channel_id", channelID),
+			slog.Any("error", err))
+	}
+}
+
+// executeTask executes a confirmed task with progress updates
+func (h *Handler) executeTask(ctx context.Context, channelID, threadTS, taskID, description string) {
+	// Check if runner is available
+	if h.runner == nil {
+		h.log.Error("Cannot execute task: runner is nil", slog.String("task_id", taskID))
+		h.sendReply(ctx, channelID, threadTS, fmt.Sprintf(":x: Task `%s` cannot be executed: runner not configured", taskID))
+		return
+	}
+
+	// Get project path
+	projectPath := h.getProjectPath(channelID)
+
+	// Create execution context with cancellation
+	execCtx, cancel := context.WithCancel(ctx)
+
+	// Register as running task
+	h.mu.Lock()
+	key := makeConversationKey(channelID, threadTS)
+	h.runningTasks[key] = &RunningTask{
+		TaskID:    taskID,
+		ChannelID: channelID,
+		ThreadTS:  threadTS,
+		StartedAt: time.Now(),
+		Cancel:    cancel,
+	}
+	// Remove from pending
+	delete(h.pendingTasks, key)
+	h.mu.Unlock()
+
+	// Clean up on completion
+	defer func() {
+		h.mu.Lock()
+		delete(h.runningTasks, key)
+		h.mu.Unlock()
+	}()
+
+	// Create the executor task
+	task := &executor.Task{
+		ID:          taskID,
+		Title:       truncateText(description, 50),
+		Description: description,
+		ProjectPath: projectPath,
+		Branch:      fmt.Sprintf("pilot/%s", taskID),
+		CreatePR:    true,
+	}
+
+	h.log.Info("Executing task",
+		slog.String("task_id", taskID),
+		slog.String("channel_id", channelID),
+		slog.String("project_path", projectPath))
+
+	// Send starting message
+	h.sendReply(ctx, channelID, threadTS, fmt.Sprintf(":rocket: Starting task `%s`...", taskID))
+
+	// Set up progress callback with throttling
+	var lastProgressUpdate time.Time
+	const progressThrottle = 5 * time.Second
+	var progressMu sync.Mutex
+
+	progressCallback := func(tID string, phase string, progress int, message string) {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+
+		// Throttle progress updates to avoid flooding Slack
+		if time.Since(lastProgressUpdate) < progressThrottle {
+			return
+		}
+		lastProgressUpdate = time.Now()
+
+		elapsed := time.Since(h.runningTasks[key].StartedAt)
+		blocks := FormatProgressUpdate(phase, progress, elapsed)
+		h.sendBlocksReply(ctx, channelID, threadTS, blocks, fmt.Sprintf("%s: %d%%", phase, progress))
+	}
+
+	// Register progress callback
+	callbackKey := fmt.Sprintf("slack-%s", taskID)
+	h.runner.AddProgressCallback(callbackKey, progressCallback)
+	defer h.runner.RemoveProgressCallback(callbackKey)
+
+	// Execute the task
+	result, err := h.runner.Execute(execCtx, task)
+
+	if err != nil {
+		if execCtx.Err() == context.Canceled {
+			h.sendReply(ctx, channelID, threadTS, fmt.Sprintf(":stop_sign: Task `%s` was cancelled.", taskID))
+		} else {
+			h.sendReply(ctx, channelID, threadTS, fmt.Sprintf(":x: Task `%s` failed: %s", taskID, err.Error()))
+		}
+		return
+	}
+
+	// Send result
+	resultBlocks := FormatTaskResult(result)
+	h.sendBlocksReply(ctx, channelID, threadTS, resultBlocks, "Task completed")
+
+	// Record in conversation history
+	resultSummary := "Task completed"
+	if result.PRUrl != "" {
+		resultSummary = fmt.Sprintf("Task completed with PR: %s", result.PRUrl)
+	}
+	h.conversationStore.Add(channelID, threadTS, "assistant", resultSummary, "")
+}
+
+// HandleCallback processes Execute/Cancel button clicks from Slack interactions
+func (h *Handler) HandleCallback(ctx context.Context, action *InteractionAction) bool {
+	if action == nil {
+		return false
+	}
+
+	h.log.Debug("Processing callback",
+		slog.String("action_id", action.ActionID),
+		slog.String("value", action.Value),
+		slog.String("user_id", action.UserID),
+		slog.String("channel_id", action.ChannelID))
+
+	switch action.ActionID {
+	case "execute_task", "execute_plan":
+		return h.handleExecuteAction(ctx, action)
+	case "cancel_task", "cancel_plan":
+		return h.handleCancelAction(ctx, action)
+	default:
+		h.log.Debug("Unknown action", slog.String("action_id", action.ActionID))
+		return false
+	}
+}
+
+// handleExecuteAction handles the Execute button click
+func (h *Handler) handleExecuteAction(ctx context.Context, action *InteractionAction) bool {
+	taskID := action.Value
+	if taskID == "" {
+		return false
+	}
+
+	h.mu.Lock()
+	var pendingTask *PendingTask
+	var foundKey string
+	for key, task := range h.pendingTasks {
+		if task.TaskID == taskID {
+			pendingTask = task
+			foundKey = key
+			break
+		}
+	}
+	h.mu.Unlock()
+
+	if pendingTask == nil {
+		h.log.Warn("Pending task not found for execute action",
+			slog.String("task_id", taskID))
+		// Update message to show task not found
+		h.updateInteractionMessage(ctx, action, ":warning: Task not found or already executed.")
+		return false
+	}
+
+	// Update the message to show execution started (remove buttons)
+	h.updateInteractionMessage(ctx, action, fmt.Sprintf(":rocket: Executing task `%s`...", taskID))
+
+	// Execute task in background
+	go h.executeTask(context.Background(), pendingTask.ChannelID, pendingTask.ThreadTS, taskID, pendingTask.Description)
+
+	// Delete from pending after we've copied the data
+	h.mu.Lock()
+	delete(h.pendingTasks, foundKey)
+	h.mu.Unlock()
+
+	return true
+}
+
+// handleCancelAction handles the Cancel button click
+func (h *Handler) handleCancelAction(ctx context.Context, action *InteractionAction) bool {
+	taskID := action.Value
+	if taskID == "" {
+		return false
+	}
+
+	h.mu.Lock()
+	var foundKey string
+	for key, task := range h.pendingTasks {
+		if task.TaskID == taskID {
+			foundKey = key
+			break
+		}
+	}
+	if foundKey != "" {
+		delete(h.pendingTasks, foundKey)
+	}
+	h.mu.Unlock()
+
+	// Update message to show cancellation
+	h.updateInteractionMessage(ctx, action, fmt.Sprintf(":no_entry: Task `%s` cancelled by <@%s>", taskID, action.UserID))
+
+	return true
+}
+
+// updateInteractionMessage updates the original interactive message
+func (h *Handler) updateInteractionMessage(ctx context.Context, action *InteractionAction, text string) {
+	// Build simple text blocks without buttons
+	blocks := []interface{}{
+		Block{
+			Type: "section",
+			Text: &TextObject{
+				Type: "mrkdwn",
+				Text: text,
+			},
+		},
+	}
+
+	if err := h.apiClient.UpdateInteractiveMessage(ctx, action.ChannelID, action.MessageTS, blocks, text); err != nil {
+		h.log.Error("Failed to update interaction message",
+			slog.String("channel_id", action.ChannelID),
+			slog.Any("error", err))
+	}
 }
 
 // cleanInternalSignals removes internal markers from Claude output

@@ -289,3 +289,15 @@ type SlackApprovalResponse struct {
 	Channel string `json:"channel"`
 	Error   string `json:"error,omitempty"`
 }
+
+// WireHandlerToInteractions connects a Handler's callback handler to an InteractionHandler.
+// This enables the Handler to receive and process button clicks from Slack interactive messages.
+func WireHandlerToInteractions(handler *Handler, interactionHandler *InteractionHandler) {
+	if handler == nil || interactionHandler == nil {
+		return
+	}
+
+	interactionHandler.OnAction(func(action *InteractionAction) bool {
+		return handler.HandleCallback(context.Background(), action)
+	})
+}

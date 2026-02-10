@@ -266,3 +266,40 @@ func (c *Client) UpdateInteractiveMessage(ctx context.Context, channel, ts strin
 
 	return nil
 }
+
+// postJSON posts a JSON payload to a Slack API endpoint
+func (c *Client) postJSON(ctx context.Context, endpoint string, payload interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, slackAPIURL+endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to post to %s: %w", endpoint, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !result.OK {
+		return fmt.Errorf("slack API error: %s", result.Error)
+	}
+
+	return nil
+}
