@@ -1304,7 +1304,7 @@ func (s *Store) GetRecentAutopilotMetrics(limit int) ([]*AutopilotMetricsRow, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to query autopilot metrics: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var result []*AutopilotMetricsRow
 	for rows.Next() {
