@@ -17,12 +17,6 @@ type execCall struct {
 	Order  int // 1-indexed execution order
 }
 
-// progressCall records a progress/close comment posted during execution.
-type progressCall struct {
-	IssueID string
-	Message string
-}
-
 // makeSubIssues creates n CreatedIssues numbered starting from startNum.
 func makeSubIssues(n, startNum int) []CreatedIssue {
 	issues := make([]CreatedIssue, n)
