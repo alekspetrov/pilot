@@ -3,7 +3,6 @@ package slack
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -225,5 +224,3 @@ func (l *Listener) sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// ErrPermanentFailure indicates a non-retryable error (e.g. auth failure).
-var ErrPermanentFailure = fmt.Errorf("slack socket mode: permanent failure")
