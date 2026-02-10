@@ -818,7 +818,7 @@ func TestValidateSocketMode(t *testing.T) {
 			name: "socket mode enabled with app token",
 			config: &Config{
 				SocketMode: true,
-				AppToken:   "xapp-1-test-token",
+				AppToken:   testutil.FakeSlackAppToken,
 			},
 			wantValid: true,
 		},
@@ -834,7 +834,7 @@ func TestValidateSocketMode(t *testing.T) {
 			name: "socket mode disabled with app token",
 			config: &Config{
 				SocketMode: false,
-				AppToken:   "xapp-1-test-token",
+				AppToken:   testutil.FakeSlackAppToken,
 			},
 			wantValid: false,
 		},
