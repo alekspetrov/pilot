@@ -12,6 +12,22 @@ import (
 	"github.com/alekspetrov/pilot/internal/approval"
 )
 
+// Rebaser abstracts git operations needed for auto-rebase (GH-725).
+// This interface allows testing without real git repositories.
+type Rebaser interface {
+	// Fetch fetches from a remote for the given refspec.
+	Fetch(ctx context.Context, remote string, refspec string) error
+	// SwitchBranch checks out the specified branch.
+	SwitchBranch(ctx context.Context, branchName string) error
+	// Rebase rebases the current branch onto the specified base.
+	// Returns error if conflicts occur (rebase is auto-aborted).
+	Rebase(ctx context.Context, onto string) error
+	// ForcePushWithLease pushes with --force-with-lease for safe force push.
+	ForcePushWithLease(ctx context.Context, branchName string) error
+	// GetCurrentCommitSHA returns the HEAD commit SHA.
+	GetCurrentCommitSHA(ctx context.Context) (string, error)
+}
+
 // Notifier sends autopilot notifications for PR lifecycle events.
 type Notifier interface {
 	// NotifyMerged sends notification when a PR is successfully merged.
@@ -44,6 +60,7 @@ type Controller struct {
 	feedbackLoop *FeedbackLoop
 	releaser     *Releaser
 	notifier     Notifier
+	rebaser      Rebaser
 	log          *slog.Logger
 
 	// State tracking
@@ -86,6 +103,12 @@ func NewController(cfg *Config, ghClient *github.Client, approvalMgr *approval.M
 // This is optional; if not set, no notifications will be sent.
 func (c *Controller) SetNotifier(n Notifier) {
 	c.notifier = n
+}
+
+// SetRebaser sets the git rebaser for auto-rebase operations (GH-725).
+// This is optional; if not set, auto-rebase is disabled even if configured.
+func (c *Controller) SetRebaser(r Rebaser) {
+	c.rebaser = r
 }
 
 // OnPRCreated registers a new PR for autopilot processing.
@@ -146,6 +169,8 @@ func (c *Controller) ProcessPR(ctx context.Context, prNumber int) error {
 		err = c.handleCIFailed(ctx, prState)
 	case StageAwaitApproval:
 		err = c.handleAwaitApproval(ctx, prState)
+	case StageConflicting:
+		err = c.handleConflicting(ctx, prState)
 	case StageMerging:
 		err = c.handleMerging(ctx, prState)
 	case StageMerged:
@@ -244,6 +269,22 @@ func (c *Controller) handleWaitingCI(ctx context.Context, prState *PRState) erro
 	} else if sha == "" {
 		c.log.Warn("GitHub returned empty SHA for PR", "pr", prState.PRNumber)
 		return nil // Retry next cycle
+	}
+
+	// GH-725: Check for merge conflicts before waiting for CI.
+	// If the PR has conflicts and auto-rebase is enabled, transition to conflicting stage.
+	if ghPR != nil && ghPR.Mergeable != nil && !*ghPR.Mergeable {
+		if c.config.EnableAutoRebase && c.rebaser != nil {
+			c.log.Info("PR has merge conflicts, attempting auto-rebase",
+				"pr", prState.PRNumber,
+			)
+			prState.Stage = StageConflicting
+			return nil
+		}
+		c.log.Warn("PR has merge conflicts (auto-rebase disabled)",
+			"pr", prState.PRNumber,
+		)
+		// Without auto-rebase, let CI check proceed — merge will fail later
 	}
 
 	// Non-blocking CI status check
@@ -346,6 +387,109 @@ func (c *Controller) handleCIFailed(ctx context.Context, prState *PRState) error
 	}
 
 	prState.Stage = StageFailed
+	return nil
+}
+
+// handleConflicting attempts auto-rebase when a PR has merge conflicts (GH-725).
+// If rebase succeeds, the PR returns to WaitingCI. If it fails after max attempts,
+// the PR is closed and marked failed for re-execution.
+func (c *Controller) handleConflicting(ctx context.Context, prState *PRState) error {
+	maxAttempts := c.config.MaxRebaseAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 2
+	}
+
+	if c.rebaser == nil {
+		c.log.Warn("rebaser not configured, cannot auto-rebase",
+			"pr", prState.PRNumber,
+		)
+		prState.Stage = StageFailed
+		prState.Error = "auto-rebase not available: rebaser not configured"
+		return nil
+	}
+
+	prState.RebaseAttempts++
+
+	c.log.Info("auto-rebasing PR",
+		"pr", prState.PRNumber,
+		"branch", prState.BranchName,
+		"attempt", prState.RebaseAttempts,
+	)
+
+	// 1. Fetch latest main
+	if err := c.rebaser.Fetch(ctx, "origin", "main"); err != nil {
+		c.log.Warn("failed to fetch origin/main",
+			"pr", prState.PRNumber,
+			"error", err,
+		)
+		// Non-fatal: rebase may still work with stale remote-tracking refs
+	}
+
+	// 2. Switch to PR branch
+	if err := c.rebaser.SwitchBranch(ctx, prState.BranchName); err != nil {
+		c.log.Error("failed to switch to PR branch for rebase",
+			"pr", prState.PRNumber,
+			"branch", prState.BranchName,
+			"error", err,
+		)
+		return c.checkRebaseExhausted(ctx, prState, maxAttempts)
+	}
+
+	// 3. Attempt rebase onto origin/main
+	if err := c.rebaser.Rebase(ctx, "origin/main"); err != nil {
+		c.log.Warn("auto-rebase failed (real conflicts)",
+			"pr", prState.PRNumber,
+			"attempt", prState.RebaseAttempts,
+			"error", err,
+		)
+		return c.checkRebaseExhausted(ctx, prState, maxAttempts)
+	}
+
+	// 4. Force push rebased branch
+	if err := c.rebaser.ForcePushWithLease(ctx, prState.BranchName); err != nil {
+		c.log.Error("failed to push rebased branch",
+			"pr", prState.PRNumber,
+			"branch", prState.BranchName,
+			"error", err,
+		)
+		return c.checkRebaseExhausted(ctx, prState, maxAttempts)
+	}
+
+	// 5. Refresh HeadSHA after rebase
+	newSHA, err := c.rebaser.GetCurrentCommitSHA(ctx)
+	if err != nil {
+		c.log.Warn("failed to get new SHA after rebase", "pr", prState.PRNumber, "error", err)
+	} else {
+		prState.HeadSHA = newSHA
+	}
+
+	c.log.Info("auto-rebase successful, returning to CI",
+		"pr", prState.PRNumber,
+		"attempt", prState.RebaseAttempts,
+		"new_sha", ShortSHA(prState.HeadSHA),
+	)
+
+	// Return to WaitingCI with fresh timer
+	prState.Stage = StageWaitingCI
+	prState.CIWaitStartedAt = time.Now()
+	return nil
+}
+
+// checkRebaseExhausted checks if max rebase attempts are reached.
+// If exhausted, closes the PR and transitions to failed. Otherwise stays in conflicting.
+func (c *Controller) checkRebaseExhausted(ctx context.Context, prState *PRState, maxAttempts int) error {
+	if prState.RebaseAttempts >= maxAttempts {
+		c.log.Warn("auto-rebase attempts exhausted, closing PR",
+			"pr", prState.PRNumber,
+			"attempts", prState.RebaseAttempts,
+		)
+		if err := c.ghClient.ClosePullRequest(ctx, c.owner, c.repo, prState.PRNumber); err != nil {
+			c.log.Warn("failed to close conflicting PR", "pr", prState.PRNumber, "error", err)
+		}
+		prState.Stage = StageFailed
+		prState.Error = fmt.Sprintf("auto-rebase failed after %d attempts", prState.RebaseAttempts)
+	}
+	// Otherwise stay in StageConflicting, will retry next cycle
 	return nil
 }
 

@@ -256,6 +256,51 @@ func (g *GitOperations) Pull(ctx context.Context, branch string) error {
 	return nil
 }
 
+// Fetch fetches from the specified remote for the given refspec.
+func (g *GitOperations) Fetch(ctx context.Context, remote string, refspec string) error {
+	cmd := exec.CommandContext(ctx, "git", "fetch", remote, refspec)
+	cmd.Dir = g.projectPath
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to fetch %s %s: %w: %s", remote, refspec, err, output)
+	}
+	return nil
+}
+
+// Rebase rebases the current branch onto the specified base (e.g. "origin/main").
+// If rebase fails, it automatically aborts to leave the working tree clean.
+func (g *GitOperations) Rebase(ctx context.Context, onto string) error {
+	cmd := exec.CommandContext(ctx, "git", "rebase", onto)
+	cmd.Dir = g.projectPath
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Abort to leave clean state
+		_ = g.AbortRebase(ctx)
+		return fmt.Errorf("rebase onto %s failed: %w: %s", onto, err, output)
+	}
+	return nil
+}
+
+// AbortRebase aborts an in-progress rebase. Safe to call when no rebase is active.
+func (g *GitOperations) AbortRebase(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "git", "rebase", "--abort")
+	cmd.Dir = g.projectPath
+	_ = cmd.Run() // Ignore errors — might not be in rebase state
+	return nil
+}
+
+// ForcePushWithLease pushes the branch using --force-with-lease for safe force push.
+// This only succeeds if the remote ref matches what we expect, preventing accidental overwrites.
+func (g *GitOperations) ForcePushWithLease(ctx context.Context, branchName string) error {
+	cmd := exec.CommandContext(ctx, "git", "push", "--force-with-lease", "origin", branchName)
+	cmd.Dir = g.projectPath
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("force push with lease failed for %s: %w: %s", branchName, err, output)
+	}
+	return nil
+}
+
 // SwitchToDefaultBranchAndPull switches to the default branch and pulls latest changes.
 // This ensures new branches are created from the latest default branch, not from
 // whatever branch was previously checked out (fixes GH-279).

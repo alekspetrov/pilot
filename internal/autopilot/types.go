@@ -72,6 +72,12 @@ type Config struct {
 	// NotifyOnFailure enables notifications when CI fails.
 	NotifyOnFailure bool `yaml:"notify_on_failure"`
 
+	// Auto-Rebase (GH-725)
+	// EnableAutoRebase enables automatic rebase when PRs have merge conflicts.
+	EnableAutoRebase bool `yaml:"enable_auto_rebase"`
+	// MaxRebaseAttempts is the maximum number of rebase attempts before failing (default: 2).
+	MaxRebaseAttempts int `yaml:"max_rebase_attempts"`
+
 	// Safety
 	// MaxFailures is the circuit breaker threshold before pausing autopilot.
 	MaxFailures int `yaml:"max_failures"`
@@ -107,6 +113,8 @@ func DefaultConfig() *Config {
 		AutoCreateIssues:   true,
 		IssueLabels:        []string{"pilot", "autopilot-fix"},
 		NotifyOnFailure:    true,
+		EnableAutoRebase:   true,
+		MaxRebaseAttempts:  2,
 		MaxFailures:        3,
 		MaxMergesPerHour:   10,
 		ApprovalTimeout:    1 * time.Hour,
@@ -166,6 +174,8 @@ const (
 	StageMerged PRStage = "merged"
 	// StagePostMergeCI indicates post-merge CI is running on main branch.
 	StagePostMergeCI PRStage = "post_merge_ci"
+	// StageConflicting indicates the PR has merge conflicts and rebase is being attempted.
+	StageConflicting PRStage = "conflicting"
 	// StageReleasing indicates the PR is triggering an automatic release.
 	StageReleasing PRStage = "releasing"
 	// StageFailed indicates the PR pipeline has failed and requires intervention.
@@ -230,6 +240,8 @@ type PRState struct {
 	CIWaitStartedAt time.Time
 	// MergeAttempts counts how many times merge has been attempted.
 	MergeAttempts int
+	// RebaseAttempts counts how many times auto-rebase has been attempted for conflicts.
+	RebaseAttempts int
 	// Error holds the last error message if Stage is StageFailed.
 	Error string
 	// CreatedAt is when the PR entered the autopilot pipeline.

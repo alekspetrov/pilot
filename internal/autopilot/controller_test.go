@@ -3,6 +3,7 @@ package autopilot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -1296,5 +1297,435 @@ func TestController_ProcessPR_StaleSHAWithoutRefreshWouldStayPending(t *testing.
 	}
 	if actualStatus != CISuccess {
 		t.Errorf("actual SHA status = %s, want %s", actualStatus, CISuccess)
+	}
+}
+
+// mockRebaser is a test double for the Rebaser interface (GH-725).
+type mockRebaser struct {
+	fetchFunc              func(ctx context.Context, remote, refspec string) error
+	switchBranchFunc       func(ctx context.Context, branchName string) error
+	rebaseFunc             func(ctx context.Context, onto string) error
+	forcePushWithLeaseFunc func(ctx context.Context, branchName string) error
+	getCurrentCommitSHAFunc func(ctx context.Context) (string, error)
+}
+
+func (m *mockRebaser) Fetch(ctx context.Context, remote, refspec string) error {
+	if m.fetchFunc != nil {
+		return m.fetchFunc(ctx, remote, refspec)
+	}
+	return nil
+}
+
+func (m *mockRebaser) SwitchBranch(ctx context.Context, branchName string) error {
+	if m.switchBranchFunc != nil {
+		return m.switchBranchFunc(ctx, branchName)
+	}
+	return nil
+}
+
+func (m *mockRebaser) Rebase(ctx context.Context, onto string) error {
+	if m.rebaseFunc != nil {
+		return m.rebaseFunc(ctx, onto)
+	}
+	return nil
+}
+
+func (m *mockRebaser) ForcePushWithLease(ctx context.Context, branchName string) error {
+	if m.forcePushWithLeaseFunc != nil {
+		return m.forcePushWithLeaseFunc(ctx, branchName)
+	}
+	return nil
+}
+
+func (m *mockRebaser) GetCurrentCommitSHA(ctx context.Context) (string, error) {
+	if m.getCurrentCommitSHAFunc != nil {
+		return m.getCurrentCommitSHAFunc(ctx)
+	}
+	return "rebased-sha-1234567890", nil
+}
+
+// GH-725: Test that merge conflicts are detected in handleWaitingCI and transition to StageConflicting.
+func TestController_ProcessPR_ConflictDetection(t *testing.T) {
+	mergeable := false
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/42":
+			resp := github.PullRequest{
+				Number:    42,
+				State:     "open",
+				Mergeable: &mergeable,
+				Head:      github.PRRef{SHA: "abc1234567890", Ref: "pilot/GH-10"},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.EnableAutoRebase = true
+	cfg.MaxRebaseAttempts = 2
+	cfg.DevCITimeout = 1 * time.Second
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+	c.SetRebaser(&mockRebaser{})
+	c.OnPRCreated(42, "https://github.com/owner/repo/pull/42", 10, "abc1234567890", "pilot/GH-10")
+
+	ctx := context.Background()
+
+	// Stage 1: PR created → waiting CI
+	err := c.ProcessPR(ctx, 42)
+	if err != nil {
+		t.Fatalf("ProcessPR stage 1 error: %v", err)
+	}
+	pr, _ := c.GetPRState(42)
+	if pr.Stage != StageWaitingCI {
+		t.Errorf("after stage 1: Stage = %s, want %s", pr.Stage, StageWaitingCI)
+	}
+
+	// Stage 2: waiting CI → should detect conflict and go to conflicting
+	err = c.ProcessPR(ctx, 42)
+	if err != nil {
+		t.Fatalf("ProcessPR stage 2 error: %v", err)
+	}
+	pr, _ = c.GetPRState(42)
+	if pr.Stage != StageConflicting {
+		t.Errorf("after stage 2: Stage = %s, want %s", pr.Stage, StageConflicting)
+	}
+}
+
+// GH-725: Test that auto-rebase succeeds and PR returns to WaitingCI.
+func TestController_ProcessPR_AutoRebaseSuccess(t *testing.T) {
+	rebasedSHA := "rebased-sha-1234567890"
+	rebaseCalled := false
+	forcePushCalled := false
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/42":
+			resp := github.PullRequest{
+				Number: 42,
+				State:  "open",
+				Head:   github.PRRef{SHA: rebasedSHA, Ref: "pilot/GH-10"},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.EnableAutoRebase = true
+	cfg.MaxRebaseAttempts = 2
+	cfg.DevCITimeout = 1 * time.Second
+
+	rebaser := &mockRebaser{
+		rebaseFunc: func(ctx context.Context, onto string) error {
+			rebaseCalled = true
+			if onto != "origin/main" {
+				t.Errorf("rebase onto = %s, want origin/main", onto)
+			}
+			return nil
+		},
+		forcePushWithLeaseFunc: func(ctx context.Context, branchName string) error {
+			forcePushCalled = true
+			if branchName != "pilot/GH-10" {
+				t.Errorf("force push branch = %s, want pilot/GH-10", branchName)
+			}
+			return nil
+		},
+		getCurrentCommitSHAFunc: func(ctx context.Context) (string, error) {
+			return rebasedSHA, nil
+		},
+	}
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+	c.SetRebaser(rebaser)
+
+	// Start directly in conflicting stage
+	c.mu.Lock()
+	c.activePRs[42] = &PRState{
+		PRNumber:   42,
+		HeadSHA:    "old-sha-1234567890",
+		Stage:      StageConflicting,
+		BranchName: "pilot/GH-10",
+	}
+	c.mu.Unlock()
+
+	ctx := context.Background()
+
+	// Process: conflicting → rebase succeeds → waiting CI
+	err := c.ProcessPR(ctx, 42)
+	if err != nil {
+		t.Fatalf("ProcessPR error: %v", err)
+	}
+
+	if !rebaseCalled {
+		t.Error("rebase should have been called")
+	}
+	if !forcePushCalled {
+		t.Error("force push should have been called")
+	}
+
+	pr, _ := c.GetPRState(42)
+	if pr.Stage != StageWaitingCI {
+		t.Errorf("Stage = %s, want %s after successful rebase", pr.Stage, StageWaitingCI)
+	}
+	if pr.HeadSHA != rebasedSHA {
+		t.Errorf("HeadSHA = %s, want %s after rebase", pr.HeadSHA, rebasedSHA)
+	}
+	if pr.RebaseAttempts != 1 {
+		t.Errorf("RebaseAttempts = %d, want 1", pr.RebaseAttempts)
+	}
+}
+
+// GH-725: Test that auto-rebase failure on real conflicts stays in conflicting.
+func TestController_ProcessPR_AutoRebaseConflictFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.EnableAutoRebase = true
+	cfg.MaxRebaseAttempts = 2
+
+	rebaser := &mockRebaser{
+		rebaseFunc: func(ctx context.Context, onto string) error {
+			return fmt.Errorf("rebase conflict in main.go")
+		},
+	}
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+	c.SetRebaser(rebaser)
+
+	// Start in conflicting stage
+	c.mu.Lock()
+	c.activePRs[42] = &PRState{
+		PRNumber:   42,
+		HeadSHA:    "abc1234567890",
+		Stage:      StageConflicting,
+		BranchName: "pilot/GH-10",
+	}
+	c.mu.Unlock()
+
+	ctx := context.Background()
+
+	// First attempt: rebase fails, stays in conflicting
+	err := c.ProcessPR(ctx, 42)
+	if err != nil {
+		t.Fatalf("ProcessPR error: %v", err)
+	}
+	pr, _ := c.GetPRState(42)
+	if pr.Stage != StageConflicting {
+		t.Errorf("after attempt 1: Stage = %s, want %s", pr.Stage, StageConflicting)
+	}
+	if pr.RebaseAttempts != 1 {
+		t.Errorf("RebaseAttempts = %d, want 1", pr.RebaseAttempts)
+	}
+
+	// Second attempt: rebase fails again, exhausted → closes PR → StageFailed
+	err = c.ProcessPR(ctx, 42)
+	if err != nil {
+		t.Fatalf("ProcessPR error: %v", err)
+	}
+	pr, _ = c.GetPRState(42)
+	if pr.Stage != StageFailed {
+		t.Errorf("after attempt 2: Stage = %s, want %s (exhausted)", pr.Stage, StageFailed)
+	}
+	if pr.RebaseAttempts != 2 {
+		t.Errorf("RebaseAttempts = %d, want 2", pr.RebaseAttempts)
+	}
+}
+
+// GH-725: Test that conflicts without auto-rebase don't block CI check.
+func TestController_ProcessPR_ConflictWithoutAutoRebase(t *testing.T) {
+	mergeable := false
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/42":
+			resp := github.PullRequest{
+				Number:    42,
+				State:     "open",
+				Mergeable: &mergeable,
+				Head:      github.PRRef{SHA: "abc1234567890", Ref: "pilot/GH-10"},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/repos/owner/repo/commits/abc1234567890/check-runs":
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: "completed", Conclusion: "success"},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.EnableAutoRebase = false // Disabled
+	cfg.DevCITimeout = 1 * time.Second
+	cfg.RequiredChecks = []string{"build"}
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+	// No rebaser set
+
+	// Start in waiting CI
+	c.mu.Lock()
+	c.activePRs[42] = &PRState{
+		PRNumber:        42,
+		HeadSHA:         "abc1234567890",
+		Stage:           StageWaitingCI,
+		CIWaitStartedAt: time.Now(),
+	}
+	c.mu.Unlock()
+
+	ctx := context.Background()
+
+	// Should NOT transition to conflicting — should continue CI check
+	err := c.ProcessPR(ctx, 42)
+	if err != nil {
+		t.Fatalf("ProcessPR error: %v", err)
+	}
+	pr, _ := c.GetPRState(42)
+	// CI still passes even though PR has conflicts — merge will fail later
+	if pr.Stage != StageCIPassed {
+		t.Errorf("Stage = %s, want %s (conflicts without auto-rebase should not block CI)", pr.Stage, StageCIPassed)
+	}
+}
+
+// GH-725: Test full flow: conflict detected → rebase succeeds → CI passes → merge.
+func TestController_ProcessPR_FullRebaseFlow(t *testing.T) {
+	callCount := 0
+	mergeWasCalled := false
+	rebasedSHA := "rebased-sha-1234567890"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/42":
+			callCount++
+			if callCount <= 1 {
+				// First call: PR has conflicts
+				mergeable := false
+				resp := github.PullRequest{
+					Number:    42,
+					State:     "open",
+					Mergeable: &mergeable,
+					Head:      github.PRRef{SHA: "abc1234567890", Ref: "pilot/GH-10"},
+				}
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(resp)
+			} else {
+				// After rebase: PR is mergeable
+				mergeable := true
+				resp := github.PullRequest{
+					Number:    42,
+					State:     "open",
+					Mergeable: &mergeable,
+					Head:      github.PRRef{SHA: rebasedSHA, Ref: "pilot/GH-10"},
+				}
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(resp)
+			}
+		case "/repos/owner/repo/commits/" + rebasedSHA + "/check-runs":
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: "completed", Conclusion: "success"},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/repos/owner/repo/pulls/42/merge":
+			mergeWasCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.EnableAutoRebase = true
+	cfg.MaxRebaseAttempts = 2
+	cfg.DevCITimeout = 1 * time.Second
+	cfg.RequiredChecks = []string{"build"}
+
+	rebaser := &mockRebaser{
+		getCurrentCommitSHAFunc: func(ctx context.Context) (string, error) {
+			return rebasedSHA, nil
+		},
+	}
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+	c.SetRebaser(rebaser)
+	c.OnPRCreated(42, "https://github.com/owner/repo/pull/42", 10, "abc1234567890", "pilot/GH-10")
+
+	ctx := context.Background()
+
+	// Stage 1: PR created → waiting CI
+	_ = c.ProcessPR(ctx, 42)
+	pr, _ := c.GetPRState(42)
+	if pr.Stage != StageWaitingCI {
+		t.Fatalf("stage 1: Stage = %s, want %s", pr.Stage, StageWaitingCI)
+	}
+
+	// Stage 2: waiting CI → detects conflict → conflicting
+	_ = c.ProcessPR(ctx, 42)
+	pr, _ = c.GetPRState(42)
+	if pr.Stage != StageConflicting {
+		t.Fatalf("stage 2: Stage = %s, want %s", pr.Stage, StageConflicting)
+	}
+
+	// Stage 3: conflicting → rebase succeeds → waiting CI
+	_ = c.ProcessPR(ctx, 42)
+	pr, _ = c.GetPRState(42)
+	if pr.Stage != StageWaitingCI {
+		t.Fatalf("stage 3: Stage = %s, want %s", pr.Stage, StageWaitingCI)
+	}
+
+	// Stage 4: waiting CI → CI passes
+	_ = c.ProcessPR(ctx, 42)
+	pr, _ = c.GetPRState(42)
+	if pr.Stage != StageCIPassed {
+		t.Fatalf("stage 4: Stage = %s, want %s", pr.Stage, StageCIPassed)
+	}
+
+	// Stage 5: CI passed → merging
+	_ = c.ProcessPR(ctx, 42)
+	pr, _ = c.GetPRState(42)
+	if pr.Stage != StageMerging {
+		t.Fatalf("stage 5: Stage = %s, want %s", pr.Stage, StageMerging)
+	}
+
+	// Stage 6: merging → merged
+	_ = c.ProcessPR(ctx, 42)
+	if !mergeWasCalled {
+		t.Error("merge should have been called")
+	}
+	pr, _ = c.GetPRState(42)
+	if pr.Stage != StageMerged {
+		t.Fatalf("stage 6: Stage = %s, want %s", pr.Stage, StageMerged)
 	}
 }
