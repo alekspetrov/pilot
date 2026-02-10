@@ -18,9 +18,7 @@ func ParseCommand(text string) *Command {
 	text = strings.TrimSpace(text)
 
 	// Remove leading slash if present
-	if strings.HasPrefix(text, "/") {
-		text = text[1:]
-	}
+	text = strings.TrimPrefix(text, "/")
 
 	if text == "" {
 		return nil

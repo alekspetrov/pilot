@@ -125,7 +125,7 @@ func TestStaticProjectSource_EmptyProjects(t *testing.T) {
 	source := NewStaticProjectSource(nil)
 
 	listed := source.ListProjects()
-	if listed != nil && len(listed) != 0 {
+	if len(listed) != 0 {
 		t.Errorf("Expected empty list, got %v", listed)
 	}
 
