@@ -56,6 +56,9 @@ type Controller struct {
 	// Owner and repo for GitHub operations
 	owner string
 	repo  string
+
+	// mergePollInterval overrides the default 10s poll in WaitForPRMerge (for tests).
+	mergePollInterval time.Duration
 }
 
 // NewController creates an autopilot controller with all required components.
@@ -886,16 +889,27 @@ func (c *Controller) checkExternalMergeOrClose(ctx context.Context, prState *PRS
 	return false
 }
 
-// WaitForPRMerge polls GetPRState every 10s until the PR reaches a terminal
-// state (merged/post-merge CI, CI failed, or pipeline failed) or the timeout
-// expires. The caller's context is also respected for cancellation.
+// SetMergePollInterval overrides the default 10s poll interval for WaitForPRMerge.
+// Intended for tests.
+func (c *Controller) SetMergePollInterval(d time.Duration) {
+	c.mergePollInterval = d
+}
+
+// WaitForPRMerge polls GetPRState every pollInterval (default 10s) until the
+// PR reaches a terminal state (merged/post-merge CI, CI failed, or pipeline
+// failed) or the timeout expires. The caller's context is also respected for
+// cancellation. Use SetMergePollInterval to override the interval for tests.
 func (c *Controller) WaitForPRMerge(ctx context.Context, prNumber int, timeout time.Duration) (PRMergeResult, error) {
 	start := time.Now()
 
 	deadline, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	ticker := time.NewTicker(10 * time.Second)
+	interval := c.mergePollInterval
+	if interval == 0 {
+		interval = 10 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	// Check immediately before first tick

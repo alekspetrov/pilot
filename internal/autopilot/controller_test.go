@@ -1511,14 +1511,14 @@ func TestWaitForPRMerge_TransitionsToMergedDuringWait(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Environment = EnvDev
 	c := NewController(cfg, ghClient, nil, "owner", "repo")
+	c.SetMergePollInterval(100 * time.Millisecond)
 
 	c.OnPRCreated(106, "http://pr/106", 56, "abc123", "pilot/GH-56")
 	c.mu.Lock()
 	c.activePRs[106].Stage = StageWaitingCI
 	c.mu.Unlock()
 
-	// Transition to merged after a short delay (before the 10s tick,
-	// so we need to test that eventually we pick it up)
+	// Transition to merged after a short delay
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		c.mu.Lock()
@@ -1526,8 +1526,7 @@ func TestWaitForPRMerge_TransitionsToMergedDuringWait(t *testing.T) {
 		c.mu.Unlock()
 	}()
 
-	// Timeout of 15s gives room for the 10s ticker to fire
-	result, err := c.WaitForPRMerge(context.Background(), 106, 15*time.Second)
+	result, err := c.WaitForPRMerge(context.Background(), 106, 5*time.Second)
 	if err != nil {
 		t.Fatalf("WaitForPRMerge returned error: %v", err)
 	}
