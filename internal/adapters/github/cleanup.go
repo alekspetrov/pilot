@@ -254,11 +254,12 @@ func (c *Cleaner) cleanupLabel(ctx context.Context, label string, threshold time
 
 		// Add a comment explaining the cleanup
 		var comment string
-		if label == LabelInProgress {
+		switch label {
+		case LabelInProgress:
 			comment = "🧹 **Pilot cleanup**: Removed stale `pilot-in-progress` label.\n\n" +
 				"This issue was marked as in-progress but no active Pilot execution was found. " +
 				"This can happen if Pilot was interrupted or crashed. The issue is now available for processing again."
-		} else if label == LabelFailed {
+		case LabelFailed:
 			comment = "🧹 **Pilot cleanup**: Removed stale `pilot-failed` label.\n\n" +
 				"This issue was marked as failed but has been stale for over 24 hours. " +
 				"The label has been removed to allow Pilot to retry this issue automatically."
