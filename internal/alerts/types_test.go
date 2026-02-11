@@ -56,6 +56,7 @@ func TestDefaultRules(t *testing.T) {
 		AlertTypeCircuitBreakerTrip: {"circuit_breaker_trip", true},
 		AlertTypeAPIErrorRateHigh:   {"api_error_rate_high", true},
 		AlertTypePRStuckWaitingCI:   {"pr_stuck_waiting_ci", true},
+		AlertTypeEscalation:         {"escalation", true},
 	}
 
 	if len(rules) != len(expectedRules) {

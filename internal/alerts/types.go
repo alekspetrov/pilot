@@ -36,6 +36,9 @@ const (
 	AlertTypeCircuitBreakerTrip AlertType = "circuit_breaker_trip"
 	AlertTypeAPIErrorRateHigh   AlertType = "api_error_rate_high"
 	AlertTypePRStuckWaitingCI   AlertType = "pr_stuck_waiting_ci"
+
+	// Escalation alerts (GH-848)
+	AlertTypeEscalation AlertType = "escalation"
 )
 
 // Alert represents an alert event
@@ -86,6 +89,9 @@ type RuleCondition struct {
 	FailedQueueThreshold int           `yaml:"failed_queue_threshold"` // Max failed issues
 	APIErrorRatePerMin   float64       `yaml:"api_error_rate_per_min"` // Errors/min threshold
 	PRStuckTimeout       time.Duration `yaml:"pr_stuck_timeout"`       // Max time in waiting_ci
+
+	// Escalation conditions (GH-848)
+	EscalationRetries int `yaml:"escalation_retries"` // Failures before escalation (default 3)
 }
 
 // AlertConfig holds the main alerting configuration
@@ -294,6 +300,19 @@ func defaultRules() []AlertRule {
 			Channels:    []string{},
 			Cooldown:    15 * time.Minute,
 			Description: "Alert when a PR is stuck in waiting_ci for too long",
+		},
+		// Escalation rule (GH-848)
+		{
+			Name:    "escalation",
+			Type:    AlertTypeEscalation,
+			Enabled: true,
+			Condition: RuleCondition{
+				EscalationRetries: 3,
+			},
+			Severity:    SeverityCritical,
+			Channels:    []string{}, // Will route to PagerDuty channels by severity
+			Cooldown:    1 * time.Hour,
+			Description: "Escalate to PagerDuty after repeated failures for the same source",
 		},
 	}
 }
