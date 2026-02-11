@@ -417,6 +417,10 @@ func (c *Controller) handleWaitingCI(ctx context.Context, prState *PRState) erro
 		if !prState.CIWaitStartedAt.IsZero() {
 			c.metrics.RecordCIWaitDuration(time.Since(prState.CIWaitStartedAt))
 		}
+		// Capture discovered checks for this PR (auto-discovery mode)
+		if discovered := c.ciMonitor.GetDiscoveredChecks(sha); len(discovered) > 0 {
+			prState.DiscoveredChecks = discovered
+		}
 	case CIFailure:
 		c.log.Warn("CI failed", "pr", prState.PRNumber, "sha", ShortSHA(sha))
 		prState.Stage = StageCIFailed
@@ -788,9 +792,15 @@ func (c *Controller) handleMergeConflict(ctx context.Context, prState *PRState) 
 // removePR removes PR from tracking.
 func (c *Controller) removePR(prNumber int) {
 	c.mu.Lock()
+	prState := c.activePRs[prNumber]
 	delete(c.activePRs, prNumber)
 	delete(c.prFailures, prNumber)
 	c.mu.Unlock()
+
+	// Clear CI discovery state for this PR's SHA
+	if prState != nil && prState.HeadSHA != "" {
+		c.ciMonitor.ClearDiscovery(prState.HeadSHA)
+	}
 
 	c.persistRemovePR(prNumber)
 	c.removePRFailures(prNumber)

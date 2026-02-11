@@ -62,7 +62,10 @@ type Config struct {
 	// CIPollInterval is how often to check CI status.
 	CIPollInterval time.Duration `yaml:"ci_poll_interval"`
 	// RequiredChecks lists CI checks that must pass before merge.
+	// Deprecated: Use CIChecks.Required instead. Kept for backward compatibility.
 	RequiredChecks []string `yaml:"required_checks"`
+	// CIChecks configures CI check discovery and filtering.
+	CIChecks *CIChecksConfig `yaml:"ci_checks"`
 
 	// Feedback Loop
 	// AutoCreateIssues enables automatic issue creation for CI failures.
@@ -135,6 +138,45 @@ type ReleaseConfig struct {
 	NotifyOnRelease bool `yaml:"notify_on_release"`
 	// RequireCI waits for post-merge CI before releasing.
 	RequireCI bool `yaml:"require_ci"`
+}
+
+// CIChecksMode determines how CI checks are discovered.
+type CIChecksMode string
+
+const (
+	// CIChecksModeAuto discovers checks from GitHub API.
+	CIChecksModeAuto CIChecksMode = "auto"
+	// CIChecksModeManual uses explicitly configured checks.
+	CIChecksModeManual CIChecksMode = "manual"
+)
+
+// CIChecksConfig configures CI check discovery and filtering.
+type CIChecksConfig struct {
+	// Mode determines how checks are discovered: "auto" or "manual".
+	// Auto mode discovers checks from GitHub API.
+	// Manual mode uses the Required list (same as legacy RequiredChecks).
+	// Default: "auto"
+	Mode CIChecksMode `yaml:"mode"`
+	// Exclude contains glob patterns for checks to ignore in auto mode.
+	// Examples: "codecov/*", "*-optional", "dependabot/*"
+	Exclude []string `yaml:"exclude"`
+	// Required lists explicit check names for manual mode.
+	// Ignored in auto mode.
+	Required []string `yaml:"required"`
+	// DiscoveryGracePeriod is how long to wait for CI checks to appear in auto mode.
+	// GitHub Actions may take a few seconds to start after push.
+	// Default: 60s
+	DiscoveryGracePeriod time.Duration `yaml:"discovery_grace_period"`
+}
+
+// DefaultCIChecksConfig returns sensible defaults for CI checks configuration.
+func DefaultCIChecksConfig() *CIChecksConfig {
+	return &CIChecksConfig{
+		Mode:                 CIChecksModeAuto,
+		Exclude:              []string{},
+		Required:             []string{},
+		DiscoveryGracePeriod: 60 * time.Second,
+	}
 }
 
 // DefaultReleaseConfig returns sensible defaults for release configuration.
@@ -242,4 +284,7 @@ type PRState struct {
 	ReleaseVersion string
 	// ReleaseBumpType is the detected bump type from commits.
 	ReleaseBumpType BumpType
+	// DiscoveredChecks holds CI checks discovered via auto-discovery for this PR.
+	// Only populated in auto mode after the discovery grace period.
+	DiscoveredChecks []string
 }

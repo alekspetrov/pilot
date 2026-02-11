@@ -776,3 +776,377 @@ func TestCIMonitor_GetCIStatus(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// Auto-Discovery Tests (GH-859)
+// =============================================================================
+
+func TestCIMonitor_AutoDiscovery(t *testing.T) {
+	// Test that auto-discovery mode discovers checks from GitHub API
+	pollCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pollCount++
+		resp := github.CheckRunsResponse{
+			TotalCount: 3,
+			CheckRuns: []github.CheckRun{
+				{Name: "build", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "test", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "lint", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+			},
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+	cfg.CIWaitTimeout = 1 * time.Second
+	cfg.RequiredChecks = nil // Clear legacy config to enable auto mode
+	cfg.CIChecks = &CIChecksConfig{
+		Mode:                 CIChecksModeAuto,
+		Exclude:              []string{},
+		DiscoveryGracePeriod: 50 * time.Millisecond, // Short grace period for testing
+	}
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	// Verify auto mode is enabled
+	if !monitor.IsAutoDiscoveryEnabled() {
+		t.Fatal("IsAutoDiscoveryEnabled() = false, want true")
+	}
+
+	// First check during grace period
+	sha := "abc1234"
+	status1, err := monitor.CheckCI(context.Background(), sha)
+	if err != nil {
+		t.Fatalf("CheckCI() error = %v", err)
+	}
+	// During grace period, should still return success (all runs pass)
+	if status1 != CISuccess {
+		t.Errorf("CheckCI() during grace = %s, want %s", status1, CISuccess)
+	}
+
+	// No discovered checks yet (still in grace period)
+	if discovered := monitor.GetDiscoveredChecks(sha); len(discovered) > 0 {
+		t.Errorf("GetDiscoveredChecks() during grace = %v, want empty", discovered)
+	}
+
+	// Wait for grace period to expire
+	time.Sleep(60 * time.Millisecond)
+
+	// Check again after grace period
+	status2, err := monitor.CheckCI(context.Background(), sha)
+	if err != nil {
+		t.Fatalf("CheckCI() after grace error = %v", err)
+	}
+	if status2 != CISuccess {
+		t.Errorf("CheckCI() after grace = %s, want %s", status2, CISuccess)
+	}
+
+	// Now checks should be discovered
+	discovered := monitor.GetDiscoveredChecks(sha)
+	if len(discovered) != 3 {
+		t.Errorf("GetDiscoveredChecks() = %v, want 3 checks", discovered)
+	}
+}
+
+func TestCIMonitor_AutoDiscovery_WithExclusions(t *testing.T) {
+	// Test that exclusion patterns filter out checks
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := github.CheckRunsResponse{
+			TotalCount: 5,
+			CheckRuns: []github.CheckRun{
+				{Name: "build", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "test", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "lint", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "codecov/patch", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "codecov/project", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+			},
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+	cfg.CIWaitTimeout = 1 * time.Second
+	cfg.RequiredChecks = nil // Clear legacy config to enable auto mode
+	cfg.CIChecks = &CIChecksConfig{
+		Mode:                 CIChecksModeAuto,
+		Exclude:              []string{"codecov/*"},
+		DiscoveryGracePeriod: 10 * time.Millisecond, // Very short for testing
+	}
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	sha := "abc1234"
+
+	// First call starts discovery
+	_, _ = monitor.CheckCI(context.Background(), sha)
+
+	// Wait for grace period to expire
+	time.Sleep(20 * time.Millisecond)
+
+	// Check CI to trigger discovery lock-in
+	status, err := monitor.CheckCI(context.Background(), sha)
+	if err != nil {
+		t.Fatalf("CheckCI() error = %v", err)
+	}
+	if status != CISuccess {
+		t.Errorf("CheckCI() = %s, want %s", status, CISuccess)
+	}
+
+	// Verify exclusions were applied
+	discovered := monitor.GetDiscoveredChecks(sha)
+	if len(discovered) != 3 {
+		t.Errorf("GetDiscoveredChecks() = %v, want 3 checks (excluding codecov/*)", discovered)
+	}
+
+	// Verify codecov checks were excluded
+	for _, name := range discovered {
+		if name == "codecov/patch" || name == "codecov/project" {
+			t.Errorf("excluded check %s found in discovered checks", name)
+		}
+	}
+}
+
+func TestCIMonitor_AutoDiscovery_GracePeriod(t *testing.T) {
+	// Test that checks discovered during grace period are aggregated
+	checksAvailable := 1
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate checks appearing over time
+		runs := []github.CheckRun{
+			{Name: "build", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+		}
+		if checksAvailable >= 2 {
+			runs = append(runs, github.CheckRun{Name: "test", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess})
+		}
+		if checksAvailable >= 3 {
+			runs = append(runs, github.CheckRun{Name: "lint", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess})
+		}
+
+		resp := github.CheckRunsResponse{
+			TotalCount: len(runs),
+			CheckRuns:  runs,
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+	cfg.CIWaitTimeout = 1 * time.Second
+	cfg.RequiredChecks = nil // Clear legacy config to enable auto mode
+	cfg.CIChecks = &CIChecksConfig{
+		Mode:                 CIChecksModeAuto,
+		Exclude:              []string{},
+		DiscoveryGracePeriod: 100 * time.Millisecond,
+	}
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+	sha := "abc1234"
+
+	// First poll: only 1 check visible
+	_, _ = monitor.CheckCI(context.Background(), sha)
+
+	// Simulate more checks appearing
+	checksAvailable = 2
+	time.Sleep(20 * time.Millisecond)
+	_, _ = monitor.CheckCI(context.Background(), sha)
+
+	checksAvailable = 3
+	time.Sleep(20 * time.Millisecond)
+	_, _ = monitor.CheckCI(context.Background(), sha)
+
+	// Still in grace period - no locks yet
+	if discovered := monitor.GetDiscoveredChecks(sha); len(discovered) > 0 {
+		t.Errorf("checks locked in before grace period ended: %v", discovered)
+	}
+
+	// Wait for grace period to expire
+	time.Sleep(70 * time.Millisecond)
+
+	// Final check - should discover all 3 checks
+	status, err := monitor.CheckCI(context.Background(), sha)
+	if err != nil {
+		t.Fatalf("CheckCI() error = %v", err)
+	}
+	if status != CISuccess {
+		t.Errorf("CheckCI() = %s, want %s", status, CISuccess)
+	}
+
+	discovered := monitor.GetDiscoveredChecks(sha)
+	if len(discovered) != 3 {
+		t.Errorf("GetDiscoveredChecks() = %v (len=%d), want 3 checks", discovered, len(discovered))
+	}
+}
+
+func TestCIMonitor_ManualMode_BackwardCompat(t *testing.T) {
+	// Test that legacy required_checks triggers manual mode
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := github.CheckRunsResponse{
+			TotalCount: 4,
+			CheckRuns: []github.CheckRun{
+				{Name: "build", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "test", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "lint", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "extra-check", Status: github.CheckRunCompleted, Conclusion: github.ConclusionFailure}, // Should be ignored
+			},
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+	cfg.CIWaitTimeout = 1 * time.Second
+	// Legacy config: required_checks without ci_checks
+	cfg.RequiredChecks = []string{"build", "test", "lint"}
+	cfg.CIChecks = nil // No new config
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	// Should be in manual mode (migrated from legacy)
+	if monitor.IsAutoDiscoveryEnabled() {
+		t.Fatal("IsAutoDiscoveryEnabled() = true, want false (legacy mode)")
+	}
+	if monitor.GetCIChecksMode() != CIChecksModeManual {
+		t.Errorf("GetCIChecksMode() = %s, want %s", monitor.GetCIChecksMode(), CIChecksModeManual)
+	}
+
+	// Should only check build, test, lint (ignore failing extra-check)
+	status, err := monitor.CheckCI(context.Background(), "abc1234")
+	if err != nil {
+		t.Fatalf("CheckCI() error = %v", err)
+	}
+	if status != CISuccess {
+		t.Errorf("CheckCI() = %s, want %s (extra-check should be ignored)", status, CISuccess)
+	}
+}
+
+func TestCIMonitor_matchesExclude_GlobPatterns(t *testing.T) {
+	ghClient := github.NewClient(testutil.FakeGitHubToken)
+	cfg := DefaultConfig()
+	cfg.CIChecks = &CIChecksConfig{
+		Mode: CIChecksModeAuto,
+		Exclude: []string{
+			"codecov/*",
+			"*-optional",
+			"dependabot/*",
+		},
+	}
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	tests := []struct {
+		name    string
+		want    bool
+	}{
+		{"codecov/patch", true},
+		{"codecov/project", true},
+		{"build-optional", true},
+		{"test-optional", true},
+		{"dependabot/npm", true},
+		{"dependabot/go", true},
+		{"build", false},
+		{"test", false},
+		{"lint", false},
+		{"codecov", false}, // No slash, doesn't match codecov/*
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := monitor.matchesExclude(tt.name)
+			if got != tt.want {
+				t.Errorf("matchesExclude(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCIMonitor_ClearDiscovery(t *testing.T) {
+	ghClient := github.NewClient(testutil.FakeGitHubToken)
+	cfg := DefaultConfig()
+	cfg.CIChecks = &CIChecksConfig{
+		Mode:                 CIChecksModeAuto,
+		DiscoveryGracePeriod: 10 * time.Millisecond,
+	}
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	sha := "abc1234"
+
+	// Simulate discovery state
+	monitor.mu.Lock()
+	monitor.discoveredSHAs[sha] = []string{"build", "test"}
+	monitor.discoveryStart[sha] = time.Now().Add(-time.Hour)
+	monitor.mu.Unlock()
+
+	// Verify state exists
+	if discovered := monitor.GetDiscoveredChecks(sha); len(discovered) != 2 {
+		t.Fatalf("GetDiscoveredChecks() = %v, want 2 checks", discovered)
+	}
+
+	// Clear discovery
+	monitor.ClearDiscovery(sha)
+
+	// Verify state cleared
+	if discovered := monitor.GetDiscoveredChecks(sha); len(discovered) != 0 {
+		t.Errorf("GetDiscoveredChecks() after clear = %v, want empty", discovered)
+	}
+
+	monitor.mu.RLock()
+	_, hasStart := monitor.discoveryStart[sha]
+	monitor.mu.RUnlock()
+	if hasStart {
+		t.Error("discoveryStart still has SHA after ClearDiscovery()")
+	}
+}
+
+func TestCIMonitor_AutoDiscovery_FailureDetection(t *testing.T) {
+	// Test that failing checks are detected in auto mode
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := github.CheckRunsResponse{
+			TotalCount: 3,
+			CheckRuns: []github.CheckRun{
+				{Name: "build", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "test", Status: github.CheckRunCompleted, Conclusion: github.ConclusionFailure}, // Failure!
+				{Name: "lint", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+			},
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.RequiredChecks = nil // Clear legacy config to enable auto mode
+	cfg.CIChecks = &CIChecksConfig{
+		Mode:                 CIChecksModeAuto,
+		DiscoveryGracePeriod: 10 * time.Millisecond,
+	}
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	// Wait for grace period
+	time.Sleep(20 * time.Millisecond)
+
+	status, err := monitor.CheckCI(context.Background(), "abc1234")
+	if err != nil {
+		t.Fatalf("CheckCI() error = %v", err)
+	}
+	if status != CIFailure {
+		t.Errorf("CheckCI() = %s, want %s", status, CIFailure)
+	}
+}
