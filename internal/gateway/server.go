@@ -31,6 +31,7 @@ type Server struct {
 	running             bool
 	customHandlers      map[string]http.Handler
 	githubWebhookSecret string // Secret for GitHub webhook signature validation
+	prometheusExporter  *PrometheusExporter
 }
 
 // Config holds gateway server configuration including network binding options.
@@ -132,6 +133,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Public endpoints (no auth required)
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/metrics", s.handleMetrics)
 
 	// Protected API endpoints (auth required when configured)
 	apiMux := http.NewServeMux()
@@ -191,6 +193,14 @@ func (s *Server) RegisterHandler(path string, handler http.Handler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.customHandlers[path] = handler
+}
+
+// SetMetricsSource sets the metrics source for the Prometheus /metrics endpoint.
+// Must be called before Start().
+func (s *Server) SetMetricsSource(source MetricsSource) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prometheusExporter = NewPrometheusExporter(source)
 }
 
 // Shutdown gracefully shuts down the server with a 30-second timeout.
@@ -425,4 +435,22 @@ func (s *Server) handleAsanaWebhook(w http.ResponseWriter, r *http.Request) {
 	s.router.HandleWebhook("asana", payload)
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleMetrics returns metrics in Prometheus text format
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	exporter := s.prometheusExporter
+	s.mu.RUnlock()
+
+	if exporter == nil {
+		http.Error(w, "Metrics not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	if err := exporter.WritePrometheus(w); err != nil {
+		http.Error(w, "Failed to write metrics", http.StatusInternalServerError)
+		return
+	}
 }
