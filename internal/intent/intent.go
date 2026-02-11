@@ -18,6 +18,18 @@ const (
 	IntentTask     Intent = "task"
 )
 
+// ConversationMessage represents a message in the conversation
+type ConversationMessage struct {
+	Role    string `json:"role"` // "user" or "assistant"
+	Content string `json:"content"`
+}
+
+// ClassifyResponse is the response from the classification API
+type ClassifyResponse struct {
+	Intent     string  `json:"intent"`
+	Confidence float64 `json:"confidence"`
+}
+
 // Common greeting patterns
 var greetingPatterns = []string{
 	"hi", "hello", "hey", "hola", "привет", "yo", "sup",

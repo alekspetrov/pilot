@@ -9,31 +9,6 @@ import (
 	"time"
 )
 
-// Intent represents the detected intent of a message
-type Intent string
-
-const (
-	IntentCommand  Intent = "command"
-	IntentGreeting Intent = "greeting"
-	IntentResearch Intent = "research"
-	IntentPlanning Intent = "planning"
-	IntentQuestion Intent = "question"
-	IntentChat     Intent = "chat"
-	IntentTask     Intent = "task"
-)
-
-// ConversationMessage represents a message in the conversation
-type ConversationMessage struct {
-	Role    string `json:"role"` // "user" or "assistant"
-	Content string `json:"content"`
-}
-
-// ClassifyResponse is the response from the classification API
-type ClassifyResponse struct {
-	Intent     string  `json:"intent"`
-	Confidence float64 `json:"confidence"`
-}
-
 // Classifier classifies user messages into intents
 type Classifier interface {
 	Classify(ctx context.Context, messages []ConversationMessage, currentMessage string) (Intent, error)
