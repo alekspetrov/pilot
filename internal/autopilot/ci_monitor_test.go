@@ -776,3 +776,225 @@ func TestCIMonitor_GetCIStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestCIMonitor_AutoDiscovery(t *testing.T) {
+	// Test: Auto mode discovers checks from API response
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := github.CheckRunsResponse{
+			TotalCount: 3,
+			CheckRuns: []github.CheckRun{
+				{Name: "test", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "lint", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "build", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+			},
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+	cfg.CIWaitTimeout = 1 * time.Second
+	cfg.CIChecks = &CIChecksConfig{
+		Mode:                 "auto",
+		Exclude:              []string{},
+		DiscoveryGracePeriod: 10 * time.Millisecond,
+	}
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	status, err := monitor.WaitForCI(context.Background(), "abc1234")
+	if err != nil {
+		t.Fatalf("WaitForCI() error = %v", err)
+	}
+	if status != CISuccess {
+		t.Errorf("WaitForCI() status = %s, want %s", status, CISuccess)
+	}
+
+	// Verify all 3 checks were discovered
+	discovered := monitor.GetDiscoveredChecks("abc1234")
+	if len(discovered) != 3 {
+		t.Errorf("GetDiscoveredChecks() = %v, want 3 checks", discovered)
+	}
+}
+
+func TestCIMonitor_AutoDiscovery_WithExclusions(t *testing.T) {
+	// Test: Excluded checks filtered out
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := github.CheckRunsResponse{
+			TotalCount: 2,
+			CheckRuns: []github.CheckRun{
+				{Name: "test", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "codecov/upload", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+			},
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+	cfg.CIWaitTimeout = 1 * time.Second
+	cfg.CIChecks = &CIChecksConfig{
+		Mode:                 "auto",
+		Exclude:              []string{"codecov/*"},
+		DiscoveryGracePeriod: 10 * time.Millisecond,
+	}
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	status, err := monitor.WaitForCI(context.Background(), "abc1234")
+	if err != nil {
+		t.Fatalf("WaitForCI() error = %v", err)
+	}
+	if status != CISuccess {
+		t.Errorf("WaitForCI() status = %s, want %s", status, CISuccess)
+	}
+
+	// Verify only "test" was tracked (codecov/upload excluded)
+	discovered := monitor.GetDiscoveredChecks("abc1234")
+	if len(discovered) != 1 {
+		t.Errorf("GetDiscoveredChecks() = %v, want 1 check", discovered)
+	}
+	if len(discovered) > 0 && discovered[0] != "test" {
+		t.Errorf("GetDiscoveredChecks()[0] = %s, want test", discovered[0])
+	}
+}
+
+func TestCIMonitor_AutoDiscovery_GracePeriod(t *testing.T) {
+	// Test: Grace period waits for checks to appear
+	callCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var resp github.CheckRunsResponse
+		if callCount <= 2 {
+			// First 2 calls: no checks yet
+			resp = github.CheckRunsResponse{
+				TotalCount: 0,
+				CheckRuns:  []github.CheckRun{},
+			}
+		} else {
+			// Subsequent calls: checks appear
+			resp = github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				},
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+	cfg.CIWaitTimeout = 500 * time.Millisecond
+	cfg.CIChecks = &CIChecksConfig{
+		Mode:                 "auto",
+		Exclude:              []string{},
+		DiscoveryGracePeriod: 100 * time.Millisecond,
+	}
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	status, err := monitor.WaitForCI(context.Background(), "abc1234")
+	if err != nil {
+		t.Fatalf("WaitForCI() error = %v", err)
+	}
+	if status != CISuccess {
+		t.Errorf("WaitForCI() status = %s, want %s", status, CISuccess)
+	}
+	// Should have polled multiple times before checks appeared
+	if callCount < 3 {
+		t.Errorf("expected at least 3 polls (grace period wait), got %d", callCount)
+	}
+}
+
+func TestCIMonitor_ManualMode_BackwardCompat(t *testing.T) {
+	// Test: Manual mode uses required list (backward compatibility)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := github.CheckRunsResponse{
+			TotalCount: 4,
+			CheckRuns: []github.CheckRun{
+				{Name: "build", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "test", Status: github.CheckRunCompleted, Conclusion: github.ConclusionSuccess},
+				{Name: "lint", Status: github.CheckRunCompleted, Conclusion: github.ConclusionFailure}, // Fails but not required
+				{Name: "coverage", Status: github.CheckRunInProgress, Conclusion: ""},                  // Running but not required
+			},
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.CIPollInterval = 10 * time.Millisecond
+	cfg.CIWaitTimeout = 1 * time.Second
+	// Use legacy required_checks which should trigger manual mode
+	cfg.RequiredChecks = []string{"build", "test"}
+	cfg.CIChecks = nil // Let constructor handle it
+
+	monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+	// Verify manual mode is activated
+	if monitor.ciChecks.Mode != "manual" {
+		t.Errorf("ciChecks.Mode = %s, want manual", monitor.ciChecks.Mode)
+	}
+
+	status, err := monitor.WaitForCI(context.Background(), "abc1234")
+	if err != nil {
+		t.Fatalf("WaitForCI() error = %v", err)
+	}
+	// Should succeed because only build and test are required (both pass)
+	if status != CISuccess {
+		t.Errorf("WaitForCI() status = %s, want %s (unrequired checks should be ignored)", status, CISuccess)
+	}
+}
+
+func TestCIMonitor_matchesExclude_GlobPatterns(t *testing.T) {
+	// Test: Glob pattern matching
+	tests := []struct {
+		pattern string
+		name    string
+		want    bool
+	}{
+		{"codecov/*", "codecov/upload", true},
+		{"codecov/*", "codecov/report", true},
+		{"codecov/*", "codecov", false}, // No slash after codecov
+		{"*-optional", "lint-optional", true},
+		{"*-optional", "test-optional", true},
+		{"*-optional", "build", false},
+		{"build", "build", true},
+		{"build", "test", false},
+		{"build", "build-extra", false}, // Exact match, not prefix
+		{"build*", "build-extra", true},
+		{"*/coverage", "test/coverage", true},
+		{"*/coverage", "lint/coverage", true},
+	}
+
+	ghClient := github.NewClient(testutil.FakeGitHubToken)
+	cfg := DefaultConfig()
+
+	for _, tt := range tests {
+		t.Run(tt.pattern+"_"+tt.name, func(t *testing.T) {
+			cfg.CIChecks = &CIChecksConfig{
+				Mode:    "auto",
+				Exclude: []string{tt.pattern},
+			}
+			monitor := NewCIMonitor(ghClient, "owner", "repo", cfg)
+
+			got := monitor.matchesExclude(tt.name)
+			if got != tt.want {
+				t.Errorf("matchesExclude(%q) with pattern %q = %v, want %v", tt.name, tt.pattern, got, tt.want)
+			}
+		})
+	}
+}
