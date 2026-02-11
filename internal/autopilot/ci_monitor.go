@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path"
+	"sync"
 	"time"
 
 	"github.com/alekspetrov/pilot/internal/adapters/github"
@@ -11,13 +13,18 @@ import (
 
 // CIMonitor watches GitHub CI status for PRs.
 type CIMonitor struct {
-	ghClient       *github.Client
-	owner          string
-	repo           string
-	pollInterval   time.Duration
-	waitTimeout    time.Duration
-	requiredChecks []string
-	log            *slog.Logger
+	ghClient     *github.Client
+	owner        string
+	repo         string
+	pollInterval time.Duration
+	waitTimeout  time.Duration
+	ciChecks     *CIChecksConfig // replaces requiredChecks
+	log          *slog.Logger
+
+	// Discovery state (for auto mode)
+	discoveredChecks map[string][]string   // sha -> check names
+	discoveryStart   map[string]time.Time  // sha -> start time
+	mu               sync.RWMutex
 }
 
 // NewCIMonitor creates a CI monitor with configuration from Config.
@@ -27,14 +34,28 @@ func NewCIMonitor(ghClient *github.Client, owner, repo string, cfg *Config) *CIM
 	if cfg.Environment == EnvDev && cfg.DevCITimeout > 0 {
 		timeout = cfg.DevCITimeout
 	}
+
+	ciChecks := cfg.CIChecks
+	if ciChecks == nil {
+		ciChecks = &CIChecksConfig{Mode: "auto", DiscoveryGracePeriod: 60 * time.Second}
+	}
+
+	// Backward compatibility: legacy required_checks -> manual mode
+	if len(cfg.RequiredChecks) > 0 {
+		ciChecks.Mode = "manual"
+		ciChecks.Required = cfg.RequiredChecks
+	}
+
 	return &CIMonitor{
-		ghClient:       ghClient,
-		owner:          owner,
-		repo:           repo,
-		pollInterval:   cfg.CIPollInterval,
-		waitTimeout:    timeout,
-		requiredChecks: cfg.RequiredChecks,
-		log:            slog.Default().With("component", "ci-monitor"),
+		ghClient:         ghClient,
+		owner:            owner,
+		repo:             repo,
+		pollInterval:     cfg.CIPollInterval,
+		waitTimeout:      timeout,
+		ciChecks:         ciChecks,
+		discoveredChecks: make(map[string][]string),
+		discoveryStart:   make(map[string]time.Time),
+		log:              slog.Default().With("component", "ci-monitor"),
 	}
 }
 
@@ -47,7 +68,7 @@ func (m *CIMonitor) WaitForCI(ctx context.Context, sha string) (CIStatus, error)
 	defer ticker.Stop()
 
 	// Log initial status
-	m.log.Info("waiting for CI", "sha", ShortSHA(sha), "timeout", m.waitTimeout, "required_checks", m.requiredChecks)
+	m.log.Info("waiting for CI", "sha", ShortSHA(sha), "timeout", m.waitTimeout, "mode", m.ciChecks.Mode)
 
 	for {
 		select {
@@ -81,14 +102,22 @@ func (m *CIMonitor) checkStatus(ctx context.Context, sha string) (CIStatus, erro
 		return CIPending, err
 	}
 
-	// If no required checks configured, check all runs
-	if len(m.requiredChecks) == 0 {
-		return m.checkAllRuns(checkRuns), nil
+	if m.ciChecks.Mode == "manual" {
+		return m.checkRequiredRuns(checkRuns), nil
+	}
+	return m.checkAutoDiscoveredRuns(ctx, sha, checkRuns)
+}
+
+// checkRequiredRuns checks status of explicitly required checks (manual mode).
+func (m *CIMonitor) checkRequiredRuns(checkRuns *github.CheckRunsResponse) CIStatus {
+	required := m.ciChecks.Required
+	if len(required) == 0 {
+		return m.checkAllRuns(checkRuns)
 	}
 
 	// Track required checks
 	requiredStatus := make(map[string]CIStatus)
-	for _, name := range m.requiredChecks {
+	for _, name := range required {
 		requiredStatus[name] = CIPending
 	}
 
@@ -100,7 +129,89 @@ func (m *CIMonitor) checkStatus(ctx context.Context, sha string) (CIStatus, erro
 	}
 
 	// Determine overall status
-	return m.aggregateStatus(requiredStatus), nil
+	return m.aggregateStatus(requiredStatus)
+}
+
+// checkAutoDiscoveredRuns discovers checks from API and tracks their status.
+func (m *CIMonitor) checkAutoDiscoveredRuns(ctx context.Context, sha string, checkRuns *github.CheckRunsResponse) (CIStatus, error) {
+	m.mu.Lock()
+
+	// Initialize discovery start time if needed
+	if _, ok := m.discoveryStart[sha]; !ok {
+		m.discoveryStart[sha] = time.Now()
+	}
+	startTime := m.discoveryStart[sha]
+
+	// Filter checks based on exclusion patterns
+	var checks []string
+	for _, run := range checkRuns.CheckRuns {
+		if !m.matchesExclude(run.Name) {
+			checks = append(checks, run.Name)
+		}
+	}
+
+	// Update discovered checks for this SHA
+	m.discoveredChecks[sha] = checks
+	m.mu.Unlock()
+
+	// During grace period, wait for checks to appear
+	if len(checks) == 0 {
+		elapsed := time.Since(startTime)
+		if elapsed < m.ciChecks.DiscoveryGracePeriod {
+			m.log.Debug("waiting for checks to appear",
+				"sha", ShortSHA(sha),
+				"elapsed", elapsed,
+				"grace_period", m.ciChecks.DiscoveryGracePeriod,
+			)
+			return CIPending, nil
+		}
+		// Grace period expired with no checks - consider success (no CI configured)
+		m.log.Info("no CI checks discovered after grace period",
+			"sha", ShortSHA(sha),
+			"grace_period", m.ciChecks.DiscoveryGracePeriod,
+		)
+		return CISuccess, nil
+	}
+
+	// Build status map for discovered checks
+	checkStatus := make(map[string]CIStatus)
+	for _, run := range checkRuns.CheckRuns {
+		if !m.matchesExclude(run.Name) {
+			checkStatus[run.Name] = m.mapCheckStatus(run.Status, run.Conclusion)
+		}
+	}
+
+	return m.aggregateStatus(checkStatus), nil
+}
+
+// matchesExclude checks if a check name matches any exclusion pattern.
+func (m *CIMonitor) matchesExclude(name string) bool {
+	for _, pattern := range m.ciChecks.Exclude {
+		if matched, _ := path.Match(pattern, name); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// GetDiscoveredChecks returns the list of discovered check names for a SHA.
+func (m *CIMonitor) GetDiscoveredChecks(sha string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if checks, ok := m.discoveredChecks[sha]; ok {
+		result := make([]string, len(checks))
+		copy(result, checks)
+		return result
+	}
+	return nil
+}
+
+// ClearDiscovery removes discovery state for a SHA.
+func (m *CIMonitor) ClearDiscovery(sha string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.discoveredChecks, sha)
+	delete(m.discoveryStart, sha)
 }
 
 // checkAllRuns returns aggregate status when no required checks are configured.
@@ -192,7 +303,7 @@ func (m *CIMonitor) CheckCI(ctx context.Context, sha string) (CIStatus, error) {
 	m.log.Debug("CheckCI: status check complete",
 		"sha", ShortSHA(sha),
 		"status", status,
-		"required_checks", m.requiredChecks,
+		"mode", m.ciChecks.Mode,
 	)
 	return status, nil
 }
