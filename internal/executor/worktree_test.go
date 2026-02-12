@@ -25,29 +25,29 @@ func setupTestRepo(t *testing.T) string {
 	cmd := exec.Command("git", "init")
 	cmd.Dir = dir
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		t.Fatalf("failed to init git repo: %v", err)
 	}
 
 	// Configure git user for commits
-	exec.Command("git", "-C", dir, "config", "user.email", "test@example.com").Run()
-	exec.Command("git", "-C", dir, "config", "user.name", "Test User").Run()
+	_ = exec.Command("git", "-C", dir, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", dir, "config", "user.name", "Test User").Run()
 
 	// Create initial commit (required for worktree)
 	testFile := filepath.Join(dir, "README.md")
 	if err := os.WriteFile(testFile, []byte("# Test Repo\n"), 0644); err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
 	cmd = exec.Command("git", "add", ".")
 	cmd.Dir = dir
-	cmd.Run()
+	_ = cmd.Run()
 
 	cmd = exec.Command("git", "commit", "-m", "Initial commit")
 	cmd.Dir = dir
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		t.Fatalf("failed to create initial commit: %v", err)
 	}
 
@@ -56,7 +56,7 @@ func setupTestRepo(t *testing.T) string {
 
 func TestCreateWorktree(t *testing.T) {
 	repoPath := setupTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	ctx := context.Background()
 	manager := NewWorktreeManager(repoPath)
@@ -98,7 +98,7 @@ func TestCreateWorktree(t *testing.T) {
 
 func TestCleanupIsIdempotent(t *testing.T) {
 	repoPath := setupTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	ctx := context.Background()
 	manager := NewWorktreeManager(repoPath)
@@ -121,7 +121,7 @@ func TestCleanupIsIdempotent(t *testing.T) {
 
 func TestCleanupOnPanic(t *testing.T) {
 	repoPath := setupTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	ctx := context.Background()
 	manager := NewWorktreeManager(repoPath)
@@ -131,7 +131,7 @@ func TestCleanupOnPanic(t *testing.T) {
 	// Simulate panic in a function that uses worktree
 	func() {
 		defer func() {
-			recover() // Recover from panic
+			_ = recover() // Recover from panic
 		}()
 
 		result, err := manager.CreateWorktree(ctx, "GH-789")
@@ -163,7 +163,7 @@ func TestCleanupOnPanic(t *testing.T) {
 
 func TestConcurrentWorktrees(t *testing.T) {
 	repoPath := setupTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	ctx := context.Background()
 	manager := NewWorktreeManager(repoPath)
@@ -233,7 +233,7 @@ func TestConcurrentWorktrees(t *testing.T) {
 
 func TestCleanupAll(t *testing.T) {
 	repoPath := setupTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	ctx := context.Background()
 	manager := NewWorktreeManager(repoPath)
@@ -270,7 +270,7 @@ func TestCleanupAll(t *testing.T) {
 
 func TestStandaloneCreateWorktree(t *testing.T) {
 	repoPath := setupTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	ctx := context.Background()
 
@@ -331,58 +331,58 @@ func setupTestRepoWithRemote(t *testing.T) (string, string) {
 	cmd := exec.Command("git", "init", "--bare")
 	cmd.Dir = remoteDir
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(remoteDir)
+		_ = os.RemoveAll(remoteDir)
 		t.Fatalf("failed to init bare repo: %v", err)
 	}
 
 	// Create local repository
 	localDir, err := os.MkdirTemp("", "worktree-local-*")
 	if err != nil {
-		os.RemoveAll(remoteDir)
+		_ = os.RemoveAll(remoteDir)
 		t.Fatalf("failed to create local dir: %v", err)
 	}
 
 	cmd = exec.Command("git", "init")
 	cmd.Dir = localDir
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(remoteDir)
-		os.RemoveAll(localDir)
+		_ = os.RemoveAll(remoteDir)
+		_ = os.RemoveAll(localDir)
 		t.Fatalf("failed to init local repo: %v", err)
 	}
 
 	// Configure git user
-	exec.Command("git", "-C", localDir, "config", "user.email", "test@example.com").Run()
-	exec.Command("git", "-C", localDir, "config", "user.name", "Test User").Run()
+	_ = exec.Command("git", "-C", localDir, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", localDir, "config", "user.name", "Test User").Run()
 
 	// Create initial commit
 	testFile := filepath.Join(localDir, "README.md")
 	if err := os.WriteFile(testFile, []byte("# Test Repo\n"), 0644); err != nil {
-		os.RemoveAll(remoteDir)
-		os.RemoveAll(localDir)
+		_ = os.RemoveAll(remoteDir)
+		_ = os.RemoveAll(localDir)
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	exec.Command("git", "-C", localDir, "add", ".").Run()
+	_ = exec.Command("git", "-C", localDir, "add", ".").Run()
 	cmd = exec.Command("git", "-C", localDir, "commit", "-m", "Initial commit")
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(remoteDir)
-		os.RemoveAll(localDir)
+		_ = os.RemoveAll(remoteDir)
+		_ = os.RemoveAll(localDir)
 		t.Fatalf("failed to commit: %v", err)
 	}
 
 	// Add remote
 	cmd = exec.Command("git", "-C", localDir, "remote", "add", "origin", remoteDir)
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(remoteDir)
-		os.RemoveAll(localDir)
+		_ = os.RemoveAll(remoteDir)
+		_ = os.RemoveAll(localDir)
 		t.Fatalf("failed to add remote: %v", err)
 	}
 
 	// Push initial commit to remote
 	cmd = exec.Command("git", "-C", localDir, "push", "-u", "origin", "HEAD:main")
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(remoteDir)
-		os.RemoveAll(localDir)
+		_ = os.RemoveAll(remoteDir)
+		_ = os.RemoveAll(localDir)
 		t.Fatalf("failed to push to remote: %v", err)
 	}
 
@@ -391,8 +391,8 @@ func setupTestRepoWithRemote(t *testing.T) (string, string) {
 
 func TestCreateWorktreeWithBranch(t *testing.T) {
 	localRepo, remoteRepo := setupTestRepoWithRemote(t)
-	defer os.RemoveAll(localRepo)
-	defer os.RemoveAll(remoteRepo)
+	defer func() { _ = os.RemoveAll(localRepo) }()
+	defer func() { _ = os.RemoveAll(remoteRepo) }()
 
 	ctx := context.Background()
 	manager := NewWorktreeManager(localRepo)
@@ -436,8 +436,8 @@ func TestCreateWorktreeWithBranch(t *testing.T) {
 
 func TestWorktreeCanPushToRemote(t *testing.T) {
 	localRepo, remoteRepo := setupTestRepoWithRemote(t)
-	defer os.RemoveAll(localRepo)
-	defer os.RemoveAll(remoteRepo)
+	defer func() { _ = os.RemoveAll(localRepo) }()
+	defer func() { _ = os.RemoveAll(remoteRepo) }()
 
 	ctx := context.Background()
 	manager := NewWorktreeManager(localRepo)
@@ -456,7 +456,7 @@ func TestWorktreeCanPushToRemote(t *testing.T) {
 	}
 
 	// Stage and commit in worktree
-	exec.Command("git", "-C", result.Path, "add", ".").Run()
+	_ = exec.Command("git", "-C", result.Path, "add", ".").Run()
 	commitCmd := exec.Command("git", "-C", result.Path, "commit", "-m", "Add new file")
 	if err := commitCmd.Run(); err != nil {
 		t.Fatalf("failed to commit in worktree: %v", err)
@@ -482,8 +482,8 @@ func TestWorktreeCanPushToRemote(t *testing.T) {
 
 func TestVerifyRemoteAccess(t *testing.T) {
 	localRepo, remoteRepo := setupTestRepoWithRemote(t)
-	defer os.RemoveAll(localRepo)
-	defer os.RemoveAll(remoteRepo)
+	defer func() { _ = os.RemoveAll(localRepo) }()
+	defer func() { _ = os.RemoveAll(remoteRepo) }()
 
 	ctx := context.Background()
 	manager := NewWorktreeManager(localRepo)
@@ -503,7 +503,7 @@ func TestVerifyRemoteAccess(t *testing.T) {
 func TestVerifyRemoteAccessNoRemote(t *testing.T) {
 	// Create repo without remote
 	repoPath := setupTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	ctx := context.Background()
 	manager := NewWorktreeManager(repoPath)
@@ -523,8 +523,8 @@ func TestVerifyRemoteAccessNoRemote(t *testing.T) {
 
 func TestStandaloneCreateWorktreeWithBranch(t *testing.T) {
 	localRepo, remoteRepo := setupTestRepoWithRemote(t)
-	defer os.RemoveAll(localRepo)
-	defer os.RemoveAll(remoteRepo)
+	defer func() { _ = os.RemoveAll(localRepo) }()
+	defer func() { _ = os.RemoveAll(remoteRepo) }()
 
 	ctx := context.Background()
 
@@ -557,8 +557,8 @@ func TestStandaloneCreateWorktreeWithBranch(t *testing.T) {
 func TestWorktreeGitOperationsIntegration(t *testing.T) {
 	// Test that GitOperations works correctly with worktree path
 	localRepo, remoteRepo := setupTestRepoWithRemote(t)
-	defer os.RemoveAll(localRepo)
-	defer os.RemoveAll(remoteRepo)
+	defer func() { _ = os.RemoveAll(localRepo) }()
+	defer func() { _ = os.RemoveAll(remoteRepo) }()
 
 	ctx := context.Background()
 	manager := NewWorktreeManager(localRepo)
