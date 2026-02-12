@@ -37,7 +37,7 @@ func NewClaudeCodeMock() (*ClaudeCodeMock, error) {
 	}
 
 	if err := m.createMockBinary(); err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir) // Best effort cleanup
 		return nil, err
 	}
 
@@ -51,19 +51,19 @@ func (m *ClaudeCodeMock) BinPath() string {
 
 // Close cleans up temporary files.
 func (m *ClaudeCodeMock) Close() {
-	os.RemoveAll(m.tmpDir)
+	_ = os.RemoveAll(m.tmpDir) // Best effort cleanup
 }
 
 // SetResponse sets the mock response text.
 func (m *ClaudeCodeMock) SetResponse(response string) {
 	m.Response = response
-	m.createMockBinary() // Regenerate with new response
+	_ = m.createMockBinary() // Regenerate with new response; ignore error as SetResponse is called post-init
 }
 
 // SetFailure configures the mock to return an error.
 func (m *ClaudeCodeMock) SetFailure(shouldFail bool) {
 	m.ShouldFail = shouldFail
-	m.createMockBinary()
+	_ = m.createMockBinary() // Regenerate with new failure mode; ignore error as SetFailure is called post-init
 }
 
 // createMockBinary creates a shell script that simulates Claude Code.
