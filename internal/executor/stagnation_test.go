@@ -19,6 +19,7 @@ func TestStagnationMonitor_IdenticalStates(t *testing.T) {
 		WarnTimeout:              1 * time.Hour, // High to not trigger
 		PauseTimeout:             2 * time.Hour,
 		AbortTimeout:             3 * time.Hour,
+		GracePeriod:              30 * time.Second,
 		CommitPartialWork:        true,
 	}
 
@@ -50,6 +51,7 @@ func TestStagnationMonitor_IterationLimits(t *testing.T) {
 		WarnTimeout:              1 * time.Hour,
 		PauseTimeout:             2 * time.Hour,
 		AbortTimeout:             3 * time.Hour,
+		GracePeriod:              30 * time.Second,
 		CommitPartialWork:        true,
 	}
 
