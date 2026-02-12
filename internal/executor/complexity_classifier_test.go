@@ -126,7 +126,7 @@ func TestNewComplexityClassifier(t *testing.T) {
 	// No API key needed anymore - uses Claude Code subscription
 	classifier := NewComplexityClassifier()
 	if classifier == nil {
-		t.Error("expected non-nil classifier")
+		t.Fatal("expected non-nil classifier")
 	}
 	if classifier.model != "claude-haiku-4-5-20251001" {
 		t.Errorf("expected haiku model, got %s", classifier.model)
