@@ -118,7 +118,7 @@ func TestMemory_NoUnboundedGrowth(t *testing.T) {
 
 	t.Logf("Memory stats:")
 	t.Logf("  Initial: %d MB", initialMem.Alloc/1024/1024)
-	t.Logf("  Peak: %d MB", metrics.PeakMemory/1024/1024)
+	t.Logf("  Peak: %d MB", metrics.GetPeakMemory()/1024/1024)
 	t.Logf("  Final: %d MB", finalMem.Alloc/1024/1024)
 	t.Logf("  Growth: %d bytes", memGrowth)
 	t.Logf("  Issues processed: %d", atomic.LoadInt64(&processedCount))

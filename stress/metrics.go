@@ -154,3 +154,24 @@ func (m *Metrics) GoroutineGrowth() int {
 
 	return m.CurrentGoroutines - runtime.NumGoroutine()
 }
+
+// GetPeakMemory returns the peak memory usage (thread-safe).
+func (m *Metrics) GetPeakMemory() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.PeakMemory
+}
+
+// GetCurrentGoroutines returns current goroutine count (thread-safe).
+func (m *Metrics) GetCurrentGoroutines() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.CurrentGoroutines
+}
+
+// GetPeakGoroutines returns peak goroutine count (thread-safe).
+func (m *Metrics) GetPeakGoroutines() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.PeakGoroutines
+}
