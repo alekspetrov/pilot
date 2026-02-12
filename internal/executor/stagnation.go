@@ -126,7 +126,7 @@ func (m *StagnationMonitor) RecordState(phase string, progress, iteration int) S
 // hashState creates a hash of the current state
 func (m *StagnationMonitor) hashState(phase string, progress, iteration int) uint64 {
 	h := fnv.New64a()
-	h.Write([]byte(fmt.Sprintf("%s:%d:%d", phase, progress, iteration)))
+	_, _ = fmt.Fprintf(h, "%s:%d:%d", phase, progress, iteration)
 	return h.Sum64()
 }
 
