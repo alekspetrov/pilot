@@ -1004,9 +1004,11 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 			// GH-917: Check for classified Claude Code error types
 			var alertType AlertEventType = AlertEventTypeTaskFailed
 			var errorCategory string = "unknown"
+			var stderrOutput string // GH-917-5: Always capture stderr for logging
 
 			if ccErr, ok := err.(*ClaudeCodeError); ok {
 				result.Error = ccErr.Error()
+				stderrOutput = ccErr.Stderr // Capture stderr from classified error
 
 				// Map error type to alert event type and category
 				switch ccErr.Type {
@@ -1041,20 +1043,32 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 					r.reportProgress(task.ID, "API Error", 100, ccErr.Message)
 
 				default:
+					// GH-917-5: Log stderr for process errors and unknown errors too
 					log.Error("Backend execution failed",
 						slog.String("error", result.Error),
 						slog.String("error_type", string(ccErr.Type)),
+						slog.String("stderr", ccErr.Stderr),
 						slog.Duration("duration", duration),
 					)
 					r.reportProgress(task.ID, "Failed", 100, result.Error)
 				}
 			} else {
 				result.Error = err.Error()
+				// GH-917-5: Log even when error is not a ClaudeCodeError
 				log.Error("Backend execution failed",
 					slog.String("error", result.Error),
+					slog.String("error_type", "non_claude_code"),
 					slog.Duration("duration", duration),
 				)
 				r.reportProgress(task.ID, "Failed", 100, result.Error)
+			}
+
+			// GH-917-5: Include stderr in alert metadata for debugging
+			metadata := map[string]string{
+				"error_category": errorCategory,
+			}
+			if stderrOutput != "" {
+				metadata["stderr"] = stderrOutput
 			}
 
 			// Emit alert event with error category metadata
@@ -1064,9 +1078,7 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 				TaskTitle: task.Title,
 				Project:   task.ProjectPath,
 				Error:     result.Error,
-				Metadata: map[string]string{
-					"error_category": errorCategory,
-				},
+				Metadata:  metadata,
 				Timestamp: time.Now(),
 			})
 
