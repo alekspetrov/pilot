@@ -21,8 +21,8 @@ func setupTestRepo(t *testing.T) string {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 
-	// Initialize git repo
-	cmd := exec.Command("git", "init")
+	// Initialize git repo with main branch
+	cmd := exec.Command("git", "init", "-b", "main")
 	cmd.Dir = dir
 	if err := cmd.Run(); err != nil {
 		_ = os.RemoveAll(dir)
@@ -342,7 +342,7 @@ func setupTestRepoWithRemote(t *testing.T) (string, string) {
 		t.Fatalf("failed to create local dir: %v", err)
 	}
 
-	cmd = exec.Command("git", "init")
+	cmd = exec.Command("git", "init", "-b", "main")
 	cmd.Dir = localDir
 	if err := cmd.Run(); err != nil {
 		_ = os.RemoveAll(remoteDir)
