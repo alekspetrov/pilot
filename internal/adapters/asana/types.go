@@ -5,11 +5,19 @@ import "time"
 
 // Config holds Asana adapter configuration
 type Config struct {
-	Enabled       bool   `yaml:"enabled"`
-	AccessToken   string `yaml:"access_token"`   // Personal access token or OAuth token
-	WorkspaceID   string `yaml:"workspace_id"`   // Asana workspace GID
-	WebhookSecret string `yaml:"webhook_secret"` // For X-Hook-Secret verification
-	PilotTag      string `yaml:"pilot_tag"`      // Tag name that triggers Pilot (default: "pilot")
+	Enabled       bool           `yaml:"enabled"`
+	AccessToken   string         `yaml:"access_token,omitempty"`   // Personal access token or OAuth token
+	WorkspaceID   string         `yaml:"workspace_id,omitempty"`   // Asana workspace GID
+	WebhookSecret string         `yaml:"webhook_secret,omitempty"` // For X-Hook-Secret verification
+	PilotTag      string         `yaml:"pilot_tag,omitempty"`      // Tag name that triggers Pilot (default: "pilot")
+	Polling       *PollingConfig `yaml:"polling,omitempty"`        // Polling configuration
+}
+
+// PollingConfig holds configuration for Asana task polling
+type PollingConfig struct {
+	Enabled    bool          `yaml:"enabled"`
+	Interval   time.Duration `yaml:"interval,omitempty"`    // Poll interval (default: 30s)
+	ProjectGID string        `yaml:"project_gid,omitempty"` // Optional: filter to specific project
 }
 
 // DefaultConfig returns default Asana configuration
@@ -17,6 +25,10 @@ func DefaultConfig() *Config {
 	return &Config{
 		Enabled:  false,
 		PilotTag: "pilot",
+		Polling: &PollingConfig{
+			Enabled:  true,
+			Interval: 30 * time.Second,
+		},
 	}
 }
 
