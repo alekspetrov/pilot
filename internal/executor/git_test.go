@@ -482,3 +482,175 @@ func TestSwitchBranch_FailsOnNonExistentBranch(t *testing.T) {
 		t.Error("SwitchBranch should fail on non-existent branch")
 	}
 }
+
+// TestCommitsBehindMain verifies stale branch detection (GH-912).
+// When a local branch is behind main, CommitsBehindMain returns the count.
+func TestCommitsBehindMain(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "pilot-git-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	ctx := context.Background()
+
+	// Initialize git repo with initial commit
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "init").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "config", "user.email", "test@test.com").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "config", "user.name", "Test User").Run()
+	_ = os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("initial"), 0644)
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "add", ".").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "commit", "-m", "initial").Run()
+
+	git := NewGitOperations(tmpDir)
+	defaultBranch, _ := git.GetCurrentBranch(ctx)
+
+	// Create a feature branch at current commit
+	_ = git.CreateBranch(ctx, "pilot/GH-912")
+	_ = git.SwitchBranch(ctx, defaultBranch)
+
+	// Add commits to main (simulating other PRs merged while branch was idle)
+	_ = os.WriteFile(filepath.Join(tmpDir, "main1.txt"), []byte("main change 1"), 0644)
+	_, _ = git.Commit(ctx, "feat: main change 1")
+	_ = os.WriteFile(filepath.Join(tmpDir, "main2.txt"), []byte("main change 2"), 0644)
+	_, _ = git.Commit(ctx, "feat: main change 2")
+
+	// Set up a local tracking reference for testing
+	// CommitsBehindMain uses origin/main, so we need to simulate a remote
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "remote", "add", "origin", tmpDir).Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "fetch", "origin").Run()
+
+	// Now check how many commits pilot/GH-912 is behind
+	count, err := git.CommitsBehindMain(ctx, "pilot/GH-912")
+	if err != nil {
+		t.Fatalf("CommitsBehindMain failed: %v", err)
+	}
+
+	// Feature branch should be 2 commits behind main
+	if count != 2 {
+		t.Errorf("CommitsBehindMain = %d, want 2", count)
+	}
+}
+
+// TestDeleteBranch verifies local branch deletion (GH-912).
+func TestDeleteBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "pilot-git-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	ctx := context.Background()
+
+	// Initialize git repo with initial commit
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "init").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "config", "user.email", "test@test.com").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "config", "user.name", "Test User").Run()
+	_ = os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("initial"), 0644)
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "add", ".").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "commit", "-m", "initial").Run()
+
+	git := NewGitOperations(tmpDir)
+	defaultBranch, _ := git.GetCurrentBranch(ctx)
+
+	// Create a feature branch
+	_ = git.CreateBranch(ctx, "test-delete-branch")
+	if !git.branchExists(ctx, "test-delete-branch") {
+		t.Fatal("expected branch to exist after creation")
+	}
+
+	// Switch to main before deleting (can't delete current branch)
+	_ = git.SwitchBranch(ctx, defaultBranch)
+
+	// Delete the branch
+	err = git.DeleteBranch(ctx, "test-delete-branch")
+	if err != nil {
+		t.Fatalf("DeleteBranch failed: %v", err)
+	}
+
+	// Branch should no longer exist
+	if git.branchExists(ctx, "test-delete-branch") {
+		t.Error("branch should not exist after deletion")
+	}
+}
+
+// TestStaleBranchRecreation tests the full stale branch workflow (GH-912).
+// Simulates: branch exists, is behind main, should be deleted and recreated fresh.
+func TestStaleBranchRecreation(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "pilot-git-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	ctx := context.Background()
+
+	// Initialize git repo with initial commit
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "init").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "config", "user.email", "test@test.com").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "config", "user.name", "Test User").Run()
+	_ = os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("initial"), 0644)
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "add", ".").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "commit", "-m", "initial").Run()
+
+	git := NewGitOperations(tmpDir)
+	defaultBranch, _ := git.GetCurrentBranch(ctx)
+
+	// Create a stale feature branch
+	_ = git.CreateBranch(ctx, "pilot/GH-912-stale")
+	staleCommitSHA, _ := git.GetCurrentCommitSHA(ctx)
+	_ = git.SwitchBranch(ctx, defaultBranch)
+
+	// Add commits to main
+	_ = os.WriteFile(filepath.Join(tmpDir, "newer.txt"), []byte("newer content"), 0644)
+	_, _ = git.Commit(ctx, "feat: newer main content")
+	newMainSHA, _ := git.GetCurrentCommitSHA(ctx)
+
+	// Set up fake remote for CommitsBehindMain
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "remote", "add", "origin", tmpDir).Run()
+	_ = exec.CommandContext(ctx, "git", "-C", tmpDir, "fetch", "origin").Run()
+
+	// Simulate the stale branch handling from runner.go:
+	// 1. Try to create branch (fails because it exists)
+	branchName := "pilot/GH-912-stale"
+	createErr := git.CreateBranch(ctx, branchName)
+	if createErr == nil {
+		t.Fatal("expected CreateBranch to fail for existing branch")
+	}
+
+	// 2. Check if stale
+	behindCount, _ := git.CommitsBehindMain(ctx, branchName)
+	if behindCount != 1 {
+		t.Errorf("expected branch to be 1 behind, got %d", behindCount)
+	}
+
+	// 3. Delete stale branch
+	_ = git.DeleteBranch(ctx, branchName)
+
+	// 4. Recreate fresh from main
+	err = git.CreateBranch(ctx, branchName)
+	if err != nil {
+		t.Fatalf("failed to recreate branch: %v", err)
+	}
+
+	// 5. Verify the new branch is at main's HEAD, not the old stale commit
+	newBranchSHA, _ := git.GetCurrentCommitSHA(ctx)
+	if newBranchSHA == staleCommitSHA {
+		t.Errorf("recreated branch has stale SHA %s, expected %s", newBranchSHA, newMainSHA)
+	}
+	if newBranchSHA != newMainSHA {
+		t.Errorf("recreated branch SHA %s != main SHA %s", newBranchSHA, newMainSHA)
+	}
+}
