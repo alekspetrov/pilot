@@ -142,7 +142,8 @@ func TestQualityGatesHappyPath(t *testing.T) {
 
 	// Create runner with mock backend
 	runner := executor.NewRunnerWithBackend(backend)
-	runner.SetRecordingEnabled(false) // Disable recording for tests
+	runner.SetRecordingEnabled(false)    // Disable recording for tests
+	runner.SetSkipPreflightChecks(true)  // Skip preflight checks (no Claude CLI in CI)
 
 	// Set quality checker factory
 	runner.SetQualityCheckerFactory(func(taskID, projectPath string) executor.QualityChecker {
@@ -229,6 +230,7 @@ func TestQualityGatesRetrySuccess(t *testing.T) {
 	// Create runner with mock backend
 	runner := executor.NewRunnerWithBackend(backend)
 	runner.SetRecordingEnabled(false)
+	runner.SetSkipPreflightChecks(true)  // Skip preflight checks (no Claude CLI in CI)
 
 	runner.SetQualityCheckerFactory(func(taskID, projectPath string) executor.QualityChecker {
 		return qualityChecker
@@ -289,6 +291,7 @@ func TestQualityGatesMaxRetriesExhausted(t *testing.T) {
 
 	runner := executor.NewRunnerWithBackend(backend)
 	runner.SetRecordingEnabled(false)
+	runner.SetSkipPreflightChecks(true)  // Skip preflight checks (no Claude CLI in CI)
 
 	runner.SetQualityCheckerFactory(func(taskID, projectPath string) executor.QualityChecker {
 		return qualityChecker
@@ -352,6 +355,7 @@ func TestQualityGatesDisabled(t *testing.T) {
 	// Create runner WITHOUT setting quality checker factory
 	runner := executor.NewRunnerWithBackend(backend)
 	runner.SetRecordingEnabled(false)
+	runner.SetSkipPreflightChecks(true)  // Skip preflight checks (no Claude CLI in CI)
 
 	// No quality checker factory set - gates should be skipped
 
@@ -403,6 +407,7 @@ func TestQualityGatesNoRetryOnNoShouldRetry(t *testing.T) {
 
 	runner := executor.NewRunnerWithBackend(backend)
 	runner.SetRecordingEnabled(false)
+	runner.SetSkipPreflightChecks(true)  // Skip preflight checks (no Claude CLI in CI)
 
 	runner.SetQualityCheckerFactory(func(taskID, projectPath string) executor.QualityChecker {
 		return qualityChecker
@@ -529,6 +534,7 @@ func TestQualityGatesRetryFeedbackPropagation(t *testing.T) {
 
 	runner := executor.NewRunnerWithBackend(backend)
 	runner.SetRecordingEnabled(false)
+	runner.SetSkipPreflightChecks(true)  // Skip preflight checks (no Claude CLI in CI)
 
 	runner.SetQualityCheckerFactory(func(taskID, projectPath string) executor.QualityChecker {
 		return qualityChecker

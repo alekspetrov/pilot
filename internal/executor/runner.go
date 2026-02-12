@@ -249,6 +249,7 @@ type Runner struct {
 	intentJudge           *IntentJudge          // Optional intent judge for diff-vs-ticket alignment (GH-624)
 	teamChecker           TeamChecker           // Optional team RBAC checker (GH-633)
 	executeFunc           func(ctx context.Context, task *Task) (*ExecutionResult, error) // Internal override for testing
+	skipPreflightChecks   bool                  // Skip preflight checks (for testing with mock backends)
 }
 
 // NewRunner creates a new Runner instance with Claude Code backend by default.
@@ -346,6 +347,11 @@ func (r *Runner) SetRecordingsPath(path string) {
 // When enabled, all Claude Code stream events are captured for replay and debugging.
 func (r *Runner) SetRecordingEnabled(enabled bool) {
 	r.enableRecording = enabled
+}
+
+// SetSkipPreflightChecks disables preflight checks (for testing with mock backends).
+func (r *Runner) SetSkipPreflightChecks(skip bool) {
+	r.skipPreflightChecks = skip
 }
 
 // SetAlertProcessor sets the alert processor for emitting task lifecycle events.
@@ -542,16 +548,19 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 	}
 
 	// GH-915: Run pre-flight checks to catch environmental issues early
-	if err := RunPreflightChecks(ctx, task.ProjectPath); err != nil {
-		r.log.Warn("Pre-flight check failed",
-			slog.String("task_id", task.ID),
-			slog.Any("error", err),
-		)
-		return &ExecutionResult{
-			TaskID:  task.ID,
-			Success: false,
-			Error:   fmt.Sprintf("pre-flight check failed: %v", err),
-		}, fmt.Errorf("pre-flight check failed: %w", err)
+	// Skip when using mock backends in tests (skipPreflightChecks flag)
+	if !r.skipPreflightChecks {
+		if err := RunPreflightChecks(ctx, task.ProjectPath); err != nil {
+			r.log.Warn("Pre-flight check failed",
+				slog.String("task_id", task.ID),
+				slog.Any("error", err),
+			)
+			return &ExecutionResult{
+				TaskID:  task.ID,
+				Success: false,
+				Error:   fmt.Sprintf("pre-flight check failed: %v", err),
+			}, fmt.Errorf("pre-flight check failed: %w", err)
+		}
 	}
 
 	// Auto-init Navigator if configured and missing
