@@ -1001,20 +1001,72 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 				Phase:      state.phase,
 			})
 		} else {
-			result.Error = err.Error()
-			log.Error("Backend execution failed",
-				slog.String("error", result.Error),
-				slog.Duration("duration", duration),
-			)
-			r.reportProgress(task.ID, "Failed", 100, result.Error)
+			// GH-917: Check for classified Claude Code error types
+			var alertType AlertEventType = AlertEventTypeTaskFailed
+			var errorCategory string = "unknown"
 
-			// Emit task failed event
+			if ccErr, ok := err.(*ClaudeCodeError); ok {
+				result.Error = ccErr.Error()
+
+				// Map error type to alert event type and category
+				switch ccErr.Type {
+				case ErrorTypeRateLimit:
+					alertType = AlertEventTypeRateLimit
+					errorCategory = "rate_limit"
+					log.Warn("Claude Code hit rate limit",
+						slog.String("task_id", task.ID),
+						slog.String("stderr", ccErr.Stderr),
+						slog.Duration("duration", duration),
+					)
+					r.reportProgress(task.ID, "Rate Limited", 100, "Claude Code hit rate limit - retry later")
+
+				case ErrorTypeInvalidConfig:
+					alertType = AlertEventTypeConfigError
+					errorCategory = "invalid_config"
+					log.Error("Invalid Claude Code configuration",
+						slog.String("task_id", task.ID),
+						slog.String("message", ccErr.Message),
+						slog.String("stderr", ccErr.Stderr),
+					)
+					r.reportProgress(task.ID, "Config Error", 100, ccErr.Message)
+
+				case ErrorTypeAPIError:
+					alertType = AlertEventTypeAPIError
+					errorCategory = "api_error"
+					log.Error("Claude API error",
+						slog.String("task_id", task.ID),
+						slog.String("message", ccErr.Message),
+						slog.String("stderr", ccErr.Stderr),
+					)
+					r.reportProgress(task.ID, "API Error", 100, ccErr.Message)
+
+				default:
+					log.Error("Backend execution failed",
+						slog.String("error", result.Error),
+						slog.String("error_type", string(ccErr.Type)),
+						slog.Duration("duration", duration),
+					)
+					r.reportProgress(task.ID, "Failed", 100, result.Error)
+				}
+			} else {
+				result.Error = err.Error()
+				log.Error("Backend execution failed",
+					slog.String("error", result.Error),
+					slog.Duration("duration", duration),
+				)
+				r.reportProgress(task.ID, "Failed", 100, result.Error)
+			}
+
+			// Emit alert event with error category metadata
 			r.emitAlertEvent(AlertEvent{
-				Type:      AlertEventTypeTaskFailed,
+				Type:      alertType,
 				TaskID:    task.ID,
 				TaskTitle: task.Title,
 				Project:   task.ProjectPath,
 				Error:     result.Error,
+				Metadata: map[string]string{
+					"error_category": errorCategory,
+				},
 				Timestamp: time.Now(),
 			})
 
@@ -1422,17 +1474,54 @@ The previous execution completed but made no code changes. This task requires ac
 					})
 
 					if retryErr != nil {
-						log.Error("Retry execution failed", slog.Any("error", retryErr))
 						result.Success = false
-						result.Error = fmt.Sprintf("retry execution failed: %v", retryErr)
-						r.reportProgress(task.ID, "Retry Failed", 100, result.Error)
+
+						// GH-917: Check for classified Claude Code error types in retry
+						var alertType AlertEventType = AlertEventTypeTaskFailed
+						var errorCategory string = "unknown"
+
+						if ccErr, ok := retryErr.(*ClaudeCodeError); ok {
+							result.Error = fmt.Sprintf("retry execution failed: %v", ccErr)
+
+							switch ccErr.Type {
+							case ErrorTypeRateLimit:
+								alertType = AlertEventTypeRateLimit
+								errorCategory = "rate_limit"
+								log.Warn("Retry hit rate limit",
+									slog.String("task_id", task.ID),
+									slog.Int("retry_attempt", retryAttempt+1),
+								)
+								r.reportProgress(task.ID, "Rate Limited", 100, "Retry hit rate limit")
+							case ErrorTypeInvalidConfig:
+								alertType = AlertEventTypeConfigError
+								errorCategory = "invalid_config"
+								log.Error("Retry failed: invalid config", slog.String("message", ccErr.Message))
+								r.reportProgress(task.ID, "Config Error", 100, ccErr.Message)
+							case ErrorTypeAPIError:
+								alertType = AlertEventTypeAPIError
+								errorCategory = "api_error"
+								log.Error("Retry failed: API error", slog.String("message", ccErr.Message))
+								r.reportProgress(task.ID, "API Error", 100, ccErr.Message)
+							default:
+								log.Error("Retry execution failed", slog.Any("error", retryErr))
+								r.reportProgress(task.ID, "Retry Failed", 100, result.Error)
+							}
+						} else {
+							result.Error = fmt.Sprintf("retry execution failed: %v", retryErr)
+							log.Error("Retry execution failed", slog.Any("error", retryErr))
+							r.reportProgress(task.ID, "Retry Failed", 100, result.Error)
+						}
 
 						r.emitAlertEvent(AlertEvent{
-							Type:      AlertEventTypeTaskFailed,
+							Type:      alertType,
 							TaskID:    task.ID,
 							TaskTitle: task.Title,
 							Project:   task.ProjectPath,
 							Error:     result.Error,
+							Metadata: map[string]string{
+								"error_category": errorCategory,
+								"phase":          "quality_retry",
+							},
 							Timestamp: time.Now(),
 						})
 
