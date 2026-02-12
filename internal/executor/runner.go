@@ -1002,8 +1002,8 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 			})
 		} else {
 			// GH-917: Check for classified Claude Code error types
-			var alertType AlertEventType = AlertEventTypeTaskFailed
-			var errorCategory string = "unknown"
+			alertType := AlertEventTypeTaskFailed
+			errorCategory := "unknown"
 			var stderrOutput string // GH-917-5: Always capture stderr for logging
 
 			if ccErr, ok := err.(*ClaudeCodeError); ok {
@@ -1489,8 +1489,8 @@ The previous execution completed but made no code changes. This task requires ac
 						result.Success = false
 
 						// GH-917: Check for classified Claude Code error types in retry
-						var alertType AlertEventType = AlertEventTypeTaskFailed
-						var errorCategory string = "unknown"
+						alertType := AlertEventTypeTaskFailed
+						errorCategory := "unknown"
 
 						if ccErr, ok := retryErr.(*ClaudeCodeError); ok {
 							result.Error = fmt.Sprintf("retry execution failed: %v", ccErr)
