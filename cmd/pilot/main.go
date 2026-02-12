@@ -768,6 +768,7 @@ Examples:
 						return fmt.Errorf("invalid repo format: %s", cfg.Adapters.GitHub.Repo)
 					}
 					repoOwner, repoName := repoParts[0], repoParts[1]
+					gwSourceRepo := cfg.Adapters.GitHub.Repo // GH-929: Capture for closure
 
 					rateLimitScheduler := executor.NewScheduler(executor.DefaultSchedulerConfig(), nil)
 					rateLimitScheduler.SetRetryCallback(func(retryCtx context.Context, pendingTask *executor.PendingTask) error {
@@ -788,9 +789,9 @@ Examples:
 
 						var result *github.IssueResult
 						if execMode == github.ExecutionModeSequential {
-							result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
+							result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, gwSourceRepo, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
 						} else {
-							result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
+							result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, gwSourceRepo, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
 						}
 
 						// GH-797: Call OnPRCreated for retried issues so autopilot tracks their PRs
@@ -817,7 +818,7 @@ Examples:
 							github.WithSequentialConfig(waitForMerge, pollInterval, prTimeout),
 							github.WithScheduler(rateLimitScheduler),
 							github.WithOnIssueWithResult(func(issueCtx context.Context, issue *github.Issue) (*github.IssueResult, error) {
-								return handleGitHubIssueWithResult(issueCtx, cfg, client, issue, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
+								return handleGitHubIssueWithResult(issueCtx, cfg, client, issue, projectPath, gwSourceRepo, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
 							}),
 						)
 					} else {
@@ -825,7 +826,7 @@ Examples:
 							github.WithScheduler(rateLimitScheduler),
 							github.WithMaxConcurrent(cfg.Orchestrator.MaxConcurrent),
 							github.WithOnIssueWithResult(func(issueCtx context.Context, issue *github.Issue) (*github.IssueResult, error) {
-								return handleGitHubIssueWithResult(issueCtx, cfg, client, issue, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
+								return handleGitHubIssueWithResult(issueCtx, cfg, client, issue, projectPath, gwSourceRepo, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
 							}),
 						)
 					}
@@ -1660,6 +1661,7 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 				return fmt.Errorf("invalid repo format: %s", cfg.Adapters.GitHub.Repo)
 			}
 			repoOwner, repoName := repoParts[0], repoParts[1]
+			sourceRepo := cfg.Adapters.GitHub.Repo // GH-929: Capture for closure
 
 			rateLimitScheduler := executor.NewScheduler(executor.DefaultSchedulerConfig(), nil)
 			rateLimitScheduler.SetRetryCallback(func(retryCtx context.Context, pendingTask *executor.PendingTask) error {
@@ -1683,9 +1685,9 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 				// Re-process the issue
 				var result *github.IssueResult
 				if execMode == github.ExecutionModeSequential {
-					result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
+					result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, sourceRepo, dispatcher, runner, monitor, program, alertsEngine, enforcer)
 				} else {
-					result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
+					result, err = handleGitHubIssueWithResult(retryCtx, cfg, client, issue, projectPath, sourceRepo, dispatcher, runner, monitor, program, alertsEngine, enforcer)
 				}
 
 				// GH-797: Call OnPRCreated for retried issues so autopilot tracks their PRs
@@ -1714,7 +1716,7 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 					github.WithSequentialConfig(waitForMerge, pollInterval, prTimeout),
 					github.WithScheduler(rateLimitScheduler),
 					github.WithOnIssueWithResult(func(issueCtx context.Context, issue *github.Issue) (*github.IssueResult, error) {
-						return handleGitHubIssueWithResult(issueCtx, cfg, client, issue, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
+						return handleGitHubIssueWithResult(issueCtx, cfg, client, issue, projectPath, sourceRepo, dispatcher, runner, monitor, program, alertsEngine, enforcer)
 					}),
 				)
 			} else {
@@ -1723,7 +1725,7 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 					github.WithScheduler(rateLimitScheduler),
 					github.WithMaxConcurrent(cfg.Orchestrator.MaxConcurrent),
 					github.WithOnIssueWithResult(func(issueCtx context.Context, issue *github.Issue) (*github.IssueResult, error) {
-						return handleGitHubIssueWithResult(issueCtx, cfg, client, issue, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
+						return handleGitHubIssueWithResult(issueCtx, cfg, client, issue, projectPath, sourceRepo, dispatcher, runner, monitor, program, alertsEngine, enforcer)
 					}),
 				)
 			}
@@ -2211,9 +2213,9 @@ func extractGitHubLabelNames(issue *github.Issue) []string {
 
 // handleGitHubIssueWithResult processes a GitHub issue and returns result with PR info
 // Used in sequential mode to enable PR merge waiting
-func handleGitHubIssueWithResult(ctx context.Context, cfg *config.Config, client *github.Client, issue *github.Issue, projectPath string, dispatcher *executor.Dispatcher, runner *executor.Runner, monitor *executor.Monitor, program *tea.Program, alertsEngine *alerts.Engine, enforcer *budget.Enforcer) (*github.IssueResult, error) {
+// sourceRepo is the "owner/repo" string that the issue came from (GH-929)
+func handleGitHubIssueWithResult(ctx context.Context, cfg *config.Config, client *github.Client, issue *github.Issue, projectPath string, sourceRepo string, dispatcher *executor.Dispatcher, runner *executor.Runner, monitor *executor.Monitor, program *tea.Program, alertsEngine *alerts.Engine, enforcer *budget.Enforcer) (*github.IssueResult, error) {
 	taskID := fmt.Sprintf("GH-%d", issue.Number)
-	sourceRepo := cfg.Adapters.GitHub.Repo
 
 	// GH-386: Pre-execution validation - fail fast if repo doesn't match project
 	if err := executor.ValidateRepoProjectMatch(sourceRepo, projectPath); err != nil {
