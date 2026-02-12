@@ -436,10 +436,7 @@ func TestStress_GoroutineStability(t *testing.T) {
 	go poller.Start(ctx)
 
 	// Wait for all issues to process
-	for {
-		if atomic.LoadInt64(&processedCount) >= int64(numIssues) {
-			break
-		}
+	for atomic.LoadInt64(&processedCount) < int64(numIssues) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
