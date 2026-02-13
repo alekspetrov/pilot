@@ -47,7 +47,7 @@ import (
 )
 
 var (
-	version     = "0.3.0"
+	version     = "1.0.0"
 	buildTime   = "unknown"
 	cfgFile     string
 	teamAdapter *teams.ServiceAdapter // Global team adapter for RBAC lookups (GH-634)
