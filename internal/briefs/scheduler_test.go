@@ -78,7 +78,7 @@ func TestNewScheduler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			generator := NewGenerator(store, tt.config)
 			delivery := NewDeliveryService(tt.config)
-			scheduler := NewScheduler(generator, delivery, tt.config, tt.logger, nil)
+			scheduler := NewScheduler(generator, delivery, tt.config, nil, tt.logger)
 
 			if scheduler == nil {
 				t.Fatal("expected scheduler, got nil")
@@ -541,7 +541,7 @@ func TestSchedulerCatchUpMechanism(t *testing.T) {
 
 			generator := NewGenerator(store, config)
 			delivery := NewDeliveryService(config)
-			scheduler := NewScheduler(generator, delivery, config, nil, store)
+			scheduler := NewScheduler(generator, delivery, config, store, nil)
 
 			ctx := context.Background()
 			if err := scheduler.Start(ctx); err != nil {
@@ -591,7 +591,7 @@ func TestSchedulerRunNowRecordsToHistory(t *testing.T) {
 
 	generator := NewGenerator(store, config)
 	delivery := NewDeliveryService(config) // Will fail but that's OK for testing
-	scheduler := NewScheduler(generator, delivery, config, nil, store)
+	scheduler := NewScheduler(generator, delivery, config, store, nil)
 
 	ctx := context.Background()
 

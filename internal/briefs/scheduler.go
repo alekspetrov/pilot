@@ -25,7 +25,7 @@ type Scheduler struct {
 
 // NewScheduler creates a new brief scheduler.
 // The store parameter is optional (nullable) for graceful degradation.
-func NewScheduler(generator *Generator, delivery *DeliveryService, config *BriefConfig, logger *slog.Logger, store *memory.Store) *Scheduler {
+func NewScheduler(generator *Generator, delivery *DeliveryService, config *BriefConfig, store *memory.Store, logger *slog.Logger) *Scheduler {
 	if logger == nil {
 		logger = slog.Default()
 	}
