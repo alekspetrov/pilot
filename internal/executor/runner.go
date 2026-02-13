@@ -2460,6 +2460,61 @@ func (r *Runner) BuildPrompt(task *Task, executionPath string) string {
 		sb.WriteString(GetAutonomousWorkflowInstructions())
 		sb.WriteString("\n")
 
+		// User preferences injection (GH-1028)
+		if r.profileManager != nil {
+			if profile, err := r.profileManager.Load(); err == nil {
+				sb.WriteString("## User Preferences\n\n")
+				if profile.Verbosity != "" {
+					sb.WriteString(fmt.Sprintf("- **Verbosity**: %s\n", profile.Verbosity))
+				}
+				if len(profile.Frameworks) > 0 {
+					sb.WriteString("- **Preferred frameworks**: ")
+					for i, fw := range profile.Frameworks {
+						if i > 0 {
+							sb.WriteString(", ")
+						}
+						sb.WriteString(fw)
+					}
+					sb.WriteString("\n")
+				}
+				if len(profile.CodePatterns) > 0 {
+					sb.WriteString("- **Code patterns**: ")
+					for i, pattern := range profile.CodePatterns {
+						if i > 0 {
+							sb.WriteString(", ")
+						}
+						sb.WriteString(pattern)
+					}
+					sb.WriteString("\n")
+				}
+				sb.WriteString("\n")
+			}
+		}
+
+		// Knowledge injection (GH-1028)
+		if r.knowledge != nil {
+			// Extract topic from task description for knowledge search
+			if memories, err := r.knowledge.QueryByTopic(task.Description, "pilot"); err == nil && len(memories) > 0 {
+				sb.WriteString("## Relevant Knowledge\n\n")
+				sb.WriteString("Based on past experience:\n\n")
+
+				// Limit to 5 memories as specified
+				limit := len(memories)
+				if limit > 5 {
+					limit = 5
+				}
+
+				for i := 0; i < limit; i++ {
+					memory := memories[i]
+					sb.WriteString(fmt.Sprintf("- **%s**: %s\n", memory.Type, memory.Content))
+					if memory.Context != "" {
+						sb.WriteString(fmt.Sprintf("  *Context: %s*\n", memory.Context))
+					}
+				}
+				sb.WriteString("\n")
+			}
+		}
+
 		// Pre-commit verification checklist (GH-359, GH-920)
 		sb.WriteString("## Pre-Commit Verification\n\n")
 		sb.WriteString("BEFORE committing, verify:\n")
