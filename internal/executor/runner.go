@@ -3308,20 +3308,14 @@ func estimateCost(inputTokens, outputTokens int64, model string) float64 {
 	const (
 		sonnetInputPrice  = 3.00
 		sonnetOutputPrice = 15.00
-		// Opus 4.5 pricing ($15/$75 per 1M tokens)
+		// Opus 4.5/4.6 pricing ($5/$25 per 1M tokens)
 		opusInputPrice  = 5.00
 		opusOutputPrice = 25.00
-		// Legacy Opus 4.5 pricing
-		opus45InputPrice  = 15.00
-		opus45OutputPrice = 75.00
 	)
 
 	var inputPrice, outputPrice float64
 	modelLower := strings.ToLower(model)
 	switch {
-	case model == "claude-opus-4-5":
-		inputPrice = opus45InputPrice
-		outputPrice = opus45OutputPrice
 	case strings.Contains(modelLower, "opus"):
 		inputPrice = opusInputPrice
 		outputPrice = opusOutputPrice

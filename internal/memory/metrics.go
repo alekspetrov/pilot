@@ -105,20 +105,18 @@ const (
 	SonnetInputPricePerMillion  = 3.00
 	SonnetOutputPricePerMillion = 15.00
 
-	// Claude Opus 4.6 pricing
-	Opus46InputPricePerMillion  = 5.00
-	Opus46OutputPricePerMillion = 25.00
-
-	// Claude Opus 4.5 pricing (legacy, for historical cost tracking)
-	Opus45InputPricePerMillion  = 15.00
-	Opus45OutputPricePerMillion = 75.00
+	// Claude Opus 4.5/4.6 pricing (same for all Opus 4.x models)
+	OpusInputPricePerMillion  = 5.00
+	OpusOutputPricePerMillion = 25.00
 
 	// Keep old names as aliases for backward compatibility
 	Sonnet35InputPricePerMillion  = SonnetInputPricePerMillion
 	Sonnet35OutputPricePerMillion = SonnetOutputPricePerMillion
+	Opus46InputPricePerMillion    = OpusInputPricePerMillion
+	Opus46OutputPricePerMillion   = OpusOutputPricePerMillion
 
 	// Default model
-	DefaultModel = "claude-opus-4-5"
+	DefaultModel = "claude-opus-4-6"
 )
 
 // EstimateCost calculates estimated cost from token usage
@@ -127,14 +125,10 @@ func EstimateCost(inputTokens, outputTokens int64, model string) float64 {
 
 	modelLower := strings.ToLower(model)
 	switch {
-	case model == "claude-opus-4-5":
-		// Legacy Opus 4.5 pricing
-		inputPrice = Opus45InputPricePerMillion
-		outputPrice = Opus45OutputPricePerMillion
 	case strings.Contains(modelLower, "opus"):
-		// Opus 4.6+ pricing
-		inputPrice = Opus46InputPricePerMillion
-		outputPrice = Opus46OutputPricePerMillion
+		// Opus 4.5/4.6 pricing ($5/$25 per 1M tokens)
+		inputPrice = OpusInputPricePerMillion
+		outputPrice = OpusOutputPricePerMillion
 	default:
 		// Sonnet / Haiku / unknown — default to Sonnet pricing
 		inputPrice = SonnetInputPricePerMillion

@@ -402,9 +402,9 @@ func DefaultModelRoutingConfig() *ModelRoutingConfig {
 	return &ModelRoutingConfig{
 		Enabled: false,
 		Trivial: "claude-haiku",
-		Simple:  "claude-opus-4-5",
-		Medium:  "claude-opus-4-5",
-		Complex: "claude-opus-4-5",
+		Simple:  "claude-opus-4-6",
+		Medium:  "claude-opus-4-6",
+		Complex: "claude-opus-4-6",
 	}
 }
 

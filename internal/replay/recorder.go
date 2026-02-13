@@ -482,8 +482,8 @@ func (r *Recorder) estimateCost() float64 {
 	var inPrice, outPrice float64
 
 	if strings.Contains(strings.ToLower(model), "opus") {
-		inPrice = 15.00
-		outPrice = 75.00
+		inPrice = 5.00
+		outPrice = 25.00
 	} else {
 		inPrice = inputPrice
 		outPrice = outputPrice

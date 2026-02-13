@@ -529,9 +529,9 @@ func TestEstimateCostOpus(t *testing.T) {
 
 	recording := recorder.GetRecording()
 
-	// Opus pricing: 15.00/1M input, 75.00/1M output
-	// Expected: (1000 * 15 + 1000 * 75) / 1_000_000 = 0.09
-	expectedCost := 0.09
+	// Opus 4.5/4.6 pricing: 5.00/1M input, 25.00/1M output
+	// Expected: (1000 * 5 + 1000 * 25) / 1_000_000 = 0.03
+	expectedCost := 0.03
 	if recording.TokenUsage.EstimatedCostUSD < expectedCost-0.001 || recording.TokenUsage.EstimatedCostUSD > expectedCost+0.001 {
 		t.Errorf("Expected cost ~%.4f, got %.4f", expectedCost, recording.TokenUsage.EstimatedCostUSD)
 	}
