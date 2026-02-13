@@ -955,3 +955,240 @@ func TestConfig_Validate_OrchestratorPollIntervalBounds(t *testing.T) {
 		})
 	}
 }
+
+// GH-1128: Integration test that DefaultConfig() passes validation,
+// then systematically mutates each validated field to verify errors trigger.
+func TestValidate_FullConfig(t *testing.T) {
+	// Part 1: DefaultConfig() must pass validation
+	t.Run("DefaultConfig passes validation", func(t *testing.T) {
+		cfg := DefaultConfig()
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("DefaultConfig() should pass validation, got error: %v", err)
+		}
+	})
+
+	// Part 2: Systematically mutate each validated field to verify errors trigger
+	tests := []struct {
+		name      string
+		mutate    func(cfg *Config)
+		errSubstr string
+	}{
+		// Gateway validations
+		{
+			name: "nil gateway",
+			mutate: func(cfg *Config) {
+				cfg.Gateway = nil
+			},
+			errSubstr: "gateway configuration is required",
+		},
+		{
+			name: "gateway port too low",
+			mutate: func(cfg *Config) {
+				cfg.Gateway.Port = 0
+			},
+			errSubstr: "invalid gateway port",
+		},
+		{
+			name: "gateway port too high",
+			mutate: func(cfg *Config) {
+				cfg.Gateway.Port = 70000
+			},
+			errSubstr: "invalid gateway port",
+		},
+
+		// Auth validations
+		{
+			name: "api-token auth without token",
+			mutate: func(cfg *Config) {
+				cfg.Auth = &gateway.AuthConfig{
+					Type:  gateway.AuthTypeAPIToken,
+					Token: "",
+				}
+			},
+			errSubstr: "API token is required when auth type is api-token",
+		},
+
+		// EffortRouting validations
+		{
+			name: "invalid effort routing level",
+			mutate: func(cfg *Config) {
+				cfg.Executor.EffortRouting = &executor.EffortRoutingConfig{
+					Enabled: true,
+					Complex: "max", // Invalid - "max" is not supported
+				}
+			},
+			errSubstr: "effort_routing.complex",
+		},
+
+		// DefaultProject validation
+		{
+			name: "default_project not found in projects list",
+			mutate: func(cfg *Config) {
+				cfg.Projects = []*ProjectConfig{
+					{Name: "existing", Path: "/tmp/existing"},
+				}
+				cfg.DefaultProject = "missing"
+			},
+			errSubstr: "default_project",
+		},
+
+		// Orchestrator validations
+		{
+			name: "orchestrator max_concurrent < 1",
+			mutate: func(cfg *Config) {
+				cfg.Orchestrator.MaxConcurrent = 0
+			},
+			errSubstr: "orchestrator.max_concurrent must be >= 1",
+		},
+		{
+			name: "orchestrator invalid execution mode",
+			mutate: func(cfg *Config) {
+				cfg.Orchestrator.Execution.Mode = "invalid"
+			},
+			errSubstr: "orchestrator.execution.mode must be 'sequential' or 'parallel'",
+		},
+		{
+			name: "orchestrator poll_interval too low",
+			mutate: func(cfg *Config) {
+				cfg.Orchestrator.Execution.PollInterval = 5 * time.Second
+			},
+			errSubstr: "orchestrator.execution.poll_interval must be >= 10s",
+		},
+
+		// Quality validations
+		{
+			name: "quality max_retries > 10",
+			mutate: func(cfg *Config) {
+				cfg.Quality.OnFailure.MaxRetries = 11
+			},
+			errSubstr: "quality.on_failure.max_retries must be in range [0, 10]",
+		},
+		{
+			name: "quality max_retries < 0",
+			mutate: func(cfg *Config) {
+				cfg.Quality.OnFailure.MaxRetries = -1
+			},
+			errSubstr: "quality.on_failure.max_retries must be in range [0, 10]",
+		},
+		{
+			name: "invalid quality gate type",
+			mutate: func(cfg *Config) {
+				cfg.Quality.Gates = []*quality.Gate{
+					{Type: "unknown"},
+				}
+			},
+			errSubstr: "quality.gates[0].type must be one of",
+		},
+
+		// Budget validations
+		{
+			name: "budget enabled with zero daily_limit",
+			mutate: func(cfg *Config) {
+				cfg.Budget.Enabled = true
+				cfg.Budget.DailyLimit = 0
+			},
+			errSubstr: "budget.daily_limit must be > 0 when budget is enabled",
+		},
+		{
+			name: "budget enabled with negative daily_limit",
+			mutate: func(cfg *Config) {
+				cfg.Budget.Enabled = true
+				cfg.Budget.DailyLimit = -10
+			},
+			errSubstr: "budget.daily_limit must be > 0 when budget is enabled",
+		},
+
+		// Alerts validations
+		{
+			name: "invalid alert channel type",
+			mutate: func(cfg *Config) {
+				cfg.Alerts.Channels = []AlertChannelConfig{
+					{Type: "invalid"},
+				}
+			},
+			errSubstr: "alerts.channels[0].type must be one of",
+		},
+
+		// GitHub adapter validations
+		{
+			name: "GitHub enabled without token",
+			mutate: func(cfg *Config) {
+				cfg.Adapters.GitHub.Enabled = true
+				cfg.Adapters.GitHub.Token = ""
+			},
+			errSubstr: "adapters.github.token is required",
+		},
+		{
+			name: "GitHub polling interval too low",
+			mutate: func(cfg *Config) {
+				cfg.Adapters.GitHub.Enabled = true
+				cfg.Adapters.GitHub.Token = "test-token"
+				cfg.Adapters.GitHub.Polling = &github.PollingConfig{
+					Enabled:  true,
+					Interval: 5 * time.Second,
+				}
+			},
+			errSubstr: "adapters.github.polling.interval must be >= 10s",
+		},
+
+		// Slack adapter validations
+		{
+			name: "Slack enabled without bot_token",
+			mutate: func(cfg *Config) {
+				cfg.Adapters.Slack.Enabled = true
+				cfg.Adapters.Slack.BotToken = ""
+			},
+			errSubstr: "adapters.slack.bot_token is required",
+		},
+
+		// Telegram adapter validations
+		{
+			name: "Telegram enabled without bot_token",
+			mutate: func(cfg *Config) {
+				cfg.Adapters.Telegram.Enabled = true
+				cfg.Adapters.Telegram.BotToken = ""
+				cfg.Adapters.Telegram.ChatID = "123"
+			},
+			errSubstr: "adapters.telegram.bot_token is required",
+		},
+		{
+			name: "Telegram enabled without chat_id",
+			mutate: func(cfg *Config) {
+				cfg.Adapters.Telegram.Enabled = true
+				cfg.Adapters.Telegram.BotToken = "test-token"
+				cfg.Adapters.Telegram.ChatID = ""
+			},
+			errSubstr: "adapters.telegram.chat_id is required",
+		},
+
+		// Linear adapter validations
+		{
+			name: "Linear enabled without config",
+			mutate: func(cfg *Config) {
+				cfg.Adapters.Linear.Enabled = true
+				cfg.Adapters.Linear.APIKey = ""
+				cfg.Adapters.Linear.TeamID = ""
+				cfg.Adapters.Linear.Workspaces = nil
+			},
+			errSubstr: "adapters.linear must have either api_key+team_id or workspaces",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Start with a fresh DefaultConfig for each test
+			cfg := DefaultConfig()
+
+			// Apply mutation
+			tt.mutate(cfg)
+
+			// Validate and expect error
+			err := cfg.Validate()
+			if err == nil {
+				t.Errorf("expected error containing %q, got nil", tt.errSubstr)
+			} else if !strings.Contains(err.Error(), tt.errSubstr) {
+				t.Errorf("expected error containing %q, got %q", tt.errSubstr, err.Error())
+			}
+		})
+	}
+}

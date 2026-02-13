@@ -422,6 +422,7 @@ Examples:
 			}
 
 			// Full daemon mode with gateway
+			// GH-1128: Defense-in-depth re-validation after applyInputOverrides may have modified config
 			if err := cfg.Validate(); err != nil {
 				return fmt.Errorf("invalid config: %w", err)
 			}
