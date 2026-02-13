@@ -1253,6 +1253,10 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 			if r.retrier != nil {
 				decision := r.retrier.Evaluate(err, state.smartRetryAttempt, timeout)
 				if decision.ShouldRetry {
+					// GH-1030: Record correction for drift detection
+					if r.driftDetector != nil {
+						r.driftDetector.RecordCorrection("retry_triggered", fmt.Sprintf("Error: %s, Retry attempt: %d", err.Error(), state.smartRetryAttempt+1))
+					}
 					state.smartRetryAttempt++
 					log.Info("Smart retry triggered",
 						slog.String("task_id", task.ID),
