@@ -373,6 +373,15 @@ func NewRunnerWithConfig(config *BackendConfig) (*Runner, error) {
 		runner.retrier = NewRetrier(config.Retry)
 	}
 
+	// Initialize ProfileManager for user preferences (GH-1027)
+	runner.profileManager = memory.NewProfileManager(
+		filepath.Join(os.Getenv("HOME"), ".pilot", "profile.json"),
+		".agent/.user-profile.json",
+	)
+
+	// Initialize DriftDetector for collaboration drift detection (GH-1027)
+	runner.driftDetector = NewDriftDetector(3, runner.profileManager)
+
 	return runner, nil
 }
 

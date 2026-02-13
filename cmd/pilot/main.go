@@ -584,6 +584,17 @@ Examples:
 					}
 				}
 
+				// GH-1027: Initialize KnowledgeStore for gateway runner
+				if gwStore != nil && gwRunner != nil {
+					gwKnowledgeStore := memory.NewKnowledgeStore(gwStore.DB())
+					if err := gwKnowledgeStore.InitSchema(); err != nil {
+						logging.WithComponent("memory").Warn("Failed to initialize knowledge store schema (gateway)", slog.Any("error", err))
+					} else {
+						gwRunner.SetKnowledgeStore(gwKnowledgeStore)
+						logging.WithComponent("memory").Info("knowledge store initialized for gateway mode")
+					}
+				}
+
 				// Create alerts engine if configured
 				alertsCfg := getAlertsConfig(cfg)
 				if alertsCfg != nil && alertsCfg.Enabled {
@@ -1398,6 +1409,15 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 			teamAdapter = teams.NewServiceAdapter(teamSvc)
 			runner.SetTeamChecker(teamAdapter)
 			logging.WithComponent("teams").Info("team RBAC enforcement enabled for polling mode")
+		}
+
+		// GH-1027: Initialize KnowledgeStore for experiential memories
+		knowledgeStore := memory.NewKnowledgeStore(store.DB())
+		if err := knowledgeStore.InitSchema(); err != nil {
+			logging.WithComponent("memory").Warn("Failed to initialize knowledge store schema", slog.Any("error", err))
+		} else {
+			runner.SetKnowledgeStore(knowledgeStore)
+			logging.WithComponent("memory").Info("knowledge store initialized for start command")
 		}
 	}
 
