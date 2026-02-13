@@ -2167,6 +2167,33 @@ The previous execution completed but made no code changes. This task requires ac
 				log.Warn("Failed to sync main branch", slog.Any("error", syncErr))
 			}
 		}
+
+		// GH-1065: Store experiential memory after successful task completion
+		if r.knowledge != nil {
+			projectID := "pilot" // Default fallback
+			if task.ProjectPath != "" {
+				projectID = filepath.Base(task.ProjectPath)
+			}
+
+			filesModified := 0
+			if state != nil {
+				filesModified = state.filesWrite
+			}
+
+			memory := &memory.Memory{
+				Type:       memory.MemoryTypeLearning,
+				Content:    fmt.Sprintf("Successfully completed task: %s", task.Title),
+				Context:    fmt.Sprintf("Task %s - Duration: %v, Files modified: %d", task.ID, duration, filesModified),
+				Confidence: 1.0,
+				ProjectID:  projectID,
+			}
+
+			if addErr := r.knowledge.AddMemory(memory); addErr != nil {
+				log.Warn("Failed to store task completion memory", slog.Any("error", addErr))
+			} else {
+				log.Debug("Stored task completion memory", slog.String("task_id", task.ID))
+			}
+		}
 	}
 
 	return result, nil
