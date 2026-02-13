@@ -527,6 +527,40 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("budget.daily_limit must be > 0 when budget is enabled, got %g", c.Budget.DailyLimit)
 	}
 
+	// GH-1125: Validate alert channel types
+	if c.Alerts != nil {
+		validAlertChannelTypes := map[string]bool{
+			"slack":     true,
+			"telegram":  true,
+			"email":     true,
+			"webhook":   true,
+			"pagerduty": true,
+		}
+		for i, channel := range c.Alerts.Channels {
+			if channel.Type != "" && !validAlertChannelTypes[channel.Type] {
+				return fmt.Errorf("alerts.channels[%d].type must be one of {slack, telegram, email, webhook, pagerduty}, got %q", i, channel.Type)
+			}
+		}
+	}
+
+	// GH-1125: Validate quality gate types
+	if c.Quality != nil {
+		validGateTypes := map[string]bool{
+			"build":     true,
+			"test":      true,
+			"lint":      true,
+			"coverage":  true,
+			"security":  true,
+			"typecheck": true,
+			"custom":    true,
+		}
+		for i, gate := range c.Quality.Gates {
+			if string(gate.Type) != "" && !validGateTypes[string(gate.Type)] {
+				return fmt.Errorf("quality.gates[%d].type must be one of {build, test, lint, coverage, security, typecheck, custom}, got %q", i, gate.Type)
+			}
+		}
+	}
+
 	return nil
 }
 
