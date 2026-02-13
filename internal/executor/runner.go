@@ -2129,6 +2129,12 @@ The previous execution completed but made no code changes. This task requires ac
 			if syncErr := r.syncNavigatorIndex(task, "completed", executionPath); syncErr != nil {
 				log.Warn("Failed to sync Navigator index", slog.Any("error", syncErr))
 			}
+
+			// GH-1063: Archive completed task documentation
+			agentPath := filepath.Join(executionPath, ".agent")
+			if archiveErr := ArchiveTaskDoc(agentPath, task.ID); archiveErr != nil {
+				log.Warn("Failed to archive task documentation", slog.Any("error", archiveErr))
+			}
 		}
 
 		// GH-1018: Sync main branch with origin after task completion
