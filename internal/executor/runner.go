@@ -1680,7 +1680,7 @@ The previous execution completed but made no code changes. This task requires ac
 					r.reportProgress(task.ID, "Quality Passed", 94, "All quality gates passed")
 
 					// Run simplification phase if enabled (GH-995)
-					if r.config.Simplification != nil && r.config.Simplification.Enabled {
+					if r.config != nil && r.config.Simplification != nil && r.config.Simplification.Enabled {
 						r.reportProgress(task.ID, "Simplifying", 95, "Simplifying code...")
 						simplified, simplifyErr := SimplifyModifiedFiles(executionPath, r.config.Simplification)
 						if simplifyErr != nil {
