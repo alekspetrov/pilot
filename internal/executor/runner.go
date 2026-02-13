@@ -2089,6 +2089,45 @@ The previous execution completed but made no code changes. This task requires ac
 			PRURL:     result.PRUrl,
 		})
 
+		// Post-completion operations: archive task doc, create context marker, and store memory
+		agentPath := filepath.Join(task.ProjectPath, ".agent")
+
+		// Archive task documentation
+		if err := ArchiveTaskDoc(agentPath, task.ID); err != nil {
+			log.Warn("Failed to archive task doc", slog.String("task_id", task.ID), slog.Any("error", err))
+		}
+
+		// Create context marker for task completion
+		commits := []string{}
+		if result.CommitSHA != "" {
+			commits = []string{result.CommitSHA}
+		}
+		marker := &ContextMarker{
+			Name:          fmt.Sprintf("Task %s completed", task.ID),
+			Description:   fmt.Sprintf("Completed: %s", task.Title),
+			TaskID:        task.ID,
+			FilesModified: []string{}, // Files modified not tracked in ExecutionResult
+			Commits:       commits,
+			CurrentFocus:  "Task completion",
+		}
+		if err := CreateMarker(agentPath, marker); err != nil {
+			log.Warn("Failed to create context marker", slog.String("task_id", task.ID), slog.Any("error", err))
+		}
+
+		// Store memory of task completion if knowledge store is available
+		if r.knowledge != nil && result.Success {
+			memory := &memory.Memory{
+				Type:       memory.MemoryTypeDecision,
+				Content:    fmt.Sprintf("Completed task: %s. PR: %s", task.Title, result.PRUrl),
+				Context:    fmt.Sprintf("Task %s execution", task.ID),
+				ProjectID:  task.ProjectPath,
+				Confidence: 0.8,
+			}
+			if err := r.knowledge.AddMemory(memory); err != nil {
+				log.Warn("Failed to store task completion memory", slog.String("task_id", task.ID), slog.Any("error", err))
+			}
+		}
+
 		// Finish recording with completed status
 		if recorder != nil {
 			recorder.SetCommitSHA(result.CommitSHA)
