@@ -561,6 +561,41 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// GH-1126: Validate adapter critical fields when enabled
+	if c.Adapters != nil {
+		if c.Adapters.GitHub != nil && c.Adapters.GitHub.Enabled {
+			if c.Adapters.GitHub.Token == "" {
+				log.Printf("WARNING: adapters.github.token is empty when GitHub adapter is enabled")
+				return fmt.Errorf("adapters.github.token is required when GitHub adapter is enabled")
+			}
+		}
+
+		if c.Adapters.Slack != nil && c.Adapters.Slack.Enabled {
+			if c.Adapters.Slack.BotToken == "" {
+				return fmt.Errorf("adapters.slack.bot_token is required when Slack adapter is enabled")
+			}
+			if !strings.HasPrefix(c.Adapters.Slack.BotToken, "xoxb-") {
+				log.Printf("WARNING: adapters.slack.bot_token does not start with 'xoxb-', which is the expected format for Slack bot tokens")
+			}
+		}
+
+		if c.Adapters.Telegram != nil && c.Adapters.Telegram.Enabled {
+			if c.Adapters.Telegram.BotToken == "" {
+				return fmt.Errorf("adapters.telegram.bot_token is required when Telegram adapter is enabled")
+			}
+			if c.Adapters.Telegram.ChatID == "" {
+				return fmt.Errorf("adapters.telegram.chat_id is required when Telegram adapter is enabled")
+			}
+		}
+
+		if c.Adapters.Linear != nil && c.Adapters.Linear.Enabled {
+			workspaces := c.Adapters.Linear.GetWorkspaces()
+			if len(workspaces) == 0 {
+				return fmt.Errorf("adapters.linear must have either api_key+team_id or workspaces configured when Linear adapter is enabled")
+			}
+		}
+	}
+
 	return nil
 }
 
