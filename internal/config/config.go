@@ -518,7 +518,7 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate quality on_failure max_retries in [0, 10]
-	if c.Quality != nil && c.Quality.OnFailure.MaxRetries < 0 || c.Quality != nil && c.Quality.OnFailure.MaxRetries > 10 {
+	if c.Quality != nil && (c.Quality.OnFailure.MaxRetries < 0 || c.Quality.OnFailure.MaxRetries > 10) {
 		return fmt.Errorf("quality.on_failure.max_retries must be in range [0, 10], got %d", c.Quality.OnFailure.MaxRetries)
 	}
 
