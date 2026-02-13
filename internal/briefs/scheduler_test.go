@@ -624,7 +624,7 @@ func TestSchedulerRunNowRecordsToHistory(t *testing.T) {
 			t.Fatalf("GetLastBriefSent failed after successful delivery: %v", err)
 		}
 		if lastRecord == nil {
-			t.Error("expected brief record after successful delivery, got nil")
+			t.Fatal("expected brief record after successful delivery, got nil")
 		}
 		if lastRecord.BriefType != "daily" {
 			t.Errorf("expected brief type 'daily', got %s", lastRecord.BriefType)
