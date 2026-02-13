@@ -1234,6 +1234,10 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 			if r.retrier != nil {
 				decision := r.retrier.Evaluate(err, state.smartRetryAttempt, timeout)
 				if decision.ShouldRetry {
+					// Record retry as a correction indicator for drift detection (GH-1030)
+					if r.driftDetector != nil {
+						r.driftDetector.RecordCorrection("execution_retry", fmt.Sprintf("Task %s failed attempt %d, retrying", task.ID, state.smartRetryAttempt))
+					}
 					state.smartRetryAttempt++
 					log.Info("Smart retry triggered",
 						slog.String("task_id", task.ID),
