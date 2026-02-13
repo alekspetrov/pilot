@@ -625,12 +625,13 @@ func TestSchedulerRunNowRecordsToHistory(t *testing.T) {
 		}
 		if lastRecord == nil {
 			t.Error("expected brief record after successful delivery, got nil")
-		}
-		if lastRecord.BriefType != "daily" {
-			t.Errorf("expected brief type 'daily', got %s", lastRecord.BriefType)
-		}
-		if lastRecord.Channel != "telegram" {
-			t.Errorf("expected channel 'telegram', got %s", lastRecord.Channel)
+		} else {
+			if lastRecord.BriefType != "daily" {
+				t.Errorf("expected brief type 'daily', got %s", lastRecord.BriefType)
+			}
+			if lastRecord.Channel != "telegram" {
+				t.Errorf("expected channel 'telegram', got %s", lastRecord.Channel)
+			}
 		}
 	} else {
 		// Delivery failed (expected), so no record should be written
