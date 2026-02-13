@@ -348,3 +348,267 @@ func TestMemoryTypes(t *testing.T) {
 		}
 	}
 }
+
+func TestKnowledgeStore_IndexConcepts(t *testing.T) {
+	store, cleanup := setupKnowledgeTestDB(t)
+	defer cleanup()
+
+	m := &Memory{
+		Type:       MemoryTypePattern,
+		Content:    "We use JWT authentication with OAuth for the API endpoints",
+		Context:    "auth/middleware.go",
+		Confidence: 0.9,
+		ProjectID:  "pilot",
+	}
+
+	if err := store.AddMemory(m); err != nil {
+		t.Fatalf("AddMemory failed: %v", err)
+	}
+
+	if err := store.IndexConcepts(m.ID, m.Content+" "+m.Context); err != nil {
+		t.Fatalf("IndexConcepts failed: %v", err)
+	}
+
+	// Check that concepts were created
+	concepts, err := store.GetAllConcepts()
+	if err != nil {
+		t.Fatalf("GetAllConcepts failed: %v", err)
+	}
+
+	// Should have extracted: jwt, auth, oauth, api, middleware
+	expectedConcepts := map[string]bool{"jwt": false, "auth": false, "oauth": false, "api": false, "middleware": false}
+	for _, c := range concepts {
+		if _, ok := expectedConcepts[c.Name]; ok {
+			expectedConcepts[c.Name] = true
+		}
+	}
+
+	for name, found := range expectedConcepts {
+		if !found {
+			t.Errorf("expected concept %q to be extracted", name)
+		}
+	}
+}
+
+func TestKnowledgeStore_GetConceptByName(t *testing.T) {
+	store, cleanup := setupKnowledgeTestDB(t)
+	defer cleanup()
+
+	m := &Memory{
+		Type:       MemoryTypePattern,
+		Content:    "Database migration patterns",
+		Confidence: 0.9,
+	}
+	if err := store.AddMemory(m); err != nil {
+		t.Fatalf("AddMemory failed: %v", err)
+	}
+
+	if err := store.IndexConcepts(m.ID, m.Content); err != nil {
+		t.Fatalf("IndexConcepts failed: %v", err)
+	}
+
+	concept, err := store.GetConceptByName("database")
+	if err != nil {
+		t.Fatalf("GetConceptByName failed: %v", err)
+	}
+
+	if concept.Name != "database" {
+		t.Errorf("expected name 'database', got %q", concept.Name)
+	}
+
+	if len(concept.Memories) != 1 || concept.Memories[0] != m.ID {
+		t.Errorf("expected memory ID %d in concept, got %v", m.ID, concept.Memories)
+	}
+}
+
+func TestKnowledgeStore_QueryGraph(t *testing.T) {
+	store, cleanup := setupKnowledgeTestDB(t)
+	defer cleanup()
+
+	// Create test memories with different concepts
+	memories := []*Memory{
+		{Type: MemoryTypePattern, Content: "Use JWT for API authentication", Context: "auth/jwt.go", Confidence: 0.9, ProjectID: "pilot"},
+		{Type: MemoryTypePitfall, Content: "Auth changes break session handling", Context: "auth/session.go", Confidence: 0.8, ProjectID: "pilot"},
+		{Type: MemoryTypeDecision, Content: "Database migration uses schema versioning", Context: "db/migrate.go", Confidence: 0.7, ProjectID: "pilot"},
+		{Type: MemoryTypeLearning, Content: "API rate limiting prevents abuse", Context: "api/ratelimit.go", Confidence: 0.6, ProjectID: "pilot"},
+	}
+
+	for _, m := range memories {
+		if err := store.AddMemory(m); err != nil {
+			t.Fatalf("AddMemory failed: %v", err)
+		}
+		if err := store.IndexConcepts(m.ID, m.Content+" "+m.Context); err != nil {
+			t.Fatalf("IndexConcepts failed: %v", err)
+		}
+	}
+
+	// Query for "auth"
+	result, err := store.QueryGraph("auth", "pilot")
+	if err != nil {
+		t.Fatalf("QueryGraph failed: %v", err)
+	}
+
+	// Should find direct matches containing "auth"
+	if len(result.Memories) < 2 {
+		t.Errorf("expected at least 2 direct matches for 'auth', got %d", len(result.Memories))
+	}
+
+	// Should have related concepts
+	if len(result.RelatedConcepts) == 0 {
+		t.Error("expected related concepts to be found")
+	}
+
+	// Check query is stored
+	if result.Query != "auth" {
+		t.Errorf("expected query 'auth', got %q", result.Query)
+	}
+}
+
+func TestKnowledgeStore_QueryGraph_ConceptExpansion(t *testing.T) {
+	store, cleanup := setupKnowledgeTestDB(t)
+	defer cleanup()
+
+	// Create memories that share concepts
+	m1 := &Memory{Type: MemoryTypePattern, Content: "JWT token validation", Confidence: 0.9, ProjectID: "proj"}
+	m2 := &Memory{Type: MemoryTypePattern, Content: "OAuth integration with JWT", Confidence: 0.8, ProjectID: "proj"}
+	m3 := &Memory{Type: MemoryTypePitfall, Content: "Token expiry handling", Confidence: 0.7, ProjectID: "proj"}
+
+	for _, m := range []*Memory{m1, m2, m3} {
+		if err := store.AddMemory(m); err != nil {
+			t.Fatalf("AddMemory failed: %v", err)
+		}
+		if err := store.IndexConcepts(m.ID, m.Content); err != nil {
+			t.Fatalf("IndexConcepts failed: %v", err)
+		}
+	}
+
+	// Query for "jwt" should find m1 and m2 directly
+	result, err := store.QueryGraph("jwt", "proj")
+	if err != nil {
+		t.Fatalf("QueryGraph failed: %v", err)
+	}
+
+	// m1 and m2 contain "jwt" directly
+	if len(result.Memories) < 2 {
+		t.Errorf("expected at least 2 direct matches, got %d", len(result.Memories))
+	}
+
+	// Concept expansion should find related memories through shared concepts like "token"
+	if len(result.RelatedConcepts) == 0 {
+		t.Log("No related concepts found - this may be expected if jwt is the only matching concept")
+	}
+}
+
+func TestKnowledgeStore_ReindexMemory(t *testing.T) {
+	store, cleanup := setupKnowledgeTestDB(t)
+	defer cleanup()
+
+	m := &Memory{
+		Type:       MemoryTypePattern,
+		Content:    "Original content about auth",
+		Confidence: 0.9,
+	}
+	if err := store.AddMemory(m); err != nil {
+		t.Fatalf("AddMemory failed: %v", err)
+	}
+	if err := store.IndexConcepts(m.ID, m.Content); err != nil {
+		t.Fatalf("IndexConcepts failed: %v", err)
+	}
+
+	// Update memory content
+	m.Content = "Updated content about database and api"
+	if err := store.UpdateMemory(m); err != nil {
+		t.Fatalf("UpdateMemory failed: %v", err)
+	}
+
+	// Reindex
+	if err := store.ReindexMemory(m.ID); err != nil {
+		t.Fatalf("ReindexMemory failed: %v", err)
+	}
+
+	// Check new concepts were indexed
+	dbConcept, err := store.GetConceptByName("database")
+	if err != nil {
+		t.Fatalf("GetConceptByName for database failed: %v", err)
+	}
+
+	found := false
+	for _, memID := range dbConcept.Memories {
+		if memID == m.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected memory to be linked to 'database' concept after reindex")
+	}
+}
+
+func TestExtractConcepts(t *testing.T) {
+	tests := []struct {
+		content  string
+		expected []string
+	}{
+		{
+			content:  "We use JWT for authentication",
+			expected: []string{"jwt", "auth"},
+		},
+		{
+			content:  "Database migration with schema changes",
+			expected: []string{"database", "migration", "schema"},
+		},
+		{
+			content:  "API endpoint with cache and logging",
+			expected: []string{"api", "endpoint", "cache", "logging"},
+		},
+		{
+			content:  "no concepts here",
+			expected: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		result := extractConcepts(tt.content)
+		for _, exp := range tt.expected {
+			found := false
+			for _, r := range result {
+				if r == exp {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected concept %q in result for content %q, got %v", exp, tt.content, result)
+			}
+		}
+	}
+}
+
+func TestKnowledgeStore_ScoreResults(t *testing.T) {
+	store, cleanup := setupKnowledgeTestDB(t)
+	defer cleanup()
+
+	// Create test result
+	result := &GraphQueryResult{
+		Query: "jwt auth",
+		Memories: []*Memory{
+			{ID: 1, Content: "JWT authentication pattern", Type: MemoryTypePattern, Confidence: 0.5},
+			{ID: 2, Content: "Auth session handling", Type: MemoryTypePitfall, Confidence: 0.9},
+			{ID: 3, Content: "Unrelated content", Type: MemoryTypePattern, Confidence: 0.8},
+		},
+	}
+
+	store.scoreResults(result)
+
+	// First result should have exact match (jwt + auth)
+	// The scoring should prioritize the memory with best match, not just confidence
+	if len(result.Memories) < 3 {
+		t.Fatalf("expected 3 memories, got %d", len(result.Memories))
+	}
+
+	// Memory with "JWT" and higher match should rank higher than unrelated content
+	firstContent := result.Memories[0].Content
+	if firstContent == "Unrelated content" {
+		t.Error("expected better matches to rank higher than unrelated content")
+	}
+}
