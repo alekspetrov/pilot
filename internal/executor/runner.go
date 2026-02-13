@@ -2135,6 +2135,29 @@ The previous execution completed but made no code changes. This task requires ac
 			if archiveErr := ArchiveTaskDoc(agentPath, task.ID); archiveErr != nil {
 				log.Warn("Failed to archive task documentation", slog.Any("error", archiveErr))
 			}
+
+			// GH-1064: Create context marker for completed task
+			marker := &ContextMarker{
+				Name:        fmt.Sprintf("task-completed-%s", task.ID),
+				Description: fmt.Sprintf("Task completed: %s", task.Title),
+				TaskID:      task.ID,
+				CurrentFocus: fmt.Sprintf("Successfully completed task %s (%s). Duration: %v. Commits: %d files modified.",
+					task.ID, task.Title, duration, state.filesWrite),
+			}
+
+			// Add commit SHA and PR info if available
+			if result.CommitSHA != "" {
+				marker.Commits = append(marker.Commits, result.CommitSHA)
+			}
+			if result.PRUrl != "" {
+				marker.CurrentFocus += fmt.Sprintf(" PR created: %s", result.PRUrl)
+			}
+
+			if createMarkerErr := CreateMarker(agentPath, marker); createMarkerErr != nil {
+				log.Warn("Failed to create completion marker", slog.Any("error", createMarkerErr))
+			} else {
+				log.Debug("Created completion context marker", slog.String("marker_path", marker.FilePath))
+			}
 		}
 
 		// GH-1018: Sync main branch with origin after task completion
