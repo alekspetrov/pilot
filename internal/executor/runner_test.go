@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/alekspetrov/pilot/internal/memory"
+	_ "modernc.org/sqlite"
 )
 
 func TestNewRunner(t *testing.T) {
@@ -2541,4 +2546,495 @@ func TestRunner_CancelAll_MultipleTasks(t *testing.T) {
 			t.Errorf("process %d did not terminate after SIGTERM within timeout", i)
 		}
 	}
+}
+
+// TestBuildPromptWithKnowledgeAndProfile tests BuildPrompt with populated knowledge and profile injection
+func TestBuildPromptWithKnowledgeAndProfile(t *testing.T) {
+	// Create temp directory with .agent structure
+	tmpDir := t.TempDir()
+	agentDir := filepath.Join(tmpDir, ".agent")
+	if err := os.MkdirAll(agentDir, 0755); err != nil {
+		t.Fatalf("Failed to create .agent dir: %v", err)
+	}
+
+	// Create in-memory SQLite database for knowledge store
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open in-memory database: %v", err)
+	}
+	defer db.Close()
+
+	// Initialize tables for knowledge store
+	_, err = db.Exec(`
+		CREATE TABLE memories (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			type TEXT NOT NULL,
+			content TEXT NOT NULL,
+			context TEXT,
+			confidence REAL DEFAULT 1.0,
+			project_id TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create memories table: %v", err)
+	}
+
+	// Insert test memories with exact phrase matches for the task description
+	testMemories := []struct {
+		memType    string
+		content    string
+		context    string
+		confidence float64
+	}{
+		{"pattern", "When building authentication middleware use proper validation", "API middleware setup", 0.9},
+		{"pitfall", "Authentication middleware must handle invalid tokens gracefully", "Security bug", 0.8},
+		{"decision", "Choose JWT tokens for stateless authentication middleware design", "Auth architecture", 0.95},
+		{"learning", "Timeout configuration is critical in authentication middleware", "Performance debug", 0.7},
+		{"pattern", "Always log authentication middleware events for debugging", "Logging refactor", 0.85},
+	}
+
+	// Create knowledge store with populated data
+	knowledgeStore := memory.NewKnowledgeStore(db)
+
+	// Initialize schema first
+	if err := knowledgeStore.InitSchema(); err != nil {
+		t.Fatalf("Failed to initialize knowledge store schema: %v", err)
+	}
+
+	for _, mem := range testMemories {
+		memObj := &memory.Memory{
+			Type:       memory.MemoryType(mem.memType),
+			Content:    mem.content,
+			Context:    mem.context,
+			Confidence: mem.confidence,
+			ProjectID:  "pilot",
+		}
+		if err := knowledgeStore.AddMemory(memObj); err != nil {
+			t.Fatalf("Failed to insert test memory: %v", err)
+		}
+	}
+
+	// Create temp profile file with test data
+	profileDir := filepath.Join(tmpDir, "profile")
+	if err := os.MkdirAll(profileDir, 0755); err != nil {
+		t.Fatalf("Failed to create profile dir: %v", err)
+	}
+
+	globalProfilePath := filepath.Join(profileDir, "global-profile.json")
+	projectProfilePath := filepath.Join(agentDir, ".user-profile.json")
+
+	testProfile := memory.UserProfile{
+		Verbosity:    "concise",
+		Frameworks:   []string{"gin", "gorm", "testify"},
+		Conventions:  map[string]string{"indent": "tabs", "naming": "camelCase"},
+		CodePatterns: []string{"early_returns", "structured_logging", "context_timeout"},
+		Corrections:  []memory.Correction{
+			{Pattern: "missing error check", Correction: "always check errors explicitly", Count: 3},
+			{Pattern: "hardcoded timeout", Correction: "use configurable timeouts", Count: 2},
+		},
+	}
+
+	profileData, err := json.Marshal(testProfile)
+	if err != nil {
+		t.Fatalf("Failed to marshal test profile: %v", err)
+	}
+
+	if err := os.WriteFile(globalProfilePath, profileData, 0644); err != nil {
+		t.Fatalf("Failed to write test profile: %v", err)
+	}
+
+	// Create profile manager
+	profileManager := memory.NewProfileManager(globalProfilePath, projectProfilePath)
+
+	// Create drift detector with profile manager
+	driftDetector := NewDriftDetector(3, profileManager)
+
+	// Add some drift indicators to test correction tracking
+	driftDetector.RecordCorrection("test_pattern", "Test correction for drift detection")
+	driftDetector.RecordCorrection("execution_retry", "Failed build, retrying")
+
+	// Create runner and inject components
+	runner := NewRunner()
+	runner.SetKnowledgeStore(knowledgeStore)
+	runner.SetProfileManager(profileManager)
+	runner.SetDriftDetector(driftDetector)
+
+	// Create test task related to authentication (should match knowledge memories)
+	task := &Task{
+		ID:          "TASK-AUTH-456",
+		Title:       "Add authentication middleware",
+		Description: "authentication middleware", // Simplified to match our test data
+		ProjectPath: tmpDir,
+		Branch:      "pilot/TASK-AUTH-456",
+		AcceptanceCriteria: []string{
+			"JWT tokens are validated on protected routes",
+			"Proper error responses for invalid tokens",
+			"Configurable timeout for token validation",
+		},
+	}
+
+	prompt := runner.BuildPrompt(task, tmpDir)
+
+	// Verify prompt contains expected sections
+	if prompt == "" {
+		t.Error("BuildPrompt returned empty string")
+	}
+
+	// Check core task elements
+	expectedElements := []string{
+		"TASK-AUTH-456",
+		"authentication middleware", // Updated to match our simplified task
+		"pilot/TASK-AUTH-456",
+		"PILOT EXECUTION MODE",
+	}
+
+	for _, expected := range expectedElements {
+		if !contains(prompt, expected) {
+			t.Errorf("Prompt missing expected element: %s", expected)
+		}
+	}
+
+	// Check User Preferences section is included
+	if !contains(prompt, "## User Preferences") {
+		t.Error("Prompt missing User Preferences section")
+	}
+	if !contains(prompt, "**Verbosity**: concise") {
+		t.Error("Prompt missing verbosity preference")
+	}
+	if !contains(prompt, "**Preferred frameworks**: gin, gorm, testify") {
+		t.Error("Prompt missing framework preferences")
+	}
+	if !contains(prompt, "**Code patterns**: early_returns, structured_logging, context_timeout") {
+		t.Error("Prompt missing code pattern preferences")
+	}
+
+	// Check Relevant Knowledge section is included
+	if !contains(prompt, "## Relevant Knowledge") {
+		t.Error("Prompt missing Relevant Knowledge section")
+	}
+	if !contains(prompt, "Based on past experience:") {
+		t.Error("Prompt missing knowledge introduction")
+	}
+
+	// Should contain JWT-related knowledge from our test data
+	if !contains(prompt, "JWT tokens for stateless") {
+		t.Error("Prompt missing relevant JWT knowledge")
+	}
+	if !contains(prompt, "Timeout configuration is critical") {
+		t.Error("Prompt missing timeout-related knowledge")
+	}
+
+	// Check Acceptance Criteria section
+	if !contains(prompt, "## Acceptance Criteria") {
+		t.Error("Prompt missing Acceptance Criteria section")
+	}
+	if !contains(prompt, "JWT tokens are validated") {
+		t.Error("Prompt missing first acceptance criterion")
+	}
+	if !contains(prompt, "Configurable timeout") {
+		t.Error("Prompt missing timeout acceptance criterion")
+	}
+
+	// Check Pre-Commit Verification section
+	if !contains(prompt, "## Pre-Commit Verification") {
+		t.Error("Prompt missing Pre-Commit Verification section")
+	}
+	if !contains(prompt, "**Build passes**: Run `go build ./...`") {
+		t.Error("Prompt missing build verification")
+	}
+	if !contains(prompt, "**Acceptance criteria**: Verify ALL criteria") {
+		t.Error("Prompt missing acceptance criteria verification")
+	}
+
+	t.Logf("Generated prompt length: %d characters", len(prompt))
+
+	// Optional: log prompt for manual inspection
+	if testing.Verbose() {
+		t.Logf("Generated prompt:\n%s", prompt)
+	}
+}
+
+// TestBuildPromptWithInMemorySQLiteAndTempAgentDir tests post-task wiring with temporary structures
+func TestBuildPromptWithInMemorySQLiteAndTempAgentDir(t *testing.T) {
+	// Create temporary directory structure
+	tmpDir := t.TempDir()
+	agentDir := filepath.Join(tmpDir, ".agent")
+	if err := os.MkdirAll(agentDir, 0755); err != nil {
+		t.Fatalf("Failed to create .agent dir: %v", err)
+	}
+
+	// Create typical Navigator files
+	navigatorFiles := map[string]string{
+		"DEVELOPMENT-README.md": "# Navigator Development Guide\n\nThis project uses Navigator for planning.",
+		"tasks/TASK-123.md":     "# TASK-123\n\n## Problem\n\nImplement feature X\n\n## Acceptance Criteria\n\n- Feature works",
+		"system/architecture.md": "# System Architecture\n\nThis is the system architecture.",
+	}
+
+	for fileName, content := range navigatorFiles {
+		filePath := filepath.Join(agentDir, fileName)
+		fileDir := filepath.Dir(filePath)
+		if err := os.MkdirAll(fileDir, 0755); err != nil {
+			t.Fatalf("Failed to create directory %s: %v", fileDir, err)
+		}
+		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write file %s: %v", fileName, err)
+		}
+	}
+
+	// Create in-memory SQLite for KnowledgeStore
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open in-memory database: %v", err)
+	}
+	defer db.Close()
+
+	// Initialize knowledge store schema
+	_, err = db.Exec(`
+		CREATE TABLE memories (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			type TEXT NOT NULL,
+			content TEXT NOT NULL,
+			context TEXT,
+			confidence REAL DEFAULT 1.0,
+			project_id TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create memories table: %v", err)
+	}
+
+	knowledgeStore := memory.NewKnowledgeStore(db)
+
+	// Initialize schema
+	if err := knowledgeStore.InitSchema(); err != nil {
+		t.Fatalf("Failed to initialize knowledge store schema: %v", err)
+	}
+
+	// Insert memories that should be relevant to task
+	testMems := []*memory.Memory{
+		{Type: "pattern", Content: "Use dependency injection for testability", Context: "Refactor session", Confidence: 0.9, ProjectID: "pilot"},
+		{Type: "pitfall", Content: "Avoid global state in concurrent code", Context: "Race condition bug", Confidence: 0.85, ProjectID: "pilot"},
+		{Type: "decision", Content: "Chose microservices over monolith for scalability", Context: "Architecture review", Confidence: 0.95, ProjectID: "pilot"},
+	}
+	for _, mem := range testMems {
+		if err := knowledgeStore.AddMemory(mem); err != nil {
+			t.Fatalf("Failed to insert test memory: %v", err)
+		}
+	}
+
+	// Create temporary profile with in-memory setup
+	profilePath := filepath.Join(tmpDir, "temp-profile.json")
+	tempProfile := memory.UserProfile{
+		Verbosity:   "detailed",
+		Frameworks:  []string{"echo", "sqlx"},
+		CodePatterns: []string{"dependency_injection", "error_wrapping"},
+	}
+
+	profileData, err := json.Marshal(tempProfile)
+	if err != nil {
+		t.Fatalf("Failed to marshal profile: %v", err)
+	}
+	if err := os.WriteFile(profilePath, profileData, 0644); err != nil {
+		t.Fatalf("Failed to write profile: %v", err)
+	}
+
+	profileManager := memory.NewProfileManager(profilePath, filepath.Join(agentDir, ".user-profile.json"))
+
+	// Setup runner with temporary components
+	runner := NewRunner()
+	runner.SetKnowledgeStore(knowledgeStore)
+	runner.SetProfileManager(profileManager)
+
+	// Create task for testing - use phrase that matches our test data
+	task := &Task{
+		ID:          "TEMP-456",
+		Description: "dependency injection", // Simplified to match our test data
+		ProjectPath: tmpDir,
+		Branch:      "feature/temp-refactor",
+	}
+
+	// Execute BuildPrompt - should use Navigator mode due to .agent/ directory
+	prompt := runner.BuildPrompt(task, tmpDir)
+
+	// Verify the prompt uses Navigator mode (not trivial mode)
+	if !contains(prompt, "## PILOT EXECUTION MODE") {
+		t.Error("Prompt should include Pilot execution mode section")
+	}
+
+	// Should include knowledge from in-memory SQLite
+	if !contains(prompt, "## Relevant Knowledge") {
+		t.Error("Prompt should include knowledge section with in-memory data")
+	}
+	if !contains(prompt, "dependency injection") {
+		t.Error("Prompt should include relevant dependency injection knowledge")
+	}
+
+	// Should include profile preferences
+	if !contains(prompt, "## User Preferences") {
+		t.Error("Prompt should include user preferences from temporary profile")
+	}
+	if !contains(prompt, "**Verbosity**: detailed") {
+		t.Error("Prompt should include verbosity from temporary profile")
+	}
+	if !contains(prompt, "echo, sqlx") {
+		t.Error("Prompt should include framework preferences")
+	}
+
+	// Should include workflow instructions
+	if !contains(prompt, "WORKFLOW CHECK") {
+		t.Error("Prompt should include workflow check section")
+	}
+
+	// Should include branch instruction
+	if !contains(prompt, "feature/temp-refactor") {
+		t.Error("Prompt should include branch creation instruction")
+	}
+
+	// Verify temporary directory structure still exists during test
+	if _, err := os.Stat(agentDir); os.IsNotExist(err) {
+		t.Error("Temporary .agent directory should still exist during test")
+	}
+
+	// Verify knowledge store can query successfully
+	memories, err := knowledgeStore.QueryByTopic("dependency injection", "pilot")
+	if err != nil {
+		t.Errorf("Knowledge store query failed: %v", err)
+	}
+	if len(memories) == 0 {
+		t.Error("Knowledge store should return relevant memories for dependency injection")
+	}
+
+	t.Logf("Successfully tested BuildPrompt with temporary .agent dir and in-memory SQLite")
+}
+
+// TestBuildPromptDriftDetectorRetryIntegration tests drift detector integration on retry path
+func TestBuildPromptDriftDetectorRetryIntegration(t *testing.T) {
+	// Create temp directory with .agent for Navigator mode
+	tmpDir := t.TempDir()
+	agentDir := filepath.Join(tmpDir, ".agent")
+	if err := os.MkdirAll(agentDir, 0755); err != nil {
+		t.Fatalf("Failed to create .agent dir: %v", err)
+	}
+
+	// Create profile manager with temporary paths
+	profilePath := filepath.Join(tmpDir, "drift-profile.json")
+	profileManager := memory.NewProfileManager(profilePath, filepath.Join(agentDir, ".user-profile.json"))
+
+	// Create drift detector
+	driftDetector := NewDriftDetector(2, profileManager) // Low threshold for testing
+
+	// Create runner and setup components
+	runner := NewRunner()
+	runner.SetDriftDetector(driftDetector)
+
+	// Test 1: Normal prompt without drift
+	task := &Task{
+		ID:          "DRIFT-001",
+		Description: "Add logging to service",
+		ProjectPath: tmpDir,
+		Branch:      "feature/drift-test",
+	}
+
+	prompt1 := runner.BuildPrompt(task, tmpDir)
+
+	// Should not contain re-anchor prompt initially
+	if contains(prompt1, "CRITICAL: Re-anchor") {
+		t.Error("Initial prompt should not contain re-anchor instructions")
+	}
+
+	// Test 2: Record enough corrections to trigger drift detection (threshold = 2)
+	driftDetector.RecordCorrection("execution_retry", "Build failed on attempt 1")
+	driftDetector.RecordCorrection("execution_retry", "Test failed on attempt 2") // Should trigger re-anchor
+
+	// Verify drift is detected
+	if !driftDetector.ShouldReanchor() {
+		t.Error("Drift detector should indicate need for re-anchoring after corrections")
+	} else {
+		t.Logf("Drift detector correctly detected drift")
+	}
+
+	// Test 3: BuildPrompt should now include re-anchor instructions
+	prompt2 := runner.BuildPrompt(task, tmpDir)
+
+	// Debug the prompt length and check if our drift detection is triggered
+	t.Logf("Second prompt length: %d", len(prompt2))
+	if testing.Verbose() {
+		t.Logf("Second prompt content:\n%s", prompt2)
+	}
+
+	// Should contain re-anchor prompt
+	reanchorPrompt := driftDetector.GetReanchorPrompt()
+	if !contains(prompt2, "CRITICAL: Re-anchor") {
+		t.Error("Prompt should contain re-anchor instructions when drift detected")
+	}
+	if !contains(prompt2, reanchorPrompt) {
+		t.Error("Prompt should contain drift detector's re-anchor prompt")
+	}
+
+	// Test 4: Verify drift detector resets after use
+	if driftDetector.ShouldReanchor() {
+		t.Error("Drift detector should reset after BuildPrompt extracts re-anchor instructions")
+	}
+
+	// Test 5: Next prompt should be clean again
+	prompt3 := runner.BuildPrompt(task, tmpDir)
+	if contains(prompt3, "CRITICAL: Re-anchor") {
+		t.Error("Prompt should not contain re-anchor instructions after reset")
+	}
+
+	// Test 6: Test retry integration specifically
+	// Simulate execution retry scenario (would normally happen in Execute method)
+	taskState := &progressState{smartRetryAttempt: 1}
+
+	// Simulate decision to retry (this would come from intent judge)
+	decision := struct{ ShouldRetry bool }{ShouldRetry: true}
+
+	// This simulates the retry code path from Execute method
+	if decision.ShouldRetry {
+		// Record retry as a correction indicator for drift detection (GH-1030)
+		if runner.driftDetector != nil {
+			runner.driftDetector.RecordCorrection("execution_retry", fmt.Sprintf("Task %s failed attempt %d, retrying", task.ID, taskState.smartRetryAttempt))
+		}
+	}
+
+	// Test 7: Verify multiple retries accumulate corrections
+	runner.driftDetector.RecordCorrection("execution_retry", fmt.Sprintf("Task %s failed attempt %d, retrying", task.ID, 2))
+
+	if !runner.driftDetector.ShouldReanchor() {
+		t.Error("Multiple retry corrections should trigger drift detection")
+	}
+
+	// Test 8: Profile manager integration
+	// Corrections should be persisted to profile for learning
+	testCorrection := memory.Correction{
+		Pattern:    "frequent_retries",
+		Correction: "review approach when multiple retries needed",
+		Count:      1,
+	}
+
+	profile := memory.UserProfile{
+		Corrections: []memory.Correction{testCorrection},
+	}
+
+	if err := profileManager.Save(&profile, true); err != nil {
+		t.Errorf("Failed to save profile with corrections: %v", err)
+	}
+
+	// Verify profile can be loaded back
+	loadedProfile, err := profileManager.Load()
+	if err != nil {
+		t.Errorf("Failed to load profile: %v", err)
+	}
+	if len(loadedProfile.Corrections) == 0 {
+		t.Error("Loaded profile should contain corrections")
+	}
+	if loadedProfile.Corrections[0].Pattern != "frequent_retries" {
+		t.Error("Correction pattern should match saved value")
+	}
+
+	t.Logf("Successfully tested drift detector retry integration")
 }
