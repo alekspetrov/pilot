@@ -52,7 +52,7 @@ func (pm *ProfileManager) Load() (*UserProfile, error) {
 
 	// Load global defaults
 	if data, err := os.ReadFile(pm.globalPath); err == nil {
-		json.Unmarshal(data, profile)
+		_ = json.Unmarshal(data, profile) // Ignore error: malformed profile uses defaults
 	}
 
 	// Apply project overrides
