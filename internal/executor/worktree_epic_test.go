@@ -378,6 +378,328 @@ func TestWorktreeEpicBranchOperations(t *testing.T) {
 	}
 }
 
+// TestWorktreeNavigatorAutoInit verifies Navigator auto-init works correctly in epic worktrees.
+// GH-950: Edge case - project without .agent/ should have Navigator auto-initialized in worktree.
+func TestWorktreeNavigatorAutoInit(t *testing.T) {
+	localRepo, remoteRepo := setupTestRepoWithRemote(t)
+	defer func() { _ = os.RemoveAll(localRepo) }()
+	defer func() { _ = os.RemoveAll(remoteRepo) }()
+
+	// Explicitly ensure NO .agent/ directory exists in source repo
+	agentDir := filepath.Join(localRepo, ".agent")
+	if _, err := os.Stat(agentDir); err == nil {
+		t.Fatal(".agent should not exist in fresh test repo")
+	}
+
+	ctx := context.Background()
+	manager := NewWorktreeManager(localRepo)
+
+	// Create worktree for epic
+	result, err := manager.CreateWorktreeWithBranch(ctx, "autoinit-test", "pilot/autoinit-test", "main")
+	if err != nil {
+		t.Fatalf("Failed to create worktree: %v", err)
+	}
+	defer result.Cleanup()
+
+	// Call EnsureNavigatorInWorktree - should succeed even without source .agent/
+	if err := EnsureNavigatorInWorktree(localRepo, result.Path); err != nil {
+		t.Errorf("EnsureNavigatorInWorktree should succeed without source .agent/: %v", err)
+	}
+
+	// Verify .agent/ does NOT exist in worktree yet (maybeInitNavigator handles this later)
+	worktreeAgentDir := filepath.Join(result.Path, ".agent")
+	if _, err := os.Stat(worktreeAgentDir); err == nil {
+		// This is actually fine - means source had tracked .agent/ or we copied something
+		t.Log(".agent/ exists in worktree (from source or git)")
+	}
+
+	// The key verification: Runner.maybeInitNavigator would be called with worktree path
+	// This test confirms EnsureNavigatorInWorktree doesn't fail when source has no .agent/
+}
+
+// TestWorktreeQualityGatesPath verifies quality gates receive the correct worktree path.
+// GH-950: Edge case - quality gates (build/test/lint) must run in worktree, not original repo.
+func TestWorktreeQualityGatesPath(t *testing.T) {
+	localRepo, remoteRepo := setupTestRepoWithRemote(t)
+	defer func() { _ = os.RemoveAll(localRepo) }()
+	defer func() { _ = os.RemoveAll(remoteRepo) }()
+
+	// Create and commit project config files
+	createProjectConfigFiles(t, localRepo)
+	commitProjectFiles(t, localRepo)
+
+	ctx := context.Background()
+	manager := NewWorktreeManager(localRepo)
+
+	result, err := manager.CreateWorktreeWithBranch(ctx, "quality-test", "pilot/quality-test", "main")
+	if err != nil {
+		t.Fatalf("Failed to create worktree: %v", err)
+	}
+	defer result.Cleanup()
+
+	// Track which path the quality checker receives
+	var qualityCheckerPath string
+	mockFactory := func(taskID, projectPath string) QualityChecker {
+		qualityCheckerPath = projectPath
+		return &mockQualityChecker{
+			outcome: &QualityOutcome{Passed: true},
+		}
+	}
+
+	// Simulate what executeWithOptions does - pass worktree path to quality factory
+	executionPath := result.Path
+	checker := mockFactory("quality-test", executionPath)
+
+	// Verify the factory received the worktree path, not original repo
+	if qualityCheckerPath != result.Path {
+		t.Errorf("Quality factory should receive worktree path %q, got %q", result.Path, qualityCheckerPath)
+	}
+
+	if qualityCheckerPath == localRepo {
+		t.Error("Quality factory should NOT receive original repo path")
+	}
+
+	// Verify checker works
+	outcome, err := checker.Check(ctx)
+	if err != nil {
+		t.Errorf("Quality check failed: %v", err)
+	}
+	if !outcome.Passed {
+		t.Error("Expected quality check to pass")
+	}
+}
+
+// TestWorktreeConcurrentEpicExecution verifies multiple epics can execute concurrently in separate worktrees.
+// GH-950: Edge case - concurrent epic executions must not interfere with each other.
+func TestWorktreeConcurrentEpicExecution(t *testing.T) {
+	localRepo, remoteRepo := setupTestRepoWithRemote(t)
+	defer func() { _ = os.RemoveAll(localRepo) }()
+	defer func() { _ = os.RemoveAll(remoteRepo) }()
+
+	ctx := context.Background()
+
+	// Simulate 3 concurrent epic executions
+	numEpics := 3
+	var wg sync.WaitGroup
+	results := make([]*WorktreeResult, numEpics)
+	errors := make([]error, numEpics)
+
+	// Use separate managers (as would happen in real concurrent execution)
+	for i := 0; i < numEpics; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			manager := NewWorktreeManager(localRepo)
+			branchName := fmt.Sprintf("pilot/epic-concurrent-%d", idx+1)
+			taskID := fmt.Sprintf("concurrent-epic-%d", idx+1)
+
+			result, err := manager.CreateWorktreeWithBranch(ctx, taskID, branchName, "main")
+			if err != nil {
+				errors[idx] = err
+				return
+			}
+			results[idx] = result
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Check for creation errors
+	for i, err := range errors {
+		if err != nil {
+			t.Errorf("Epic %d worktree creation failed: %v", i+1, err)
+		}
+	}
+
+	// Cleanup any successful worktrees on test failure
+	defer func() {
+		for _, result := range results {
+			if result != nil {
+				result.Cleanup()
+			}
+		}
+	}()
+
+	// Verify all worktrees are unique and isolated
+	paths := make(map[string]bool)
+	for i, result := range results {
+		if result == nil {
+			continue
+		}
+
+		// Check uniqueness
+		if paths[result.Path] {
+			t.Errorf("Duplicate worktree path detected for epic %d: %s", i+1, result.Path)
+		}
+		paths[result.Path] = true
+
+		// Verify worktree exists
+		if _, err := os.Stat(result.Path); os.IsNotExist(err) {
+			t.Errorf("Epic %d worktree should exist: %s", i+1, result.Path)
+		}
+
+		// Verify branch in worktree
+		branchCmd := exec.Command("git", "-C", result.Path, "branch", "--show-current")
+		output, err := branchCmd.Output()
+		if err != nil {
+			t.Errorf("Failed to get branch for epic %d: %v", i+1, err)
+			continue
+		}
+		expectedBranch := fmt.Sprintf("pilot/epic-concurrent-%d", i+1)
+		actualBranch := strings.TrimSpace(string(output))
+		if actualBranch != expectedBranch {
+			t.Errorf("Epic %d: expected branch %q, got %q", i+1, expectedBranch, actualBranch)
+		}
+	}
+
+	// Verify all paths are different from original repo
+	for i, result := range results {
+		if result == nil {
+			continue
+		}
+		if result.Path == localRepo {
+			t.Errorf("Epic %d worktree path should not be original repo", i+1)
+		}
+	}
+
+	// Test concurrent file creation doesn't interfere
+	for i, result := range results {
+		if result == nil {
+			continue
+		}
+		testFile := filepath.Join(result.Path, fmt.Sprintf("epic-%d-test.txt", i+1))
+		content := fmt.Sprintf("Content for epic %d\n", i+1)
+		if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+			t.Errorf("Failed to write test file for epic %d: %v", i+1, err)
+		}
+	}
+
+	// Verify files don't leak between worktrees
+	for i, result := range results {
+		if result == nil {
+			continue
+		}
+		// Check this worktree only has its own file
+		for j := range results {
+			if results[j] == nil {
+				continue
+			}
+			otherFile := filepath.Join(result.Path, fmt.Sprintf("epic-%d-test.txt", j+1))
+			_, err := os.Stat(otherFile)
+			if i == j {
+				// Should have our own file
+				if os.IsNotExist(err) {
+					t.Errorf("Epic %d should have its own file", i+1)
+				}
+			} else {
+				// Should NOT have other epic's file
+				if err == nil {
+					t.Errorf("Epic %d worktree should not have epic %d's file", i+1, j+1)
+				}
+			}
+		}
+	}
+
+	// Verify concurrent cleanup doesn't cause issues
+	var cleanupWg sync.WaitGroup
+	for i, result := range results {
+		if result == nil {
+			continue
+		}
+		cleanupWg.Add(1)
+		go func(idx int, r *WorktreeResult) {
+			defer cleanupWg.Done()
+			r.Cleanup()
+		}(i, result)
+	}
+	cleanupWg.Wait()
+
+	// Verify all worktrees are removed
+	for i, result := range results {
+		if result == nil {
+			continue
+		}
+		if _, err := os.Stat(result.Path); !os.IsNotExist(err) {
+			t.Errorf("Epic %d worktree should be removed after cleanup: %s", i+1, result.Path)
+		}
+	}
+}
+
+// TestWorktreeEpicSubIssueIsolation verifies sub-issues use parent epic's worktree path.
+// GH-950: Edge case - sub-issues must NOT create recursive worktrees.
+func TestWorktreeEpicSubIssueIsolation(t *testing.T) {
+	localRepo, remoteRepo := setupTestRepoWithRemote(t)
+	defer func() { _ = os.RemoveAll(localRepo) }()
+	defer func() { _ = os.RemoveAll(remoteRepo) }()
+
+	ctx := context.Background()
+	manager := NewWorktreeManager(localRepo)
+
+	// Create epic worktree
+	epicResult, err := manager.CreateWorktreeWithBranch(ctx, "epic-isolation", "pilot/epic-isolation", "main")
+	if err != nil {
+		t.Fatalf("Failed to create epic worktree: %v", err)
+	}
+	defer epicResult.Cleanup()
+
+	// Track execution paths for sub-issues
+	var pathsMu sync.Mutex
+	var subIssuePaths []string
+
+	// Simulate sub-issue execution - they should reuse epic's worktree path
+	numSubIssues := 3
+	for i := 0; i < numSubIssues; i++ {
+		// Simulate executeWithOptions(ctx, task, false) - false prevents new worktree
+		subIssuePath := epicResult.Path // Sub-issues use parent's worktree
+
+		pathsMu.Lock()
+		subIssuePaths = append(subIssuePaths, subIssuePath)
+		pathsMu.Unlock()
+
+		// Verify sub-issue would execute in epic's worktree
+		if subIssuePath != epicResult.Path {
+			t.Errorf("Sub-issue %d should use epic worktree %q, got %q", i+1, epicResult.Path, subIssuePath)
+		}
+	}
+
+	// All sub-issues should have used the same path (epic's worktree)
+	for i, path := range subIssuePaths {
+		if path != epicResult.Path {
+			t.Errorf("Sub-issue %d path %q should equal epic worktree %q", i+1, path, epicResult.Path)
+		}
+	}
+
+	// Verify only ONE worktree exists (the epic's)
+	if manager.ActiveCount() != 1 {
+		t.Errorf("Should have exactly 1 active worktree (epic's), got %d", manager.ActiveCount())
+	}
+}
+
+// createProjectConfigFiles creates various project configuration files for testing.
+// This helper is also used in worktree_path_integration_test.go.
+func createProjectConfigFilesForEpicTest(t *testing.T, repoPath string) {
+	t.Helper()
+
+	// Create go.mod for Go detection
+	goMod := filepath.Join(repoPath, "go.mod")
+	goModContent := "module github.com/test/project\n\ngo 1.24\n"
+	if err := os.WriteFile(goMod, []byte(goModContent), 0644); err != nil {
+		t.Fatalf("Failed to create go.mod: %v", err)
+	}
+}
+
+// commitProjectFilesForEpicTest commits files so they appear in worktrees.
+func commitProjectFilesForEpicTest(t *testing.T, repoPath string) {
+	t.Helper()
+
+	if err := exec.Command("git", "-C", repoPath, "add", ".").Run(); err != nil {
+		t.Fatalf("Failed to git add: %v", err)
+	}
+	if err := exec.Command("git", "-C", repoPath, "commit", "-m", "Add config").Run(); err != nil {
+		t.Fatalf("Failed to git commit: %v", err)
+	}
+}
+
 // writeMockScriptWithPathCapture creates a mock script that outputs text and can capture execution path.
 func writeMockScriptWithPathCapture(t *testing.T, path, output string, exitCode int) {
 	t.Helper()

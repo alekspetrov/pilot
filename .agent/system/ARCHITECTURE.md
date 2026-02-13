@@ -1,6 +1,6 @@
 # Pilot Architecture
 
-**Last Updated:** 2026-01-28 (GH-52 audit)
+**Last Updated:** 2026-02-13 (GH-950 worktree + epic docs)
 
 ## System Overview
 
@@ -326,6 +326,157 @@ make dev      # Build + run with hot reload
 ```
 
 Binary versioning: `v0.3.0-{commits}-g{sha}`
+
+## Worktree Isolation (GH-936)
+
+Pilot uses git worktrees to provide isolated execution environments, allowing tasks to run even when the user has uncommitted changes in their working directory.
+
+### Architecture Overview
+
+```
+                    Original Repository               Temporary Worktrees
+                    ┌─────────────────┐               ┌─────────────────┐
+                    │ /project/repo   │               │ /tmp/pilot-     │
+                    │                 │               │ worktree-GH-1   │
+User Working Dir ──►│ .git/           │◄── shared ──►│ .git (file)     │
+(may have changes)  │ src/            │   git data   │ src/            │
+                    │ .agent/         │               │ .agent/ (copy)  │
+                    └─────────────────┘               └─────────────────┘
+                                                      ┌─────────────────┐
+                                                      │ /tmp/pilot-     │
+                                                      │ worktree-GH-2   │
+                    Concurrent epics can ────────────►│ .git (file)     │
+                    run in parallel worktrees         │ src/            │
+                                                      └─────────────────┘
+```
+
+### Key Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `WorktreeManager` | `worktree.go` | Creates/tracks/cleans worktrees |
+| `CreateWorktreeWithBranch()` | `worktree.go` | Creates worktree with proper branch |
+| `EnsureNavigatorInWorktree()` | `worktree.go` | Copies .agent/ to worktree |
+| `CleanupOrphanedWorktrees()` | `worktree.go` | Startup cleanup for crash recovery |
+
+### Worktree + Epic Interaction
+
+When processing epic tasks with worktree mode enabled:
+
+```
+Epic Task (GH-EPIC-100)
+        │
+        ▼
+┌───────────────────────────────────────────────────────────────┐
+│ 1. executeWithOptions(task, allowWorktree=true)               │
+│    └── CreateWorktreeWithBranch(ctx, repo, id, branch, base)  │
+│        └── Creates /tmp/pilot-worktree-GH-EPIC-100-{ts}       │
+│                                                               │
+│ 2. EnsureNavigatorInWorktree(original, worktree)              │
+│    └── Copies .agent/ including untracked content             │
+│                                                               │
+│ 3. Epic Planning Phase (in worktree)                          │
+│    └── PlanEpic(ctx, task, executionPath)                     │
+│        └── Claude runs in worktree, reads .agent/             │
+│                                                               │
+│ 4. Sub-Issue Execution (in worktree)                          │
+│    └── ExecuteSubIssues(ctx, parent, issues, executionPath)   │
+│        └── Each sub-issue uses executeWithOptions(allowWorktree=false)
+│            └── No recursive worktree creation!                │
+│                                                               │
+│ 5. Cleanup (deferred)                                         │
+│    └── worktreeResult.Cleanup() removes worktree + branch     │
+└───────────────────────────────────────────────────────────────┘
+```
+
+**Critical**: Sub-issues call `executeWithOptions(ctx, task, false)` to prevent recursive worktree creation. The parent epic's worktree is reused for all sub-issues.
+
+### Navigator Auto-Init in Worktrees
+
+Navigator initialization respects the execution path:
+
+```go
+// maybeInitNavigator checks executionPath, not task.ProjectPath
+if r.config.Navigator.AutoInit {
+    r.maybeInitNavigator(executionPath)  // Uses worktree path
+}
+```
+
+This ensures:
+1. Navigator init command runs in the worktree
+2. Created .agent/ structure stays in the worktree
+3. Original repo remains unmodified
+
+### Quality Gates in Worktree Context
+
+Quality gates (`quality.DetectBuildCommand`, `quality.RunGates`) receive the worktree path:
+
+```go
+qualityChecker := qualityCheckerFactory(task.ID, executionPath)
+// Build detection looks for go.mod, package.json, etc. in executionPath
+// Tests run in executionPath directory
+```
+
+The quality package uses the provided path for:
+- Project type detection (Go, Node, Rust, etc.)
+- Build command execution
+- Test command execution
+- Lint command execution
+
+### Concurrent Epic Execution
+
+Multiple epics can execute concurrently in separate worktrees:
+
+```
+┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
+│ GH-EPIC-100     │   │ GH-EPIC-200     │   │ GH-EPIC-300     │
+│ (worktree-100)  │   │ (worktree-200)  │   │ (worktree-300)  │
+└────────┬────────┘   └────────┬────────┘   └────────┬────────┘
+         │                     │                     │
+         ▼                     ▼                     ▼
+    sub-issue 1           sub-issue 1           sub-issue 1
+    sub-issue 2           sub-issue 2           sub-issue 2
+         │                     │                     │
+         ▼                     ▼                     ▼
+    all cleanup           all cleanup           all cleanup
+```
+
+Each worktree has:
+- Unique branch (`pilot/GH-EPIC-xxx`)
+- Isolated Navigator copy
+- Independent git operations
+- Separate cleanup lifecycle
+
+### Edge Cases
+
+1. **Navigator untracked content**: `.agent/.context-markers/` and other gitignored content is copied via `CopyNavigatorToWorktree()`.
+
+2. **Crash recovery**: `CleanupOrphanedWorktrees()` scans `/tmp/pilot-worktree-*` at startup to remove stale directories.
+
+3. **Branch conflicts**: `CreateWorktreeWithBranch()` fails if branch exists; caller handles retry with different name.
+
+4. **Remote access**: `VerifyRemoteAccess()` validates worktree can reach origin before long operations.
+
+### Configuration
+
+```yaml
+# ~/.pilot/config.yaml
+executor:
+  use_worktree: true  # Enable worktree isolation (default: false)
+
+navigator:
+  auto_init: true     # Auto-init Navigator in worktrees without .agent/
+```
+
+### Test Coverage
+
+| Test File | Coverage |
+|-----------|----------|
+| `worktree_test.go` | Basic worktree lifecycle |
+| `worktree_epic_test.go` | Epic + worktree integration |
+| `worktree_path_integration_test.go` | Path handling, quality gates, Navigator copy |
+
+---
 
 ## Security Considerations
 
