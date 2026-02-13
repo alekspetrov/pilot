@@ -1716,6 +1716,11 @@ The previous execution completed but made no code changes. This task requires ac
 					r.reportProgress(task.ID, "Quality Retry", 92,
 						fmt.Sprintf("Fixing issues (attempt %d/%d)...", retryAttempt+1, maxAutoRetries))
 
+					// GH-1066: Record correction for drift detection
+					if r.driftDetector != nil {
+						r.driftDetector.RecordCorrection("quality_gate_retry", fmt.Sprintf("Quality gate failure: %s, Retry attempt: %d", outcome.RetryFeedback, retryAttempt+1))
+					}
+
 					// Emit retry event
 					r.emitAlertEvent(AlertEvent{
 						Type:      AlertEventTypeTaskRetry,
