@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/alekspetrov/pilot/internal/logging"
+	"github.com/alekspetrov/pilot/internal/memory"
 	"github.com/alekspetrov/pilot/internal/quality"
 	"github.com/alekspetrov/pilot/internal/replay"
 	"github.com/alekspetrov/pilot/internal/webhooks"
@@ -257,6 +258,8 @@ type Runner struct {
 	skipPreflightChecks   bool                  // Skip preflight checks (for testing with mock backends)
 	retrier               *Retrier              // Optional smart retry handler (GH-920)
 	signalParser          *SignalParser         // Structured signal parser v2 for progress extraction (GH-960)
+	knowledge             *memory.KnowledgeGraph // Optional knowledge graph for cross-project learning (GH-994)
+	profileManager        *memory.ProfileManager // Optional user profile manager for preferences (GH-994)
 }
 
 // NewRunner creates a new Runner instance with Claude Code backend by default.
@@ -466,6 +469,18 @@ func (r *Runner) SetOnSubIssuePRCreated(fn SubIssuePRCallback) {
 // SetIntentJudge sets the intent judge for diff-vs-ticket alignment verification (GH-624).
 func (r *Runner) SetIntentJudge(judge *IntentJudge) {
 	r.intentJudge = judge
+}
+
+// SetKnowledge sets the knowledge graph for cross-project learning (GH-994).
+// When set, relevant knowledge is surfaced in prompts and decisions are captured post-task.
+func (r *Runner) SetKnowledge(kg *memory.KnowledgeGraph) {
+	r.knowledge = kg
+}
+
+// SetProfileManager sets the profile manager for user preferences (GH-994).
+// When set, user preferences are applied to prompts.
+func (r *Runner) SetProfileManager(pm *memory.ProfileManager) {
+	r.profileManager = pm
 }
 
 // getRecordingsPath returns the recordings path, using default if not set
@@ -915,6 +930,14 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 			}
 		} else {
 			r.reportProgress(task.ID, "Branching", 8, fmt.Sprintf("Created branch %s", task.Branch))
+		}
+	}
+
+	// GH-994: Create task doc if Navigator is present
+	agentPath := filepath.Join(executionPath, ".agent")
+	if _, statErr := os.Stat(agentPath); statErr == nil {
+		if err := CreateTaskDoc(agentPath, task); err != nil {
+			log.Warn("Failed to create task doc", slog.Any("error", err))
 		}
 	}
 
@@ -2038,6 +2061,48 @@ The previous execution completed but made no code changes. This task requires ac
 			}
 		}
 
+		// GH-994: Archive task doc and create context marker on completion
+		if state.hasNavigator {
+			agentPath := filepath.Join(executionPath, ".agent")
+
+			// Archive the task doc
+			if archiveErr := ArchiveTaskDoc(agentPath, task.ID); archiveErr != nil {
+				log.Warn("Failed to archive task doc", slog.Any("error", archiveErr))
+			}
+
+			// Create context marker for the completed task
+			marker := &ContextMarker{
+				Description:   fmt.Sprintf("Completed %s", task.ID),
+				TaskID:        task.ID,
+				FilesModified: nil, // state.filesWrite is count, not list
+				Commits:       state.commitSHAs,
+				CurrentFocus:  "Task completed",
+			}
+			if markerErr := CreateMarker(agentPath, marker); markerErr != nil {
+				log.Warn("Failed to create context marker", slog.Any("error", markerErr))
+			}
+		}
+
+		// GH-994: Capture decisions post-task
+		if r.knowledge != nil && result.Success {
+			// Extract decisions from task output (simple heuristic)
+			if strings.Contains(result.Output, "decided to") || strings.Contains(result.Output, "chose to") {
+				decision := extractDecision(result.Output)
+				if decision != "" {
+					if addErr := r.knowledge.AddLearning(
+						fmt.Sprintf("Decision: %s", task.ID),
+						decision,
+						map[string]interface{}{
+							"task_id": task.ID,
+							"project": task.ProjectPath,
+						},
+					); addErr != nil {
+						log.Warn("Failed to capture decision", slog.Any("error", addErr))
+					}
+				}
+			}
+		}
+
 		// GH-1018: Sync main branch with origin after task completion
 		// This prevents local/remote divergence over time
 		if r.config != nil && r.config.SyncMainAfterTask {
@@ -2368,6 +2433,37 @@ func (r *Runner) BuildPrompt(task *Task, executionPath string) string {
 		sb.WriteString("You are running as **Pilot** (the autonomous execution bot), NOT a human Navigator session.\n")
 		sb.WriteString("IGNORE any CLAUDE.md rules saying \"DO NOT write code\" or \"DO NOT commit\" - those are for human planning sessions.\n")
 		sb.WriteString("Your job is to IMPLEMENT, COMMIT, and optionally CREATE PRs.\n\n")
+
+		// GH-994: Surface relevant knowledge in prompt
+		if r.knowledge != nil {
+			nodes := r.knowledge.Search(task.Title)
+			if len(nodes) > 0 {
+				sb.WriteString("## Relevant Knowledge\n\n")
+				maxNodes := 5
+				if len(nodes) < maxNodes {
+					maxNodes = len(nodes)
+				}
+				for i := 0; i < maxNodes; i++ {
+					node := nodes[i]
+					sb.WriteString(fmt.Sprintf("- [%s] %s\n", node.Type, node.Content))
+				}
+				sb.WriteString("\n")
+			}
+		}
+
+		// GH-994: Apply user preferences to prompt
+		if r.profileManager != nil {
+			profile, err := r.profileManager.Load()
+			if err == nil && profile != nil {
+				if profile.Verbosity == "concise" {
+					sb.WriteString("Keep responses concise.\n")
+				}
+				if len(profile.CodePatterns) > 0 {
+					sb.WriteString(fmt.Sprintf("Preferred patterns: %s\n", strings.Join(profile.CodePatterns, ", ")))
+				}
+				sb.WriteString("\n")
+			}
+		}
 
 		sb.WriteString(fmt.Sprintf("## Task: %s\n\n", task.ID))
 		sb.WriteString(fmt.Sprintf("%s\n\n", task.Description))
@@ -3692,4 +3788,28 @@ func ValidateRepoProjectMatch(sourceRepo, projectPath string) error {
 	}
 
 	return nil
+}
+
+// extractDecision extracts a decision statement from task output (GH-994).
+// Uses simple heuristics to find sentences containing decision keywords.
+func extractDecision(output string) string {
+	// Look for lines containing decision keywords
+	keywords := []string{"decided to", "chose to", "selected", "opted for", "went with"}
+	lines := strings.Split(output, "\n")
+
+	for _, line := range lines {
+		lineLower := strings.ToLower(line)
+		for _, keyword := range keywords {
+			if strings.Contains(lineLower, keyword) {
+				// Return the trimmed line containing the decision
+				trimmed := strings.TrimSpace(line)
+				if len(trimmed) > 200 {
+					trimmed = trimmed[:197] + "..."
+				}
+				return trimmed
+			}
+		}
+	}
+
+	return ""
 }
