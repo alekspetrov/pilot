@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alekspetrov/pilot/internal/adapters/github"
 	"github.com/alekspetrov/pilot/internal/adapters/linear"
@@ -246,7 +247,8 @@ func TestConfig_Validate_OrchestratorBounds(t *testing.T) {
 			orchestrator: &OrchestratorConfig{
 				MaxConcurrent: 2,
 				Execution: &ExecutionConfig{
-					Mode: "sequential",
+					Mode:         "sequential",
+					PollInterval: 30 * time.Second,
 				},
 			},
 			wantErr: false,
@@ -256,7 +258,8 @@ func TestConfig_Validate_OrchestratorBounds(t *testing.T) {
 			orchestrator: &OrchestratorConfig{
 				MaxConcurrent: 2,
 				Execution: &ExecutionConfig{
-					Mode: "parallel",
+					Mode:         "parallel",
+					PollInterval: 30 * time.Second,
 				},
 			},
 			wantErr: false,
@@ -266,7 +269,8 @@ func TestConfig_Validate_OrchestratorBounds(t *testing.T) {
 			orchestrator: &OrchestratorConfig{
 				MaxConcurrent: 2,
 				Execution: &ExecutionConfig{
-					Mode: "invalid",
+					Mode:         "invalid",
+					PollInterval: 30 * time.Second,
 				},
 			},
 			wantErr:   true,
@@ -277,7 +281,8 @@ func TestConfig_Validate_OrchestratorBounds(t *testing.T) {
 			orchestrator: &OrchestratorConfig{
 				MaxConcurrent: 2,
 				Execution: &ExecutionConfig{
-					Mode: "",
+					Mode:         "",
+					PollInterval: 30 * time.Second,
 				},
 			},
 			wantErr:   true,
@@ -656,6 +661,284 @@ func TestConfig_Validate_AdapterCriticalFields(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := baseValidConfig()
 			cfg.Adapters = tt.adapters
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tt.errSubstr)
+				} else if !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Errorf("expected error containing %q, got %q", tt.errSubstr, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// GH-1127: Test polling interval bounds checks
+func TestConfig_Validate_PollingIntervalBounds(t *testing.T) {
+	tests := []struct {
+		name      string
+		adapters  *AdaptersConfig
+		wantErr   bool
+		errSubstr string
+	}{
+		{
+			name:     "nil adapters is valid",
+			adapters: nil,
+			wantErr:  false,
+		},
+		{
+			name: "nil GitHub adapter is valid",
+			adapters: &AdaptersConfig{
+				GitHub: nil,
+			},
+			wantErr: false,
+		},
+		{
+			name: "disabled GitHub adapter with any interval is valid",
+			adapters: &AdaptersConfig{
+				GitHub: &github.Config{
+					Enabled: false,
+					Polling: &github.PollingConfig{
+						Enabled:  true,
+						Interval: 1 * time.Second, // Below minimum but adapter disabled
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "enabled GitHub adapter with polling disabled is valid",
+			adapters: &AdaptersConfig{
+				GitHub: &github.Config{
+					Enabled: true,
+					Token:   "test-token",
+					Polling: &github.PollingConfig{
+						Enabled:  false,
+						Interval: 1 * time.Second, // Below minimum but polling disabled
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "enabled GitHub adapter with nil polling config is valid",
+			adapters: &AdaptersConfig{
+				GitHub: &github.Config{
+					Enabled: true,
+					Token:   "test-token",
+					Polling: nil,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "enabled GitHub adapter with polling interval = 10s is valid (boundary)",
+			adapters: &AdaptersConfig{
+				GitHub: &github.Config{
+					Enabled: true,
+					Token:   "test-token",
+					Polling: &github.PollingConfig{
+						Enabled:  true,
+						Interval: 10 * time.Second,
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "enabled GitHub adapter with polling interval > 10s is valid",
+			adapters: &AdaptersConfig{
+				GitHub: &github.Config{
+					Enabled: true,
+					Token:   "test-token",
+					Polling: &github.PollingConfig{
+						Enabled:  true,
+						Interval: 30 * time.Second,
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "enabled GitHub adapter with polling interval < 10s is invalid",
+			adapters: &AdaptersConfig{
+				GitHub: &github.Config{
+					Enabled: true,
+					Token:   "test-token",
+					Polling: &github.PollingConfig{
+						Enabled:  true,
+						Interval: 9 * time.Second,
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "adapters.github.polling.interval must be >= 10s",
+		},
+		{
+			name: "enabled GitHub adapter with zero polling interval is invalid",
+			adapters: &AdaptersConfig{
+				GitHub: &github.Config{
+					Enabled: true,
+					Token:   "test-token",
+					Polling: &github.PollingConfig{
+						Enabled:  true,
+						Interval: 0,
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "adapters.github.polling.interval must be >= 10s",
+		},
+		{
+			name: "enabled GitHub adapter with 1s polling interval is invalid",
+			adapters: &AdaptersConfig{
+				GitHub: &github.Config{
+					Enabled: true,
+					Token:   "test-token",
+					Polling: &github.PollingConfig{
+						Enabled:  true,
+						Interval: 1 * time.Second,
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "adapters.github.polling.interval must be >= 10s",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.Adapters = tt.adapters
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tt.errSubstr)
+				} else if !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Errorf("expected error containing %q, got %q", tt.errSubstr, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_OrchestratorPollIntervalBounds(t *testing.T) {
+	tests := []struct {
+		name         string
+		orchestrator *OrchestratorConfig
+		wantErr      bool
+		errSubstr    string
+	}{
+		{
+			name:         "nil orchestrator is valid",
+			orchestrator: nil,
+			wantErr:      false,
+		},
+		{
+			name: "nil execution config is valid",
+			orchestrator: &OrchestratorConfig{
+				MaxConcurrent: 2,
+				Execution:     nil,
+			},
+			wantErr: false,
+		},
+		{
+			name: "orchestrator execution poll_interval = 10s is valid (boundary)",
+			orchestrator: &OrchestratorConfig{
+				MaxConcurrent: 2,
+				Execution: &ExecutionConfig{
+					Mode:         "sequential",
+					PollInterval: 10 * time.Second,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "orchestrator execution poll_interval > 10s is valid",
+			orchestrator: &OrchestratorConfig{
+				MaxConcurrent: 2,
+				Execution: &ExecutionConfig{
+					Mode:         "sequential",
+					PollInterval: 30 * time.Second,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "orchestrator execution poll_interval = 1m is valid",
+			orchestrator: &OrchestratorConfig{
+				MaxConcurrent: 2,
+				Execution: &ExecutionConfig{
+					Mode:         "parallel",
+					PollInterval: 1 * time.Minute,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "orchestrator execution poll_interval < 10s is invalid",
+			orchestrator: &OrchestratorConfig{
+				MaxConcurrent: 2,
+				Execution: &ExecutionConfig{
+					Mode:         "sequential",
+					PollInterval: 9 * time.Second,
+				},
+			},
+			wantErr:   true,
+			errSubstr: "orchestrator.execution.poll_interval must be >= 10s",
+		},
+		{
+			name: "orchestrator execution poll_interval = 0 is invalid",
+			orchestrator: &OrchestratorConfig{
+				MaxConcurrent: 2,
+				Execution: &ExecutionConfig{
+					Mode:         "sequential",
+					PollInterval: 0,
+				},
+			},
+			wantErr:   true,
+			errSubstr: "orchestrator.execution.poll_interval must be >= 10s",
+		},
+		{
+			name: "orchestrator execution poll_interval = 5s is invalid",
+			orchestrator: &OrchestratorConfig{
+				MaxConcurrent: 2,
+				Execution: &ExecutionConfig{
+					Mode:         "sequential",
+					PollInterval: 5 * time.Second,
+				},
+			},
+			wantErr:   true,
+			errSubstr: "orchestrator.execution.poll_interval must be >= 10s",
+		},
+		{
+			name: "orchestrator execution poll_interval = 1s is invalid",
+			orchestrator: &OrchestratorConfig{
+				MaxConcurrent: 2,
+				Execution: &ExecutionConfig{
+					Mode:         "sequential",
+					PollInterval: 1 * time.Second,
+				},
+			},
+			wantErr:   true,
+			errSubstr: "orchestrator.execution.poll_interval must be >= 10s",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.Orchestrator = tt.orchestrator
 
 			err := cfg.Validate()
 			if tt.wantErr {

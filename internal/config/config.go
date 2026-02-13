@@ -514,6 +514,12 @@ func (c *Config) Validate() error {
 			if !validModes[c.Orchestrator.Execution.Mode] {
 				return fmt.Errorf("orchestrator.execution.mode must be 'sequential' or 'parallel', got %q", c.Orchestrator.Execution.Mode)
 			}
+
+			// GH-1127: Validate orchestrator execution poll interval bounds
+			minPollInterval := 10 * time.Second
+			if c.Orchestrator.Execution.PollInterval < minPollInterval {
+				return fmt.Errorf("orchestrator.execution.poll_interval must be >= 10s, got %s", c.Orchestrator.Execution.PollInterval)
+			}
 		}
 	}
 
@@ -567,6 +573,14 @@ func (c *Config) Validate() error {
 			if c.Adapters.GitHub.Token == "" {
 				log.Printf("WARNING: adapters.github.token is empty when GitHub adapter is enabled")
 				return fmt.Errorf("adapters.github.token is required when GitHub adapter is enabled")
+			}
+
+			// GH-1127: Validate GitHub polling interval bounds when polling enabled
+			if c.Adapters.GitHub.Polling != nil && c.Adapters.GitHub.Polling.Enabled {
+				minInterval := 10 * time.Second
+				if c.Adapters.GitHub.Polling.Interval < minInterval {
+					return fmt.Errorf("adapters.github.polling.interval must be >= 10s when polling enabled, got %s", c.Adapters.GitHub.Polling.Interval)
+				}
 			}
 		}
 
