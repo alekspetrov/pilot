@@ -1322,21 +1322,50 @@ adapters:
 
 ### Slack
 
+Connects Pilot to Slack for notifications, task submission, and approval workflows. Supports both webhook mode (HTTP endpoints) and Socket Mode (WebSocket connection).
+
 ```yaml
 adapters:
   slack:
     enabled: false
-    bot_token: ${SLACK_BOT_TOKEN}
+    bot_token: ${SLACK_BOT_TOKEN}        # Required: xoxb-... token
+    app_token: ${SLACK_APP_TOKEN}        # Required for Socket Mode: xapp-... token
     channel: "#pilot-updates"
-    signing_secret: ""
+    signing_secret: ""                   # For webhook signature verification
+
+    # Socket Mode (recommended for local development)
+    socket_mode: false                   # Enable WebSocket-based connection
+
+    # Access control
+    allowed_users:                       # User IDs who can submit tasks
+      - "U123456789"
+    allowed_channels:                    # Channel IDs where commands are accepted
+      - "C123456789"
+
+    # Approval workflow integration
+    approval:
+      enabled: false
+      channel: "#pilot-approvals"
+      signing_secret: ""                 # Optional: separate signing secret for approval webhooks
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable Slack adapter |
-| `bot_token` | string | — | Slack bot token (`xoxb-...`) |
-| `channel` | string | — | Default notification channel |
-| `signing_secret` | string | — | Slack signing secret for webhook verification |
+| `bot_token` | string | — | Slack bot token (`xoxb-...`) with `chat:write`, `channels:read` scopes |
+| `app_token` | string | — | Slack app-level token (`xapp-...`) for Socket Mode |
+| `channel` | string | `"#dev-notifications"` | Default notification channel |
+| `signing_secret` | string | — | Slack signing secret for webhook signature verification |
+| `socket_mode` | bool | `false` | Enable Socket Mode (WebSocket) instead of HTTP webhooks |
+| `allowed_users` | []string | `[]` | User IDs authorized to submit tasks (empty = all users) |
+| `allowed_channels` | []string | `[]` | Channel IDs where commands are accepted (empty = all channels) |
+| `approval.enabled` | bool | `false` | Enable approval workflow via Slack |
+| `approval.channel` | string | `"#pilot-approvals"` | Channel for approval requests |
+| `approval.signing_secret` | string | — | Separate signing secret for approval webhooks |
+
+<Callout type="info">
+**Socket Mode vs Webhooks**: Socket Mode is recommended for local development — it doesn't require a public URL. For production, use HTTP webhooks with `signing_secret` for signature verification.
+</Callout>
 
 ### Jira
 
@@ -1350,9 +1379,13 @@ adapters:
     api_token: ${JIRA_API_TOKEN}
     webhook_secret: ""
     pilot_label: "pilot"
+    project_key: "PROJ"                   # Optional: filter to specific project
     transitions:
       in_progress: "In Progress"
       done: "Done"
+    polling:
+      enabled: true
+      interval: 30s
 ```
 
 | Field | Type | Default | Description |
@@ -1364,8 +1397,11 @@ adapters:
 | `api_token` | string | — | Jira API token |
 | `webhook_secret` | string | — | Webhook verification secret |
 | `pilot_label` | string | `"pilot"` | Label that marks issues for Pilot |
+| `project_key` | string | — | Filter issues to a specific Jira project key (e.g., `PROJ`) |
 | `transitions.in_progress` | string | — | Jira transition name for "In Progress" |
 | `transitions.done` | string | — | Jira transition name for "Done" |
+| `polling.enabled` | bool | `false` | Enable issue polling (alternative to webhooks) |
+| `polling.interval` | duration | `30s` | How often to poll for new issues |
 
 ### Asana
 
@@ -1480,6 +1516,36 @@ memory:
 |-------|------|---------|-------------|
 | `dashboard.refresh_interval` | int | `1000` | TUI refresh interval in milliseconds |
 | `dashboard.show_logs` | bool | `true` | Show execution logs panel in dashboard |
+
+---
+
+## Teams
+
+Team-based access control for multi-developer environments. When configured, task execution is scoped to projects the team member is authorized to access.
+
+```yaml
+team:
+  enabled: false
+  team_id: "engineering"               # Team identifier
+  member_email: "developer@example.com" # Member executing tasks
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable team-based access control |
+| `team_id` | string | — | Team ID or name to scope execution |
+| `member_email` | string | — | Email of the member executing tasks |
+
+<Callout type="info">
+Team configuration integrates with the Teams service (see `pilot team` commands). When enabled, Pilot validates that the member has access to the target project before executing tasks.
+</Callout>
+
+**Environment variable alternatives:**
+
+```bash
+export PILOT_TEAM_ID="engineering"
+export PILOT_MEMBER_EMAIL="developer@example.com"
+```
 
 ---
 
