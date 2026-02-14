@@ -1,0 +1,236 @@
+import { Callout } from 'nextra/components'
+
+# Dashboard TUI
+
+Real-time terminal interface for monitoring Pilot task execution, metrics, and autopilot status.
+
+## Launching
+
+Start Pilot with the `--dashboard` flag:
+
+```bash
+# Basic dashboard with GitHub integration
+pilot start --github --dashboard
+
+# Full setup with autopilot
+pilot start --github --autopilot=stage --dashboard
+
+# With Telegram notifications
+pilot start --github --telegram --dashboard
+```
+
+The dashboard uses [Bubbletea](https://github.com/charmbracelet/bubbletea) for a responsive terminal UI experience.
+
+## Layout
+
+The dashboard displays several panels in a fixed 69-character width layout:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  PILOT ASCII LOGO + VERSION                                        │
+├─────────────────────────────────────────────────────────────────────┤
+│  [TOKENS]       [COST]          [QUEUE]                             │
+│   12.5K         $3.42            3                                  │
+│   ↑ 8.2K        ~$0.57/task     ✓ 12 succeeded                      │
+│   ↓ 4.3K                        ✗ 1 failed                          │
+│   ▁▂▃▄▅▆▇█•     ▁▂▃▄▅▆▇█•       ▁▂▃▄▅▆▇█•                           │
+├─────────────────────────────────────────────────────────────────────┤
+│  QUEUE                                                              │
+│   ● running GH-156  Add login validation    [████████░░░░░░]  62%  │
+│   ◌ queued  GH-157  Fix header alignment    [░▒▓▒░░░░░░░░░░]  #1   │
+│   · pending GH-158  Update dependencies     [              ]       │
+├─────────────────────────────────────────────────────────────────────┤
+│  AUTOPILOT                                                          │
+│   Mode ........................ stage                               │
+│   Auto-release ................ enabled                             │
+│   Active PRs .................. 2                                   │
+│     ~ #142: Waiting CI (3m)                                         │
+│     * #141: CI Passed                                               │
+├─────────────────────────────────────────────────────────────────────┤
+│  HISTORY                                                            │
+│   + GH-154  Refactor auth module                            2m ago  │
+│   + GH-153  Add rate limiting                               5m ago  │
+│   x GH-152  Fix memory leak                                12m ago  │
+└─────────────────────────────────────────────────────────────────────┘
+  q: quit  l: logs  j/k: select  enter: open
+```
+
+## Sparkline Cards
+
+Three metrics cards display real-time data with 7-day sparkline trends:
+
+### Tokens Card
+
+Shows lifetime token consumption:
+
+- **Total tokens** - Combined input + output
+- **Input tokens** (↑) - Prompt tokens sent to Claude
+- **Output tokens** (↓) - Response tokens received
+- **Sparkline** - 7-day token usage trend with pulsing indicator
+
+### Cost Card
+
+Tracks spending:
+
+- **Total cost** - Cumulative USD spent
+- **Cost per task** - Average cost per completed task
+- **Sparkline** - 7-day cost trend
+
+### Queue Card
+
+Current queue status:
+
+- **Queue depth** - Number of active tasks
+- **Succeeded** (✓) - Lifetime successful completions
+- **Failed** (✗) - Lifetime failures
+- **Sparkline** - 7-day task volume trend
+
+## Queue Panel
+
+The queue panel shows all tasks with 5 distinct visual states:
+
+| State | Icon | Bar Style | Description |
+|-------|------|-----------|-------------|
+| Done | ✓ | `[██████████████]` (solid green) | Task completed, PR created |
+| Running | ● | `[████████░░░░░░]` (animated blue) | Currently executing |
+| Queued | ◌ | `[░▒▓▒░░░░░░░░░░]` (shimmer) | Waiting for execution slot |
+| Pending | · | `[              ]` (empty) | Registered but not queued |
+| Failed | ✗ | `[████░░░░░░░░░░]` (frozen rose) | Execution failed |
+
+### Queue State Examples
+
+```
+# Running task with progress
+● running GH-156  Add login validation    [████████░░░░░░]  62%
+
+# Queued tasks with shimmer animation (staggered)
+◌ queued  GH-157  Fix header alignment    [░▒▓▒░░░░░░░░░░]  #1
+◌ queued  GH-158  Update tests            [░░░▒▓▒░░░░░░░░]  #2
+
+# Completed task with PR link
+✓ done    GH-155  Add dark mode toggle    [██████████████]  #142
+
+# Failed task showing error phase
+✗ failed  GH-154  Fix auth bug            [██████░░░░░░░░]  Parse
+```
+
+<Callout type="info">
+  Queue items are sorted by state priority: done → running → queued → pending → failed
+</Callout>
+
+## Autopilot Panel
+
+Displays autopilot status and PR lifecycle tracking:
+
+- **Mode** - Current environment (`dev`, `stage`, `prod`)
+- **Auto-release** - Whether automatic releases are enabled
+- **Active PRs** - Count and status of PRs in the pipeline
+
+### PR Stage Icons
+
+| Icon | Stage | Description |
+|------|-------|-------------|
+| `+` | PR Created | Pull request just opened |
+| `~` | Waiting CI | CI pipeline running |
+| `*` | CI Passed | Ready for merge/approval |
+| `x` | CI Failed | CI checks failed |
+| `?` | Awaiting Approval | Needs human review |
+| `>` | Merging | Merge in progress |
+| `^` | Releasing | Tag-only release running |
+| `!` | Failed | Error in autopilot flow |
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `q` | Quit dashboard |
+| `l` | Toggle logs panel |
+| `j` / `↓` | Select next task |
+| `k` / `↑` | Select previous task |
+| `Enter` | Open selected task's issue URL |
+| `u` | Trigger hot upgrade (when update available) |
+
+<Callout type="warning">
+  The `u` shortcut only appears when a new version is detected. See [Hot Upgrade](/features/hot-upgrade) for details.
+</Callout>
+
+## SQLite Persistence
+
+Dashboard metrics survive restarts via SQLite storage:
+
+```bash
+# Default location
+~/.pilot/pilot.db
+```
+
+Persisted data includes:
+
+- **Session tokens** - Daily input/output token counts
+- **Execution history** - Task completions with timing and status
+- **Daily metrics** - Aggregated statistics for sparkline history
+
+<Callout type="info">
+  On startup, the dashboard hydrates from SQLite, showing accurate lifetime totals even after restarts.
+</Callout>
+
+### Metrics Query
+
+The dashboard loads 7 days of historical data for sparklines:
+
+```go
+// internal/dashboard/tui.go
+query := memory.MetricsQuery{
+    Start: now.AddDate(0, 0, -7),
+    End:   now,
+}
+dailyMetrics, _ := store.GetDailyMetrics(query)
+```
+
+## Color Palette
+
+The dashboard uses a muted terminal aesthetic:
+
+| Color | Hex | Usage |
+|-------|-----|-------|
+| Sage Green | `#7ec699` | Success states, completed items |
+| Steel Blue | `#7eb8da` | Running states, progress bars |
+| Dusty Rose | `#d48a8a` | Failed states, errors |
+| Amber | `#d4a054` | Warnings, active epics |
+| Slate | `#3d4450` | Borders, dim elements |
+| Mid Gray | `#8b949e` | Secondary text, help |
+
+## Integration with Autopilot
+
+When running with `--autopilot`, the dashboard shows real-time PR lifecycle:
+
+```bash
+pilot start --github --autopilot=stage --dashboard
+```
+
+The autopilot panel updates automatically as PRs progress through stages:
+
+```
+AUTOPILOT
+  Mode ........................ stage
+  Auto-release ................ enabled
+  Active PRs .................. 2
+    ~ #142: Waiting CI (3m)
+       CI: pending
+    * #141: CI Passed
+  Failures .................... 1/5
+```
+
+## Epic Tracking
+
+When tasks are decomposed into sub-issues (epics), the history panel shows progress:
+
+```
+HISTORY
+  * GH-491  Epic: Implement auth         [##--] 2/4   3m
+    + GH-492  Add login endpoint                      2m ago
+    + GH-493  Add logout endpoint                     1m ago
+    · GH-494  Add password reset                      --
+    · GH-495  Add MFA support                         --
+```
+
+Active epics expand to show sub-issues; completed epics collapse to a single line with `[N/N]` progress.
