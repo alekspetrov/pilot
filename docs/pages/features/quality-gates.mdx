@@ -183,17 +183,72 @@ quality:
       required: false
 ```
 
-### Auto-Detection
+### Auto Build Gate
 
-When quality gates aren't explicitly configured, Pilot detects your project type and applies a minimal build check:
+When quality gates aren't explicitly configured, Pilot automatically enables a **safety-net build gate** to catch compilation errors before PR creation. This auto-detection prevents broken code from reaching review.
 
-| Project Type | Detection | Default Command |
-|-------------|-----------|-----------------|
+**How Auto-Detection Works:**
+
+1. **Project Detection**: Pilot scans for project indicators in the repository root
+2. **Command Selection**: Chooses appropriate build/check command for the detected project type
+3. **Gate Creation**: Creates a minimal build gate with conservative settings
+
+| Project Type | Detection | Auto Build Command |
+|-------------|-----------|-------------------|
 | Go | `go.mod` present | `go build ./...` |
 | Node.js | `package.json` present | `npm run build --if-present` |
 | TypeScript | `tsconfig.json` + `package.json` | `npm run build \|\| npx tsc --noEmit` |
 | Rust | `Cargo.toml` present | `cargo check` |
-| Python | `pyproject.toml` or `setup.py` | `python -m py_compile *.py` |
+| Python | `pyproject.toml` or `setup.py` | `python -m py_compile $(find . -name '*.py' -not -path './venv/*' -not -path './.venv/*' 2>/dev/null \| head -100)` |
+
+**Auto Build Gate Configuration:**
+
+When auto-detected, Pilot creates this minimal configuration:
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: "build"
+      type: "build"
+      command: "<detected-command>"  # Based on project type
+      required: true
+      timeout: 3m
+      max_retries: 1
+      failure_hint: "Fix compilation errors in the changed files"
+
+  on_failure:
+    action: "retry"
+    max_retries: 1
+    retry_delay_seconds: 3
+```
+
+**Key Features:**
+- **Conservative Settings**: 3-minute timeout, single retry to fail fast
+- **No False Positives**: Only enables for well-established project types
+- **Override Friendly**: Explicit configuration always takes precedence
+- **Safety First**: Better to have basic safety than no checks at all
+
+**Disabling Auto Build Gates:**
+
+To disable auto-detection entirely:
+
+```yaml
+quality:
+  enabled: false  # Disables all quality gates including auto-detection
+```
+
+To use custom gates without auto-detection, simply define explicit gates:
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: "custom-build"
+      type: "build"
+      command: "make custom-build"
+      required: true
+```
 
 ### Advanced Configuration
 
@@ -291,6 +346,178 @@ Each gate progresses through these states:
 - `failed` → Gate failed (triggers retry if required)
 - `skipped` → Gate skipped due to earlier failure
 - `retrying` → Gate being retried after failure
+
+## Self-Review
+
+After quality gates pass (or when no gates are configured), Pilot runs a **self-review phase** where Claude Code examines its own changes and fixes common issues before PR creation. This catches subtle problems that static gates might miss.
+
+### What Self-Review Checks
+
+The self-review phase performs five critical checks:
+
+#### 1. Diff Analysis
+```bash
+git diff --cached
+```
+Examines staged changes for:
+- **Method calls** to non-existent methods
+- **Struct fields** added but never used
+- **Config fields** that aren't wired through constructors
+- **Import statements** for unused packages
+
+#### 2. Build Verification
+```bash
+go build ./...  # (or equivalent for project type)
+```
+Verifies code compiles without errors, catching:
+- Syntax errors missed during implementation
+- Type mismatches
+- Import cycle issues
+
+#### 3. Wiring Check
+For any **new struct fields** added:
+- Searches codebase for field usage
+- Verifies field is assigned in constructors/factories
+- Ensures field is actually used somewhere
+- Common issue: Adding config fields but forgetting to wire them through `main.go`
+
+#### 4. Method Existence Check
+For any **new method calls** added:
+- Searches for method definitions using `func.*methodName`
+- If method doesn't exist, implements it
+- Prevents "method not found" runtime errors
+
+#### 5. Issue-to-Changes Alignment Check
+Compares the GitHub issue with actual changes:
+```bash
+git diff --name-only HEAD~1
+```
+
+**Checks for mismatches:**
+- Issue mentions "wire into main.go" but `main.go` has no changes
+- Issue says "modify config.go" but only test files were changed
+- Issue title includes specific files that don't appear in the diff
+
+**Common patterns detected:**
+- `"wire X into Y"` → Verifies Y was actually modified
+- `"add Z to main.go"` → Ensures main.go is in the diff
+- `"modify config"` → Checks that config files were changed
+
+### How Self-Review Works
+
+```
+Implementation Complete → Self-Review Phase → PR Creation
+                              │
+                              ├── Check 1: Diff Analysis
+                              ├── Check 2: Build Verification
+                              ├── Check 3: Wiring Check
+                              ├── Check 4: Method Existence
+                              ├── Check 5: Issue Alignment
+                              │
+                              ▼ (if issues found)
+                         ┌─────────────────┐
+                         │   Auto-Fix      │
+                         │   + Commit      │───┐
+                         └─────────────────┘   │
+                              ▲               │
+                              └───────────────┘
+```
+
+### Self-Review Outputs
+
+**When issues are found:**
+```
+REVIEW_FIXED: Added missing wire for DatabaseConfig in main.go constructor
+INCOMPLETE: Issue mentions config.yaml but it was not modified - adding config example
+```
+
+**When everything looks good:**
+```
+REVIEW_PASSED
+```
+
+### Self-Review Configuration
+
+Self-review runs automatically but can be controlled:
+
+```yaml
+# ~/.pilot/config.yaml
+executor:
+  skip_self_review: false  # Enable self-review (default)
+  # skip_self_review: true   # Disable self-review
+```
+
+**When Self-Review is Skipped:**
+- **Trivial tasks**: Simple one-line changes, documentation fixes
+- **Explicitly disabled**: `skip_self_review: true` in config
+- **Emergency mode**: When speed is prioritized over thoroughness
+
+### Self-Review vs Quality Gates
+
+| Aspect | Quality Gates | Self-Review |
+|--------|---------------|-------------|
+| **Focus** | External validation (tests, build, lint) | Internal consistency (wiring, alignment) |
+| **Timing** | Before self-review | After quality gates |
+| **Failure Mode** | Block PR creation | Auto-fix + continue |
+| **Speed** | 2-10 minutes per gate | ~30 seconds |
+| **Coverage** | Project-wide checks | Change-specific analysis |
+
+**Complementary, not competing**: Quality gates catch **functional issues**, self-review catches **implementation gaps**.
+
+### Common Self-Review Fixes
+
+**Unwired Config Fields:**
+```go
+// Before: Added field but forgot to wire
+type Config struct {
+    DatabaseURL string `yaml:"database_url"`  // ← Added
+    APIKey      string `yaml:"api_key"`
+}
+
+// Self-review detects missing wiring and fixes:
+func NewConfig() *Config {
+    return &Config{
+        DatabaseURL: os.Getenv("DATABASE_URL"),  // ← Auto-added
+        APIKey:      os.Getenv("API_KEY"),
+    }
+}
+```
+
+**Missing Method Implementation:**
+```go
+// Before: Added call but no implementation
+config.ValidateSchema()  // ← Added call
+
+// Self-review detects and implements:
+func (c *Config) ValidateSchema() error {  // ← Auto-added
+    if c.DatabaseURL == "" {
+        return errors.New("database_url is required")
+    }
+    return nil
+}
+```
+
+**Issue-Changes Misalignment:**
+```bash
+# Issue: "Add database config and wire into main.go"
+# Changes: Only modified config.go
+
+# Self-review output:
+# INCOMPLETE: Issue mentions main.go but it was not modified
+
+# Auto-fix adds to main.go:
+cfg, err := config.LoadConfig()  # ← Missing wiring added
+```
+
+### Best Practices
+
+**Trust Self-Review**: It catches 80% of common implementation gaps automatically.
+
+**Review Self-Review Fixes**: When Pilot outputs `REVIEW_FIXED`, check the fix in the resulting PR.
+
+**Use with Quality Gates**: Self-review complements but doesn't replace comprehensive testing.
+
+**Monitor Patterns**: If self-review consistently finds the same type of issue, consider adding a custom quality gate to catch it earlier.
 
 ## Dashboard Integration
 
