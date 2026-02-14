@@ -1628,11 +1628,10 @@ The previous execution completed but made no code changes. This task requires ac
 
 		// Run quality gates if configured
 		if r.qualityCheckerFactory != nil {
-			const maxAutoRetries = 2 // Circuit breaker to prevent infinite loops
-
 			// Track quality gate results across retries (GH-209)
 			var finalOutcome *QualityOutcome
 			var totalQualityRetries int
+			var maxAutoRetries int = 2 // Default circuit breaker to prevent infinite loops
 
 			for retryAttempt := 0; retryAttempt <= maxAutoRetries; retryAttempt++ {
 				r.reportProgress(task.ID, "Quality Gates", 91, "Running quality checks...")
@@ -1678,7 +1677,22 @@ The previous execution completed but made no code changes. This task requires ac
 				// Quality gates passed - exit retry loop
 				if outcome.Passed {
 					finalOutcome = outcome
+
+					// Update max retries from configuration on first outcome (GH-1165)
+					if retryAttempt == 0 && outcome.MaxRetries > 0 {
+						maxAutoRetries = outcome.MaxRetries
+					}
 					r.reportProgress(task.ID, "Quality Passed", 94, "All quality gates passed")
+
+					// Log quality gate success metrics (GH-1165)
+					if retryAttempt > 0 {
+						log.Info("Quality gates passed after retry",
+							slog.String("task_id", task.ID),
+							slog.Int("total_attempts", retryAttempt+1),
+							slog.Int("total_quality_retries", totalQualityRetries),
+							slog.Duration("total_gate_time", outcome.TotalDuration),
+						)
+					}
 
 					// Run simplification phase if enabled (GH-995)
 					if r.config.Simplification != nil && r.config.Simplification.Enabled {
@@ -1703,11 +1717,19 @@ The previous execution completed but made no code changes. This task requires ac
 				// Track this outcome for potential failure reporting
 				finalOutcome = outcome
 
+				// Update max retries from configuration on first outcome (GH-1165)
+				if retryAttempt == 0 && outcome.MaxRetries > 0 {
+					maxAutoRetries = outcome.MaxRetries
+				}
+
 				// Quality gates failed
 				log.Warn("Quality gates failed",
+					slog.String("task_id", task.ID),
 					slog.Bool("should_retry", outcome.ShouldRetry),
 					slog.Int("attempt", outcome.Attempt),
 					slog.Int("retry_attempt", retryAttempt),
+					slog.Int("max_retries", maxAutoRetries),
+					slog.Duration("total_gate_time", outcome.TotalDuration),
 				)
 
 				// Check if we should retry with Claude Code
@@ -1735,6 +1757,9 @@ The previous execution completed but made no code changes. This task requires ac
 					log.Info("Re-invoking Claude Code with retry feedback",
 						slog.String("task_id", task.ID),
 						slog.Int("retry_attempt", retryAttempt+1),
+						slog.Int("max_retries", maxAutoRetries),
+						slog.Int("failed_gates", len(outcome.GateDetails)),
+						slog.String("feedback_length", fmt.Sprintf("%d chars", len(outcome.RetryFeedback))),
 					)
 
 					// Re-invoke backend with retry prompt
@@ -1841,6 +1866,21 @@ The previous execution completed but made no code changes. This task requires ac
 
 					// Continue to next iteration to re-check quality gates
 					r.reportProgress(task.ID, "Re-testing", 93, "Re-running quality gates...")
+
+					// Add configurable retry delay (GH-1165)
+					if finalOutcome.RetryDelayMillis > 0 {
+						delayDuration := time.Duration(finalOutcome.RetryDelayMillis) * time.Millisecond
+						log.Debug("Waiting before retry", slog.Duration("delay", delayDuration))
+						select {
+						case <-ctx.Done():
+							result.Success = false
+							result.Error = "context cancelled during retry delay"
+							return result, nil
+						case <-time.After(delayDuration):
+							// Continue with retry
+						}
+					}
+
 					continue
 				}
 
@@ -1848,6 +1888,12 @@ The previous execution completed but made no code changes. This task requires ac
 				result.Success = false
 				if retryAttempt >= maxAutoRetries {
 					result.Error = fmt.Sprintf("quality gates failed after %d auto-retries", maxAutoRetries)
+					log.Error("Quality gates retry limit exceeded",
+						slog.String("task_id", task.ID),
+						slog.Int("total_attempts", retryAttempt+1),
+						slog.Int("max_retries", maxAutoRetries),
+						slog.Int("total_quality_retries", totalQualityRetries),
+					)
 				} else {
 					result.Error = "quality gates failed, max retries exhausted"
 				}
@@ -3804,15 +3850,17 @@ func (c *simpleQualityChecker) Check(ctx context.Context) (*QualityOutcome, erro
 
 	// Convert to QualityOutcome
 	outcome := &QualityOutcome{
-		Passed:        results.AllPassed,
-		ShouldRetry:   !results.AllPassed && c.config.OnFailure.Action == quality.ActionRetry,
-		TotalDuration: results.TotalTime,
-		GateDetails:   make([]QualityGateDetail, 0, len(results.Results)),
+		Passed:           results.AllPassed,
+		ShouldRetry:      !results.AllPassed && c.config.OnFailure.Action == quality.ActionRetry,
+		MaxRetries:       c.config.OnFailure.MaxRetries,
+		RetryDelayMillis: c.config.OnFailure.RetryDelaySeconds * 1000,
+		TotalDuration:    results.TotalTime,
+		GateDetails:      make([]QualityGateDetail, 0, len(results.Results)),
 	}
 
 	// Build retry feedback if failed
 	if !results.AllPassed {
-		outcome.RetryFeedback = quality.FormatErrorFeedback(results)
+		outcome.RetryFeedback = quality.FormatErrorFeedbackWithConfig(results, c.config, c.config.Gates)
 	}
 
 	for _, r := range results.Results {

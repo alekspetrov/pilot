@@ -127,9 +127,12 @@ type Config struct {
 
 // FailureConfig defines behavior when gates fail
 type FailureConfig struct {
-	Action     FailureAction `yaml:"action" json:"action"`
-	MaxRetries int           `yaml:"max_retries" json:"max_retries"`
-	NotifyOn   []GateStatus  `yaml:"notify_on" json:"notify_on"` // Statuses to notify on
+	Action               FailureAction `yaml:"action" json:"action"`
+	MaxRetries           int           `yaml:"max_retries" json:"max_retries"`                       // Pipeline-level retries with Claude feedback
+	RetryDelaySeconds    int           `yaml:"retry_delay_seconds" json:"retry_delay_seconds"`       // Delay between pipeline retries (default: 5)
+	IncludeFailureHints  bool          `yaml:"include_failure_hints" json:"include_failure_hints"`   // Include gate-specific hints in feedback (default: true)
+	IncludeOutputSummary bool          `yaml:"include_output_summary" json:"include_output_summary"` // Include truncated output in feedback (default: true)
+	NotifyOn             []GateStatus  `yaml:"notify_on" json:"notify_on"`                           // Statuses to notify on
 }
 
 // FailureAction defines what to do when a required gate fails
@@ -178,9 +181,12 @@ func DefaultConfig() *Config {
 			},
 		},
 		OnFailure: FailureConfig{
-			Action:     ActionRetry,
-			MaxRetries: 2,
-			NotifyOn:   []GateStatus{StatusFailed},
+			Action:               ActionRetry,
+			MaxRetries:           2,
+			RetryDelaySeconds:    5,
+			IncludeFailureHints:  true,
+			IncludeOutputSummary: true,
+			NotifyOn:             []GateStatus{StatusFailed},
 		},
 	}
 }
@@ -238,8 +244,11 @@ func MinimalBuildGate() *Config {
 			},
 		},
 		OnFailure: FailureConfig{
-			Action:     ActionRetry,
-			MaxRetries: 1, // Single retry for build fixes
+			Action:               ActionRetry,
+			MaxRetries:           1, // Single retry for build fixes
+			RetryDelaySeconds:    3,
+			IncludeFailureHints:  true,
+			IncludeOutputSummary: true,
 		},
 	}
 }

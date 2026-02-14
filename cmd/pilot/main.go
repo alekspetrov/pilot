@@ -5512,10 +5512,12 @@ func (w *qualityCheckerWrapper) Check(ctx context.Context) (*executor.QualityOut
 	}
 
 	result := &executor.QualityOutcome{
-		Passed:        outcome.Passed,
-		ShouldRetry:   outcome.ShouldRetry,
-		RetryFeedback: outcome.RetryFeedback,
-		Attempt:       outcome.Attempt,
+		Passed:           outcome.Passed,
+		ShouldRetry:      outcome.ShouldRetry,
+		RetryFeedback:    outcome.RetryFeedback,
+		Attempt:          outcome.Attempt,
+		MaxRetries:       outcome.MaxRetries,
+		RetryDelayMillis: outcome.RetryDelayMillis,
 	}
 
 	// Populate gate details if results are available (GH-209)

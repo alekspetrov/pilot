@@ -37,11 +37,13 @@ func NewExecutor(cfg *ExecutorConfig) *Executor {
 
 // CheckResult represents the quality gate check outcome
 type ExecutionOutcome struct {
-	Passed        bool
-	Results       *CheckResults
-	ShouldRetry   bool
-	RetryFeedback string // Error feedback to send to Claude for retry
-	Attempt       int
+	Passed           bool
+	Results          *CheckResults
+	ShouldRetry      bool
+	RetryFeedback    string // Error feedback to send to Claude for retry
+	Attempt          int
+	MaxRetries       int    // Maximum pipeline retries allowed from configuration
+	RetryDelayMillis int    // Delay in milliseconds between pipeline retries
 }
 
 // Check runs all quality gates and returns the outcome
@@ -69,15 +71,17 @@ func (e *Executor) CheckWithAttempt(ctx context.Context, attempt int) (*Executio
 	}
 
 	outcome := &ExecutionOutcome{
-		Passed:  results.AllPassed,
-		Results: results,
-		Attempt: attempt,
+		Passed:           results.AllPassed,
+		Results:          results,
+		Attempt:          attempt,
+		MaxRetries:       e.config.OnFailure.MaxRetries,
+		RetryDelayMillis: e.config.OnFailure.RetryDelaySeconds * 1000,
 	}
 
 	if !results.AllPassed {
 		outcome.ShouldRetry = ShouldRetry(e.config, results, attempt)
 		if outcome.ShouldRetry {
-			outcome.RetryFeedback = FormatErrorFeedback(results)
+			outcome.RetryFeedback = FormatErrorFeedbackWithConfig(results, e.config, e.config.Gates)
 		}
 
 		e.log.Warn("Quality gates failed",

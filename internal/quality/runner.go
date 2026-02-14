@@ -290,10 +290,28 @@ func (r *Runner) reportProgress(gateName string, status GateStatus, message stri
 
 // FormatErrorFeedback formats gate failure output for Claude retry
 func FormatErrorFeedback(results *CheckResults) string {
+	return FormatErrorFeedbackWithConfig(results, nil, []*Gate{})
+}
+
+// FormatErrorFeedbackWithConfig formats gate failure output for Claude retry with enhanced configuration options
+func FormatErrorFeedbackWithConfig(results *CheckResults, config *Config, gates []*Gate) string {
 	var sb strings.Builder
 
 	sb.WriteString("## Quality Gate Failures\n\n")
 	sb.WriteString("The following quality gates failed. Please fix the issues and try again.\n\n")
+
+	// Create gate lookup map for failure hints
+	gateMap := make(map[string]*Gate)
+	for _, gate := range gates {
+		gateMap[gate.Name] = gate
+	}
+
+	includeHints := true
+	includeOutput := true
+	if config != nil {
+		includeHints = config.OnFailure.IncludeFailureHints
+		includeOutput = config.OnFailure.IncludeOutputSummary
+	}
 
 	for _, result := range results.Results {
 		if result.Status != StatusFailed {
@@ -301,16 +319,41 @@ func FormatErrorFeedback(results *CheckResults) string {
 		}
 
 		sb.WriteString(fmt.Sprintf("### %s Gate (FAILED)\n\n", result.GateName))
-		sb.WriteString("**Error Output:**\n```\n")
 
-		// Truncate output if too long
-		output := result.Output
-		maxLen := 2000
-		if len(output) > maxLen {
-			output = output[:maxLen] + "\n... (truncated)"
+		// Include retry count info
+		if result.RetryCount > 0 {
+			sb.WriteString(fmt.Sprintf("**Retries:** %d attempts made\n\n", result.RetryCount))
 		}
-		sb.WriteString(output)
-		sb.WriteString("\n```\n\n")
+
+		// Include gate-specific failure hints
+		if includeHints {
+			if gate := gateMap[result.GateName]; gate != nil && gate.FailureHint != "" {
+				sb.WriteString("**Failure Hint:** ")
+				sb.WriteString(gate.FailureHint)
+				sb.WriteString("\n\n")
+			}
+		}
+
+		// Include error output if configured
+		if includeOutput && result.Output != "" {
+			sb.WriteString("**Error Output:**\n```\n")
+
+			// Truncate output if too long
+			output := result.Output
+			maxLen := 2000
+			if len(output) > maxLen {
+				output = output[:maxLen] + "\n... (truncated)"
+			}
+			sb.WriteString(output)
+			sb.WriteString("\n```\n\n")
+		}
+
+		// Include error message if available and different from output
+		if result.Error != "" && result.Error != fmt.Sprintf("command exited with code %d", result.ExitCode) {
+			sb.WriteString("**Error:** ")
+			sb.WriteString(result.Error)
+			sb.WriteString("\n\n")
+		}
 	}
 
 	sb.WriteString("Please fix these issues and ensure all quality gates pass.\n")
