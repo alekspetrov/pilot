@@ -12,10 +12,22 @@ pilot start [flags]
 
 | Flag | Description |
 |------|-------------|
-| `--telegram` | Enable Telegram bot |
-| `--github` | Enable GitHub issue polling |
+| `--telegram` | Enable Telegram polling (overrides config) |
+| `--github` | Enable GitHub polling (overrides config) |
+| `--linear` | Enable Linear webhooks (overrides config) |
+| `--slack` | Enable Slack Socket Mode (overrides config) |
 | `--autopilot=ENV` | Enable autopilot: `dev`, `stage`, `prod` |
-| `--dashboard` | Show TUI dashboard |
+| `--auto-release` | Enable tag-based release automation (requires autopilot=prod) |
+| `--dashboard` | Show TUI dashboard for real-time task monitoring |
+| `-d`, `--daemon` | Run in background (daemon mode) |
+| `-p`, `--project` | Project path (default: config default or cwd) |
+| `--replace` | Kill existing bot instance before starting |
+| `--no-gateway` | Run polling adapters only (no HTTP gateway) |
+| `--sequential` | Sequential execution: wait for PR merge before next issue |
+| `--tunnel` | Enable public tunnel for webhook ingress (Cloudflare/ngrok) |
+| `--team` | Team ID or name for project access scoping |
+| `--team-member` | Member email for team access scoping |
+| `--log-format` | Log output format: `text` or `json` (default: text) |
 
 ### Examples
 
@@ -28,6 +40,18 @@ pilot start --telegram --github --autopilot=stage
 
 # With dashboard
 pilot start --telegram --github --dashboard
+
+# Sequential execution (wait for merge before next)
+pilot start --github --sequential
+
+# Production with auto-release
+pilot start --github --autopilot=prod --auto-release
+
+# Run in background
+pilot start --telegram --github -d
+
+# With JSON logging for aggregation systems
+pilot start --github --log-format=json
 ```
 
 ## pilot task
@@ -42,9 +66,13 @@ pilot task "description" [flags]
 
 | Flag | Description |
 |------|-------------|
-| `--create-pr` | Create GitHub PR after execution |
-| `--dry-run` | Show prompt without executing |
-| `--verbose` | Stream raw Claude output |
+| `-p`, `--project` | Project path (default: current directory) |
+| `--dry-run` | Show what would be executed without running |
+| `-v`, `--verbose` | Stream Claude Code output |
+| `--alerts` | Enable alerts for task execution |
+| `--budget` | Enable budget enforcement for this task |
+| `--team` | Team ID or name for project access scoping |
+| `--team-member` | Member email for team access scoping |
 
 ### Examples
 
@@ -52,11 +80,17 @@ pilot task "description" [flags]
 # Quick local execution
 pilot task "Fix the typo in README.md"
 
-# Create PR after completion
-pilot task "Add rate limiting" --create-pr
-
 # Preview what will happen
 pilot task "Refactor auth module" --dry-run
+
+# With verbose output
+pilot task "Add rate limiting" --verbose
+
+# With budget enforcement
+pilot task "Implement caching" --budget
+
+# Scoped to specific team
+pilot task "Update API docs" --team=backend
 ```
 
 ## pilot upgrade
@@ -64,77 +98,145 @@ pilot task "Refactor auth module" --dry-run
 Self-update to latest version.
 
 ```bash
-pilot upgrade
+pilot upgrade [subcommand]
 ```
 
-### Flags
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `check` | Check for available updates |
+| `run` | Download and install the latest version (default) |
+| `rollback` | Restore the previous version from backup |
+
+### pilot upgrade check
+
+Check for updates without installing.
+
+```bash
+pilot upgrade check [flags]
+```
 
 | Flag | Description |
 |------|-------------|
-| `--check` | Check for updates without installing |
-| `--version=X.Y.Z` | Install specific version |
+| `--json` | Output as JSON |
+
+### pilot upgrade run
+
+Download and install the latest version.
+
+```bash
+pilot upgrade run [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-f`, `--force` | Skip waiting for running tasks |
+| `-y`, `--yes` | Skip confirmation prompt |
+
+### pilot upgrade rollback
+
+Restore the previous Pilot version from backup created during upgrade.
+
+```bash
+pilot upgrade rollback
+```
+
+### Examples
+
+```bash
+# Check for updates only
+pilot upgrade check
+
+# Upgrade (with confirmation)
+pilot upgrade
+
+# Upgrade without confirmation
+pilot upgrade run --yes
+
+# Force upgrade, skip task wait
+pilot upgrade run --force
+
+# Restore previous version
+pilot upgrade rollback
+```
 
 ## pilot init
 
 Initialize Pilot configuration.
 
 ```bash
-pilot init
+pilot init [flags]
 ```
 
 Creates `~/.pilot/config.yaml` with interactive prompts.
 
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Reinitialize config (backs up existing to .bak) |
+
 ## pilot doctor
 
-Check Pilot configuration and dependencies.
+Check system health and configuration.
 
 ```bash
 pilot doctor [flags]
 ```
 
+Shows what's working, what's missing, and how to fix issues.
+
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `--navigator` | Also check Navigator setup |
-| `--fix` | Attempt to fix issues |
+| `-v`, `--verbose` | Show detailed output with fix suggestions |
+
+### Examples
+
+```bash
+# Run all checks
+pilot doctor
+
+# Show detailed output
+pilot doctor --verbose
+```
 
 ## pilot logs
 
-View Pilot logs.
+View task execution logs.
 
 ```bash
-pilot logs [flags]
+pilot logs [task-id] [flags]
 ```
+
+Without arguments, shows recent task logs. With a task ID, shows detailed logs for that specific task.
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `--follow` | Stream logs in real-time |
-| `--tail=N` | Show last N lines |
-| `--autopilot` | Filter to autopilot events |
+| `-n`, `--limit` | Number of recent tasks to show (default: 10) |
+| `-f`, `--follow` | Follow log output (not yet implemented) |
+| `-v`, `--verbose` | Show detailed output |
+| `--json` | Output as JSON |
 
-## pilot rollback
-
-Revert changes made by Pilot.
-
-```bash
-pilot rollback [flags]
-```
-
-### Flags
-
-| Flag | Description |
-|------|-------------|
-| `--last` | Revert the most recent merge |
-| `--pr=N` | Revert specific PR |
-
-## pilot navigator
-
-Navigator-related commands.
+### Examples
 
 ```bash
-pilot navigator init    # Initialize .agent/ directory
-pilot navigator status  # Show Navigator status
+# Show recent task logs
+pilot logs
+
+# Show last 20 tasks
+pilot logs --limit 20
+
+# Show logs for specific task
+pilot logs TASK-12345
+
+# Show logs for GitHub issue task
+pilot logs GH-15
+
+# JSON output
+pilot logs --json
 ```
