@@ -1705,3 +1705,971 @@ pilot webhooks events --since 2h
 # Show last 100 events
 pilot webhooks events --limit 100
 ```
+
+---
+
+## Team Management
+
+Commands for managing teams, members, and role-based access control.
+
+### pilot team
+
+Manage teams and permissions.
+
+```bash
+pilot team <subcommand>
+```
+
+Teams allow multiple users to collaborate on Pilot with different permission levels:
+- **owner**: Full access, can delete team
+- **admin**: Manage members and projects
+- **developer**: Execute tasks on assigned projects
+- **viewer**: Read-only access
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `create` | Create a new team |
+| `list` | List all teams |
+| `show` | Show team details |
+| `delete` | Delete a team (owner only) |
+| `member` | Manage team members |
+| `project` | Manage team project access |
+| `audit` | View team audit log |
+
+### pilot team create
+
+Create a new team.
+
+```bash
+pilot team create <name> [flags]
+```
+
+Creates a new team with the specified name and sets the initial owner.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--owner` | Owner email address (required) |
+
+#### Examples
+
+```bash
+# Create a new team
+pilot team create "Backend Team" --owner admin@example.com
+
+# Output includes team ID and instructions for adding members
+```
+
+### pilot team list
+
+List all teams.
+
+```bash
+pilot team list
+```
+
+Displays all teams with their ID, name, and creation date.
+
+#### Examples
+
+```bash
+# List all teams
+pilot team list
+
+# Sample output:
+# Found 2 team(s):
+#
+# ID        NAME           CREATED
+# ──        ────           ───────
+# abc12345  Backend Team   2026-01-15
+# def67890  Frontend Team  2026-01-20
+```
+
+### pilot team show
+
+Show team details.
+
+```bash
+pilot team show <team-id>
+```
+
+Displays team information including members and project access.
+
+#### Arguments
+
+The team ID can be a full ID, partial ID, or team name.
+
+#### Examples
+
+```bash
+# Show team by ID (partial match supported)
+pilot team show abc12345
+
+# Show team by name
+pilot team show "Backend Team"
+
+# Sample output:
+# 📋 Team: Backend Team
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#    ID:         abc12345-...
+#    Created:    2026-01-15 10:30
+#    Max Tasks:  5 concurrent
+#
+# 👥 Members (2):
+#    ID        EMAIL              ROLE       PROJECTS
+#    mem123    admin@example.com  owner      all
+#    mem456    dev@example.com    developer  all
+```
+
+### pilot team delete
+
+Delete a team (owner only).
+
+```bash
+pilot team delete <team-id> [flags]
+```
+
+Permanently deletes a team and all associated data. Only team owners can perform this action.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--as` | Your email (must be team owner, required) |
+| `--force` | Skip confirmation prompt |
+
+#### Examples
+
+```bash
+# Delete team (with confirmation)
+pilot team delete abc12345 --as owner@example.com
+
+# Delete without confirmation
+pilot team delete abc12345 --as owner@example.com --force
+```
+
+### pilot team member
+
+Manage team members.
+
+```bash
+pilot team member <subcommand>
+```
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `add` | Add a member to a team |
+| `remove` | Remove a member from a team |
+| `role` | Change a member's role |
+
+### pilot team member add
+
+Add a member to a team.
+
+```bash
+pilot team member add <team-id> <email> [flags]
+```
+
+Adds a new member to the specified team with the given role.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--role` | Role: owner, admin, developer, viewer (default: developer) |
+| `--projects` | Restrict to specific projects (comma-separated, empty = all) |
+| `--as` | Your email (must have manage_members permission, required) |
+
+#### Examples
+
+```bash
+# Add a developer with access to all projects
+pilot team member add abc123 dev@example.com --role developer --as admin@example.com
+
+# Add a viewer restricted to specific projects
+pilot team member add abc123 viewer@example.com --role viewer --projects api,frontend --as admin@example.com
+```
+
+### pilot team member remove
+
+Remove a member from a team.
+
+```bash
+pilot team member remove <team-id> <member-email> [flags]
+```
+
+Removes a member from the specified team.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--as` | Your email (must have manage_members permission, required) |
+
+#### Examples
+
+```bash
+# Remove a member
+pilot team member remove abc123 dev@example.com --as admin@example.com
+```
+
+### pilot team member role
+
+Change a member's role.
+
+```bash
+pilot team member role <team-id> <member-email> <new-role> [flags]
+```
+
+Updates the role of an existing team member.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--as` | Your email (must have manage_members permission, required) |
+
+#### Examples
+
+```bash
+# Promote a developer to admin
+pilot team member role abc123 dev@example.com admin --as owner@example.com
+
+# Demote to viewer
+pilot team member role abc123 user@example.com viewer --as admin@example.com
+```
+
+### pilot team project
+
+Manage team project access.
+
+```bash
+pilot team project <subcommand>
+```
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `set` | Set project access with a default role |
+| `remove` | Remove project access from a team |
+| `list` | List project access entries for a team |
+
+### pilot team project set
+
+Set project access with a default role.
+
+```bash
+pilot team project set <team-id> <project-path> [flags]
+```
+
+Sets or updates project access for a team with a default role. The default role determines the minimum permission level for all team members on the specified project.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--role` | Default role: owner, admin, developer, viewer (default: developer) |
+| `--as` | Your email (must have manage_projects permission, required) |
+
+#### Examples
+
+```bash
+# Grant team access to a project
+pilot team project set abc123 /path/to/project --role developer --as owner@example.com
+
+# Set read-only access
+pilot team project set abc123 /path/to/project --role viewer --as admin@example.com
+```
+
+### pilot team project remove
+
+Remove project access from a team.
+
+```bash
+pilot team project remove <team-id> <project-path> [flags]
+```
+
+Removes project access for a team.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--as` | Your email (must have manage_projects permission, required) |
+
+#### Examples
+
+```bash
+# Remove project access
+pilot team project remove abc123 /path/to/project --as admin@example.com
+```
+
+### pilot team project list
+
+List project access entries for a team.
+
+```bash
+pilot team project list <team-id>
+```
+
+Displays all project access entries for a team.
+
+#### Examples
+
+```bash
+# List project access
+pilot team project list abc123
+
+# Sample output:
+# 📂 Project Access for 'Backend Team' (2 entries):
+#
+# PROJECT PATH              DEFAULT ROLE
+# ────────────              ────────────
+# /home/dev/api             developer
+# /home/dev/shared-utils    viewer
+```
+
+### pilot team audit
+
+View team audit log.
+
+```bash
+pilot team audit <team-id> [flags]
+```
+
+Displays the audit log for a team showing member actions and changes.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--limit` | Maximum entries to show (default: 50) |
+| `--as` | Your email (must have view_audit_log permission, required) |
+
+#### Examples
+
+```bash
+# View recent audit entries
+pilot team audit abc123 --as admin@example.com
+
+# View last 100 entries
+pilot team audit abc123 --limit 100 --as admin@example.com
+
+# Sample output:
+# 📜 Audit Log for 'Backend Team' (showing 3 entries)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# [2026-01-15 10:30] admin@example.com performed add_member on member (mem456)
+# [2026-01-15 10:25] admin@example.com performed create_team on team (abc123)
+```
+
+---
+
+## Project Management
+
+Commands for managing Pilot projects.
+
+### pilot project
+
+Manage Pilot projects.
+
+```bash
+pilot project <subcommand>
+```
+
+Add, list, remove, and configure projects for Pilot.
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all configured projects |
+| `add` | Add a new project |
+| `remove` | Remove a project |
+| `set-default` | Set the default project |
+| `show` | Show project details |
+
+### pilot project list
+
+List all configured projects.
+
+```bash
+pilot project list
+```
+
+Displays all projects with their name, path, GitHub repository, branch, Navigator status, and default status.
+
+#### Examples
+
+```bash
+# List all projects
+pilot project list
+
+# Sample output:
+# PROJECTS (2 configured)
+#
+#   NAME    PATH                    GITHUB           BRANCH  NAV  DEFAULT
+#   pilot   /Users/dev/pilot        owner/pilot      main    *    *
+#   webapp  /Users/dev/webapp       owner/webapp     main
+#
+# Use 'pilot project show <name>' for details
+```
+
+### pilot project add
+
+Add a new project.
+
+```bash
+pilot project add [flags]
+```
+
+Adds a new project to Pilot configuration with automatic detection of GitHub remote, branch, and Navigator setup.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-n`, `--name` | Project name (required) |
+| `-p`, `--path` | Project path (default: current directory) |
+| `-g`, `--github` | GitHub repo (owner/repo) |
+| `-b`, `--branch` | Default branch (auto-detected) |
+| `--navigator` | Enable Navigator (auto-detected) |
+| `-d`, `--set-default` | Set as default project |
+
+#### Auto-detection
+
+- If `--path` is omitted, uses current working directory
+- If `--branch` is omitted, detects from git remote
+- If `--navigator` is omitted, checks for `.agent/` directory
+- If `--github` is omitted, parses from git remote origin
+
+#### Examples
+
+```bash
+# Add project from current directory (auto-detect settings)
+pilot project add --name my-app
+
+# Add with explicit GitHub repository
+pilot project add --name my-app --github owner/repo
+
+# Add with custom path and branch
+pilot project add -n my-app -p /path/to/project -g owner/repo -b develop
+
+# Add and set as default
+pilot project add --name primary-app --set-default
+```
+
+### pilot project remove
+
+Remove a project.
+
+```bash
+pilot project remove <name> [flags]
+```
+
+Removes a project from Pilot configuration.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-n`, `--name` | Project name |
+| `-f`, `--force` | Skip confirmation prompt |
+
+#### Examples
+
+```bash
+# Remove with confirmation
+pilot project remove my-app
+
+# Remove without confirmation
+pilot project remove my-app --force
+
+# Using flag instead of positional argument
+pilot project remove --name my-app
+```
+
+### pilot project set-default
+
+Set the default project.
+
+```bash
+pilot project set-default <name>
+```
+
+Sets the specified project as the default for Pilot commands.
+
+#### Examples
+
+```bash
+# Set default project
+pilot project set-default my-app
+```
+
+### pilot project show
+
+Show project details.
+
+```bash
+pilot project show [name]
+```
+
+Displays details for a project. Without arguments, shows the default project.
+
+#### Examples
+
+```bash
+# Show specific project
+pilot project show my-app
+
+# Show default project
+pilot project show
+
+# Sample output:
+# PROJECT: my-app
+#
+#   Path:       /Users/dev/my-app
+#   GitHub:     owner/my-app
+#   Branch:     main
+#   Navigator:  enabled
+#   Default:    yes
+```
+
+---
+
+## Tunnel Management
+
+Commands for managing Cloudflare Tunnel for webhooks.
+
+### pilot tunnel
+
+Manage Cloudflare Tunnel for webhooks.
+
+```bash
+pilot tunnel <subcommand>
+```
+
+The tunnel provides a permanent public URL for receiving webhooks from GitHub, Linear, and other services - no port forwarding required.
+
+Supported providers:
+- **cloudflare**: Free, permanent URLs via Cloudflare Tunnel
+- **ngrok**: Quick testing (requires ngrok account for custom domains)
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `status` | Show tunnel status |
+| `start` | Start the tunnel |
+| `stop` | Stop the tunnel |
+| `url` | Show the tunnel webhook URL |
+| `setup` | Set up tunnel (create tunnel, configure DNS) |
+| `service` | Manage tunnel auto-start service |
+
+### pilot tunnel status
+
+Show tunnel status.
+
+```bash
+pilot tunnel status
+```
+
+Displays current tunnel status including provider, connection state, URL, and service status.
+
+#### Examples
+
+```bash
+# Show tunnel status
+pilot tunnel status
+
+# Sample output:
+# Tunnel Status
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#   Provider:  cloudflare
+#   Status:    ✓ Running
+#   Connected: ✓ Yes
+#   URL:       https://pilot-webhook.example.com
+#   Tunnel ID: abc123-def456-...
+#
+# Service (launchd)
+# ─────────────────────────────────────────
+#   Installed: ✓ Yes
+#   Running:   ✓ Yes (auto-starts on boot)
+```
+
+### pilot tunnel start
+
+Start the tunnel.
+
+```bash
+pilot tunnel start [flags]
+```
+
+Starts the Cloudflare Tunnel to expose local webhook endpoint. By default, runs in background.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-f`, `--foreground` | Run in foreground |
+
+#### Examples
+
+```bash
+# Start tunnel (background)
+pilot tunnel start
+
+# Start in foreground (Ctrl+C to stop)
+pilot tunnel start --foreground
+
+# Output:
+# Starting cloudflare tunnel...
+#
+# ✓ Tunnel started
+#   URL: https://pilot-webhook.example.com
+#   Webhook endpoint: https://pilot-webhook.example.com/webhooks/github
+```
+
+### pilot tunnel stop
+
+Stop the tunnel.
+
+```bash
+pilot tunnel stop
+```
+
+Stops the running tunnel and any associated service.
+
+#### Examples
+
+```bash
+# Stop tunnel
+pilot tunnel stop
+
+# Output: ✓ Tunnel stopped
+```
+
+### pilot tunnel url
+
+Show the tunnel webhook URL.
+
+```bash
+pilot tunnel url [flags]
+```
+
+Displays the tunnel URL for configuring webhooks.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--webhook` | Append webhook path (e.g., /webhooks/github) |
+
+#### Examples
+
+```bash
+# Show base URL
+pilot tunnel url
+
+# Show full webhook URL
+pilot tunnel url --webhook /webhooks/github
+```
+
+### pilot tunnel setup
+
+Set up tunnel (create tunnel, configure DNS).
+
+```bash
+pilot tunnel setup [flags]
+```
+
+Sets up Cloudflare Tunnel for permanent webhook URLs.
+
+This command:
+1. Checks for cloudflared CLI installation
+2. Authenticates with Cloudflare (if needed)
+3. Creates a tunnel named 'pilot-webhook'
+4. Configures DNS routing (if custom domain provided)
+5. Optionally installs auto-start service
+
+#### Prerequisites
+
+- Cloudflare account (free tier is sufficient)
+- cloudflared CLI: `brew install cloudflared`
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--provider` | Tunnel provider: cloudflare, ngrok (default: cloudflare) |
+| `--domain` | Custom domain (optional) |
+| `--service` | Install auto-start service |
+
+#### Examples
+
+```bash
+# Basic setup
+pilot tunnel setup
+
+# With custom domain
+pilot tunnel setup --domain pilot.example.com
+
+# With auto-start service
+pilot tunnel setup --service
+
+# Full setup with all options
+pilot tunnel setup --domain pilot.example.com --service
+```
+
+### pilot tunnel service
+
+Manage tunnel auto-start service.
+
+```bash
+pilot tunnel service <subcommand>
+```
+
+Manage the launchd service for automatic tunnel startup on macOS.
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `install` | Install auto-start service (macOS only) |
+| `uninstall` | Remove auto-start service |
+| `status` | Show service status |
+
+### pilot tunnel service install
+
+Install auto-start service (macOS only).
+
+```bash
+pilot tunnel service install
+```
+
+Installs a launchd service to automatically start the tunnel on boot.
+
+#### Prerequisites
+
+Run `pilot tunnel setup` first to configure the tunnel.
+
+#### Examples
+
+```bash
+# Install service
+pilot tunnel service install
+
+# Output:
+# Installing service... ✓
+#
+# Service installed!
+#   - Tunnel will auto-start on boot
+#   - Run 'pilot tunnel service status' to check
+```
+
+### pilot tunnel service uninstall
+
+Remove auto-start service.
+
+```bash
+pilot tunnel service uninstall
+```
+
+Removes the launchd service. The tunnel will no longer auto-start on boot.
+
+#### Examples
+
+```bash
+# Uninstall service
+pilot tunnel service uninstall
+
+# Output:
+# Uninstalling service... ✓
+# Service removed - tunnel will no longer auto-start
+```
+
+### pilot tunnel service status
+
+Show service status.
+
+```bash
+pilot tunnel service status
+```
+
+Displays the launchd service status.
+
+#### Examples
+
+```bash
+# Show service status
+pilot tunnel service status
+
+# Sample output:
+# Service Status (launchd)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#   Installed: ✓ Yes
+#   Path:      ~/Library/LaunchAgents/com.pilot.tunnel.plist
+#   Running:   ✓ Yes
+```
+
+---
+
+## Autopilot & Release
+
+Commands for autopilot PR lifecycle management and releases.
+
+### pilot autopilot
+
+Autopilot commands for PR lifecycle management.
+
+```bash
+pilot autopilot <subcommand>
+```
+
+Commands for viewing and managing autopilot PR tracking and automation.
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `status` | Show tracked PRs and their current stage |
+
+### pilot autopilot status
+
+Show tracked PRs and their current stage.
+
+```bash
+pilot autopilot status [flags]
+```
+
+Displays autopilot status including:
+- Tracked PRs and their lifecycle stage
+- Time in current stage
+- CI status for each PR
+- Release configuration status
+
+Note: Pilot must be running with `--autopilot` flag for live PR tracking.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output as JSON |
+
+#### Examples
+
+```bash
+# Show autopilot status
+pilot autopilot status
+
+# Sample output:
+# 🤖 Autopilot Status
+# ───────────────────────────────────────
+# Environment: stage
+#
+# Configuration:
+#   Auto Merge:     true
+#   Auto Review:    false
+#   Merge Method:   squash
+#   CI Timeout:     10m0s
+#   Max Failures:   3
+#
+# Release:
+#   Enabled:        true
+#   Trigger:        on-merge
+#   Require CI:     true
+#   Tag Prefix:     v
+#
+# ℹ️  For live PR tracking, check:
+#    • Dashboard: pilot start --dashboard --autopilot=<env>
+#    • Logs: pilot logs --follow
+
+# JSON output
+pilot autopilot status --json
+```
+
+### pilot release
+
+Create a release manually.
+
+```bash
+pilot release [version] [flags]
+```
+
+Creates a new release for the current repository. If no version is specified, detects version bump from commits since the last release.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--bump` | Force bump type: patch, minor, major |
+| `--draft` | Create release as draft |
+| `--dry-run` | Show what would be released without creating |
+
+#### Examples
+
+```bash
+# Auto-detect version from commits
+pilot release
+
+# Force minor bump
+pilot release --bump=minor
+
+# Specific version
+pilot release v1.2.3
+
+# Create as draft
+pilot release --draft
+
+# Preview release without creating
+pilot release --dry-run
+
+# Output:
+# Would create release:
+#   Current version: v0.62.0
+#   New version: v0.63.0
+#   Bump type: patch
+#   Draft: false
+```
+
+### pilot allow
+
+Manage Telegram allowed users.
+
+```bash
+pilot allow [user_id] [flags]
+```
+
+Add, remove, or list Telegram user IDs in allowed_ids configuration.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--remove` | Remove user from allowed_ids |
+| `--list` | List current allowed users |
+
+#### Examples
+
+```bash
+# Add a user
+pilot allow 123456789
+
+# Remove a user
+pilot allow --remove 123456789
+
+# List allowed users
+pilot allow --list
+
+# Sample output:
+# Allowed Telegram users:
+#   123456789
+#   987654321
+#
+# Total: 2 user(s)
+```
