@@ -4190,12 +4190,38 @@ func newGitHubRunCmd() *cobra.Command {
 		Short: "Run a GitHub issue as a Pilot task",
 		Long: `Fetch a GitHub issue and execute it as a Pilot task.
 
-PRs are always created to enable autopilot workflow.
+Downloads the specified GitHub issue and executes it as a Pilot task
+with full Claude Code integration. Always creates a pull request to
+enable the autopilot workflow for review and merging.
+
+Arguments:
+  issue-number    GitHub issue number to execute
+
+Flags:
+  -p, --project string       Project path (default: current directory)
+      --repo string          GitHub repository (owner/repo)
+      --dry-run              Show what would execute without running
+  -v, --verbose              Verbose output (stream Claude Code execution)
+      --team string          Team ID or name for project access scoping
+      --team-member string   Member email for team access scoping
+
+Authentication:
+  GitHub token via GITHUB_TOKEN environment variable or config file
 
 Examples:
-  pilot github run 8
-  pilot github run 8 --repo owner/repo
-  pilot github run 8 --dry-run`,
+  pilot github run 42                               # Run issue #42 in current repo
+  pilot github run 42 --repo owner/repo           # Run issue from specific repo
+  pilot github run 42 --project /path/to/code     # Use specific project path
+  pilot github run 42 --dry-run                   # Preview without executing
+  pilot github run 42 --verbose                   # Show detailed execution output
+  pilot github run 42 --team dev-team --team-member alice@company.com  # Team scoping
+
+Workflow:
+  1. Fetches issue from GitHub
+  2. Creates branch: pilot/GH-<issue-number>
+  3. Executes task with Claude Code
+  4. Creates pull request with changes
+  5. Enables autopilot for automated review/merge`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issueNum, err := parseInt64(args[0])

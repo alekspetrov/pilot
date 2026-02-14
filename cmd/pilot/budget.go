@@ -48,7 +48,25 @@ func newBudgetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "budget",
 		Short: "View and manage cost controls",
-		Long:  `View budget status, limits, and manage cost controls.`,
+		Long: `View budget status, limits, and manage cost controls.
+
+Budget controls help you monitor and limit API costs for Claude usage across
+all Pilot operations. Configure limits, track spending, and set enforcement
+actions when limits are exceeded.
+
+Subcommands:
+  status       Show current budget status and spending
+  config       Show budget configuration settings
+  reset        Reset blocked tasks counter and resume execution
+
+Examples:
+  pilot budget status                    # Show current spending status
+  pilot budget status --user alice       # Filter by specific user
+  pilot budget config                    # View configuration
+  pilot budget reset --confirm           # Reset counters and resume
+
+For detailed help on any subcommand:
+  pilot budget <subcommand> --help`,
 	}
 
 	cmd.AddCommand(
@@ -66,6 +84,24 @@ func newBudgetStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show current budget status",
+		Long: `Display current budget status, spending, and limits.
+
+Shows daily and monthly budget utilization with visual progress bars,
+enforcement status, and any active warnings or blocks.
+
+Flags:
+  --user string    Filter by user ID (optional)
+
+Examples:
+  pilot budget status                    # Show overall budget status
+  pilot budget status --user alice       # Show budget for specific user
+
+Output includes:
+  - Daily/monthly spending vs limits
+  - Progress bars with color coding
+  - Enforcement status and warnings
+  - Blocked tasks count
+  - Per-task limits and policies`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Load config
 			cfg, err := loadConfig()
@@ -302,6 +338,22 @@ func newBudgetConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Show budget configuration",
+		Long: `Display the complete budget configuration including limits,
+enforcement actions, and thresholds.
+
+Shows the current configuration loaded from ~/.pilot/config.yaml
+and provides a YAML example for reference.
+
+Examples:
+  pilot budget config                    # Show current budget config
+
+Output includes:
+  - Enable/disable status
+  - Daily and monthly limits
+  - Per-task token and duration limits
+  - Enforcement actions (pause/stop)
+  - Warning thresholds
+  - YAML configuration example`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Load config
 			cfg, err := loadConfig()
@@ -367,7 +419,22 @@ func newBudgetResetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "reset",
 		Short: "Reset blocked tasks counter",
-		Long:  `Reset the blocked tasks counter and resume task execution if paused due to daily limits.`,
+		Long: `Reset the blocked tasks counter and resume task execution
+if paused due to daily limits.
+
+This command clears the blocked tasks count and daily pause status,
+allowing Pilot to resume normal operation. Use when you want to
+override daily budget enforcement.
+
+Flags:
+  --confirm    Confirm the reset operation (required for safety)
+
+Examples:
+  pilot budget reset                     # Show warning, require confirmation
+  pilot budget reset --confirm           # Reset immediately
+
+CAUTION: This will resume task execution even if daily limits
+have been exceeded. Monitor your budget carefully after reset.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !confirm {
 				fmt.Println()

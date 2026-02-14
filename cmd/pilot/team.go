@@ -24,7 +24,26 @@ Teams allow multiple users to collaborate on Pilot with different permission lev
   - owner:     Full access, can delete team
   - admin:     Manage members and projects
   - developer: Execute tasks on assigned projects
-  - viewer:    Read-only access`,
+  - viewer:    Read-only access
+
+Subcommands:
+  create       Create a new team
+  list         List all teams
+  show         Show team details and members
+  delete       Delete a team (owner only)
+  member       Manage team members (add/remove/role)
+  project      Manage team project access
+  audit        View team audit log
+
+Examples:
+  pilot team create "Dev Team" --owner alice@company.com
+  pilot team list
+  pilot team show abc12345
+  pilot team member add abc12345 bob@company.com --role developer --as alice@company.com
+  pilot team project set abc12345 /path/to/project --role developer --as alice@company.com
+
+For detailed help on any subcommand:
+  pilot team <subcommand> --help`,
 	}
 
 	cmd.AddCommand(
@@ -46,6 +65,23 @@ func newTeamCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create [name]",
 		Short: "Create a new team",
+		Long: `Create a new team with the specified name and owner.
+
+The owner email must be provided and will become the team owner
+with full permissions to manage the team.
+
+Arguments:
+  name         Team name (required)
+
+Flags:
+  --owner string    Owner email address (required)
+
+Examples:
+  pilot team create "Development Team" --owner alice@company.com
+  pilot team create "QA Team" --owner qa-lead@company.com
+
+After creation, add members with:
+  pilot team member add <team-id> <email> --role <role> --as <your-email>`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -88,6 +124,20 @@ func newTeamListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List all teams",
+		Long: `Display a list of all teams with basic information.
+
+Shows team ID (short format), name, and creation date for all teams
+in the system.
+
+Examples:
+  pilot team list                        # Show all teams
+
+Output format:
+  ID       NAME           CREATED
+  abc12345 Development    2024-01-15
+  def67890 QA Team        2024-01-16
+
+Use 'pilot team show <team-id>' for detailed information about a specific team.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service, cleanup, err := getTeamService()
 			if err != nil {
@@ -132,6 +182,26 @@ func newTeamShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show [team-id]",
 		Short: "Show team details",
+		Long: `Display detailed information about a specific team including
+members, roles, and project access.
+
+You can specify the team by:
+  - Full team ID
+  - Partial team ID (first 8+ characters)
+  - Team name
+
+Arguments:
+  team-id      Team ID, partial ID, or team name
+
+Examples:
+  pilot team show abc12345               # By partial team ID
+  pilot team show "Development Team"     # By team name
+
+Output includes:
+  - Team metadata (ID, name, creation date)
+  - Team settings (max concurrent tasks)
+  - All members with roles and project access
+  - Project access entries`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			teamID := args[0]
@@ -206,6 +276,24 @@ func newTeamDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete [team-id]",
 		Short: "Delete a team (owner only)",
+		Long: `Permanently delete a team and all associated data.
+
+Only team owners can delete teams. This action is irreversible and
+will remove all team data including members and project access.
+
+Arguments:
+  team-id      Team ID, partial ID, or team name
+
+Flags:
+  --as string     Your email address (must be team owner, required)
+  --force         Skip interactive confirmation
+
+Examples:
+  pilot team delete abc12345 --as owner@company.com
+  pilot team delete "Old Team" --as owner@company.com --force
+
+CAUTION: This permanently removes the team and cannot be undone.
+All team members will lose access to team projects.`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			teamID := args[0]
@@ -261,6 +349,23 @@ func newTeamMemberCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "member",
 		Short: "Manage team members",
+		Long: `Add, remove, or change roles for team members.
+
+Subcommands:
+  add          Add a member to a team
+  remove       Remove a member from a team
+  role         Change a member's role
+
+Examples:
+  pilot team member add abc12345 bob@company.com --role developer --as alice@company.com
+  pilot team member remove abc12345 bob@company.com --as alice@company.com
+  pilot team member role abc12345 bob@company.com admin --as alice@company.com
+
+Roles:
+  owner        Full access, can delete team
+  admin        Manage members and projects
+  developer    Execute tasks on assigned projects
+  viewer       Read-only access`,
 	}
 
 	cmd.AddCommand(
@@ -282,6 +387,29 @@ func newTeamMemberAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add [team-id] [email]",
 		Short: "Add a member to a team",
+		Long: `Add a new member to a team with the specified role.
+
+Only team owners and admins can add members. You can optionally
+restrict the member to specific projects.
+
+Arguments:
+  team-id      Team ID, partial ID, or team name
+  email        Member's email address
+
+Flags:
+  --role string           Member role (default: developer)
+  --projects strings      Restrict to specific projects (optional)
+  --as string            Your email address (required)
+
+Roles:
+  owner        Full access, can delete team
+  admin        Manage members and projects
+  developer    Execute tasks on assigned projects
+  viewer       Read-only access
+
+Examples:
+  pilot team member add abc12345 bob@company.com --role developer --as alice@company.com
+  pilot team member add abc12345 bob@company.com --role viewer --projects proj1,proj2 --as alice@company.com`,
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			teamID := args[0]
@@ -337,6 +465,23 @@ func newTeamMemberRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove [team-id] [member-email]",
 		Short: "Remove a member from a team",
+		Long: `Remove a member from a team, revoking all access.
+
+Only team owners and admins can remove members. The member will
+lose access to all team projects immediately.
+
+Arguments:
+  team-id       Team ID, partial ID, or team name
+  member-email  Email of the member to remove
+
+Flags:
+  --as string   Your email address (required)
+
+Examples:
+  pilot team member remove abc12345 bob@company.com --as alice@company.com
+  pilot team member remove "Dev Team" old-member@company.com --as admin@company.com
+
+Note: Team owners cannot be removed. Transfer ownership first or delete the team.`,
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			teamID := args[0]
@@ -388,6 +533,30 @@ func newTeamMemberRoleCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "role [team-id] [member-email] [new-role]",
 		Short: "Change a member's role",
+		Long: `Change a team member's role and permissions.
+
+Only team owners and admins can change member roles. Role changes
+take effect immediately.
+
+Arguments:
+  team-id       Team ID, partial ID, or team name
+  member-email  Email of the member to modify
+  new-role      New role to assign
+
+Flags:
+  --as string   Your email address (required)
+
+Valid Roles:
+  owner        Full access, can delete team
+  admin        Manage members and projects
+  developer    Execute tasks on assigned projects
+  viewer       Read-only access
+
+Examples:
+  pilot team member role abc12345 bob@company.com admin --as owner@company.com
+  pilot team member role "Dev Team" alice@company.com developer --as admin@company.com
+
+Note: Changing someone to 'owner' transfers full team ownership.`,
 		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			teamID := args[0]
@@ -447,6 +616,30 @@ func newTeamAuditCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "audit [team-id]",
 		Short: "View team audit log",
+		Long: `View the audit log for a team showing all actions performed.
+
+The audit log tracks all team management actions including member
+additions/removals, role changes, and project access modifications.
+
+Arguments:
+  team-id      Team ID, partial ID, or team name
+
+Flags:
+  --limit int   Maximum entries to show (default: 50)
+  --as string   Your email address (required)
+
+Examples:
+  pilot team audit abc12345 --as alice@company.com
+  pilot team audit "Dev Team" --limit 100 --as admin@company.com
+
+Output includes:
+  - Timestamp of each action
+  - Actor (who performed the action)
+  - Action type and resource
+  - Resource ID for context
+
+Only team members can view audit logs. Some sensitive actions
+may require admin or owner permissions.`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			teamID := args[0]
@@ -512,6 +705,23 @@ func newTeamProjectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "project",
 		Short: "Manage team project access",
+		Long: `Set, remove, or list project access for teams.
+
+Project access controls which projects team members can work on
+and their default permissions for those projects.
+
+Subcommands:
+  set          Set or update project access with default role
+  remove       Remove project access from team
+  list         List all project access entries
+
+Examples:
+  pilot team project set abc12345 /path/to/project --role developer --as alice@company.com
+  pilot team project remove abc12345 /path/to/project --as alice@company.com
+  pilot team project list abc12345
+
+Default roles apply to all team members on the specified project,
+but individual member roles may grant higher permissions.`,
 	}
 
 	cmd.AddCommand(
@@ -538,8 +748,25 @@ The default role determines the minimum permission level for all team members
 on the specified project. Members may still have higher permissions based on
 their individual role.
 
-Example:
-  pilot team project set abc123 /path/to/project --role developer --as owner@example.com`,
+Arguments:
+  team-id       Team ID, partial ID, or team name
+  project-path  Absolute path to the project directory
+
+Flags:
+  --role string   Default role for this project (default: developer)
+  --as string     Your email address (required)
+
+Valid Roles:
+  owner        Full project access
+  admin        Manage project settings
+  developer    Execute tasks and make changes
+  viewer       Read-only access
+
+Examples:
+  pilot team project set abc12345 /path/to/project --role developer --as admin@company.com
+  pilot team project set "Backend Team" /home/user/api --role admin --as owner@company.com
+
+The project path must exist and should be the root of a code project.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			teamID := args[0]
@@ -591,6 +818,25 @@ func newTeamProjectRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove [team-id] [project-path]",
 		Short: "Remove project access from a team",
+		Long: `Remove project access for a team, revoking all team member
+access to the specified project.
+
+All team members will immediately lose access to the project
+unless they have access through other teams.
+
+Arguments:
+  team-id       Team ID, partial ID, or team name
+  project-path  Absolute path to the project directory
+
+Flags:
+  --as string   Your email address (required)
+
+Examples:
+  pilot team remove abc12345 /path/to/project --as admin@company.com
+  pilot team remove "Old Team" /home/user/deprecated-proj --as owner@company.com
+
+WARNING: This immediately revokes access for all team members.
+Make sure this is intended before proceeding.`,
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			teamID := args[0]
@@ -635,6 +881,24 @@ func newTeamProjectListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list [team-id]",
 		Short: "List project access entries for a team",
+		Long: `Display all project access entries for a team.
+
+Shows which projects the team has access to and the default
+role for each project.
+
+Arguments:
+  team-id      Team ID, partial ID, or team name
+
+Examples:
+  pilot team project list abc12345       # List all project access
+  pilot team project list "Dev Team"     # By team name
+
+Output format:
+  PROJECT PATH              DEFAULT ROLE
+  /path/to/frontend        developer
+  /path/to/backend         admin
+
+Use 'pilot team project set' to add or modify project access.`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			teamID := args[0]

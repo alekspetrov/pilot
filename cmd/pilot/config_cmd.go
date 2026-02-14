@@ -18,7 +18,30 @@ func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Manage Pilot configuration",
-		Long:  `View, edit, and validate Pilot configuration.`,
+		Long: `View, edit, and validate Pilot configuration.
+
+Manage Pilot's YAML configuration file including adapters,
+projects, budget settings, and more.
+
+Subcommands:
+  show         Show current configuration
+  edit         Open config file in editor
+  validate     Validate configuration syntax
+  path         Show config file path
+
+Configuration File Location:
+  Default: ~/.pilot/config.yaml
+  Override with --config flag
+
+Examples:
+  pilot config show                      # View current config
+  pilot config show --json              # Output as JSON
+  pilot config edit                     # Edit in $EDITOR
+  pilot config validate                 # Check syntax
+  pilot config path                     # Show file location
+
+For detailed help on any subcommand:
+  pilot config <subcommand> --help`,
 	}
 
 	cmd.AddCommand(
@@ -37,6 +60,24 @@ func newConfigShowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show",
 		Short: "Show current configuration",
+		Long: `Display the current Pilot configuration.
+
+Shows the configuration loaded from the config file, with all
+settings including adapters, projects, budget, and runtime options.
+
+Flags:
+  --json    Output as JSON instead of YAML
+
+Examples:
+  pilot config show                      # Show as YAML
+  pilot config show --json              # Show as JSON
+
+The configuration is loaded from:
+  1. --config flag if specified
+  2. ~/.pilot/config.yaml (default)
+  3. Environment variables for secrets
+
+Sensitive values like tokens may be masked in output.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			configPath := cfgFile
 			if configPath == "" {
@@ -79,10 +120,27 @@ func newConfigEditCmd() *cobra.Command {
 		Short: "Open config in editor",
 		Long: `Open the Pilot configuration file in your default editor.
 
-Uses $EDITOR environment variable, falling back to:
-  - vim (if available)
-  - nano (if available)
-  - vi (if available)`,
+The editor is selected in this order:
+  1. $EDITOR environment variable
+  2. $VISUAL environment variable
+  3. vim (if available)
+  4. nano (if available)
+  5. vi (if available)
+
+After editing, the configuration is automatically validated.
+Any syntax errors or validation issues will be reported.
+
+Examples:
+  pilot config edit                      # Edit with default editor
+  EDITOR=code pilot config edit         # Use specific editor
+
+The config file will be created if it doesn't exist. Use 'pilot init'
+to create a config file with default values.
+
+After editing:
+  - Syntax is checked automatically
+  - Validation errors are reported
+  - No changes are made if validation fails`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			configPath := cfgFile
 			if configPath == "" {
@@ -152,6 +210,32 @@ func newConfigValidateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Validate configuration syntax",
+		Long: `Check the configuration file for syntax errors and validation issues.
+
+Validates YAML syntax, required fields, and configuration logic.
+Also checks for common misconfigurations and missing dependencies.
+
+Flags:
+  -q, --quiet    Exit with code 1 on error, no output
+
+Examples:
+  pilot config validate                  # Validate and show results
+  pilot config validate --quiet         # Validate quietly (for scripts)
+
+Exit Codes:
+  0    Configuration is valid
+  1    Syntax errors or validation failures
+
+Validation Checks:
+  - YAML syntax correctness
+  - Required field presence
+  - Adapter configuration completeness
+  - Project path existence
+  - Token/credential availability
+  - Internal consistency
+
+Use this before deploying configuration changes to catch
+issues early.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			configPath := cfgFile
 			if configPath == "" {
@@ -260,6 +344,23 @@ func newConfigPathCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "path",
 		Short: "Show config file path",
+		Long: `Print the path to the Pilot configuration file.
+
+Shows the actual path that will be used for configuration,
+taking into account the --config flag and default locations.
+
+Examples:
+  pilot config path                      # Show default path
+  pilot --config /custom/config.yaml config path  # Show custom path
+
+Output:
+  /home/user/.pilot/config.yaml         # Typical default
+  /custom/config.yaml                   # When --config is used
+
+Use this to:
+  - Verify which config file is being used
+  - Get the path for scripts or automation
+  - Confirm --config flag behavior`,
 		Run: func(cmd *cobra.Command, args []string) {
 			configPath := cfgFile
 			if configPath == "" {
