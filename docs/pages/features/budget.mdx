@@ -1,0 +1,238 @@
+import { Callout } from 'nextra/components'
+
+# Budget & Cost Controls
+
+Pilot provides budget tracking, enforcement, and alerting to keep API costs under control. Set daily, monthly, and per-task limits with configurable actions when thresholds are exceeded.
+
+## Overview
+
+The budget system operates at three levels:
+
+| Level | Scope | Action on Exceed |
+|-------|-------|------------------|
+| Daily | Per 24-hour period | Pause or stop new tasks |
+| Monthly | Per calendar month | Pause or stop new tasks |
+| Per-task | Single execution | Terminate execution |
+
+When limits are approached or exceeded, Pilot can:
+- **Warn** — Log and alert, but continue execution
+- **Pause** — Stop accepting new tasks, finish current ones
+- **Stop** — Terminate immediately
+
+## Configuration
+
+Add budget settings to your config file:
+
+```yaml
+# ~/.pilot/config.yaml
+budget:
+  enabled: true
+  daily_limit: 50.00      # USD per day
+  monthly_limit: 500.00   # USD per month
+  per_task:
+    max_tokens: 100000    # Token limit per task
+    max_duration: 30m     # Time limit per task
+  on_exceed:
+    daily: pause          # warn | pause | stop
+    monthly: stop
+    per_task: stop
+  thresholds:
+    warn_percent: 80      # Alert at 80% of limit
+```
+
+### Configuration Reference
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable budget enforcement |
+| `daily_limit` | float | `50.00` | Maximum daily spend (USD) |
+| `monthly_limit` | float | `500.00` | Maximum monthly spend (USD) |
+| `per_task.max_tokens` | int | `100000` | Maximum tokens per task |
+| `per_task.max_duration` | duration | `30m` | Maximum execution time per task |
+| `on_exceed.daily` | string | `pause` | Action when daily limit exceeded |
+| `on_exceed.monthly` | string | `stop` | Action when monthly limit exceeded |
+| `on_exceed.per_task` | string | `stop` | Action when per-task limit exceeded |
+| `thresholds.warn_percent` | float | `80` | Warning threshold percentage |
+
+## CLI Commands
+
+Check budget status from the command line:
+
+```bash
+# View current budget status
+pilot budget status
+
+# Show daily/monthly spend
+pilot budget summary
+
+# Check remaining budget
+pilot budget remaining
+```
+
+## Daily and Monthly Limits
+
+Daily limits reset at midnight local time. Monthly limits reset on the first of each month.
+
+When a limit is reached:
+1. The enforcer blocks new task execution
+2. An alert fires (if configured)
+3. Running tasks may complete or terminate based on `on_exceed` action
+
+```
+┌─────────────────────────────────────┐
+│  Daily Budget    $42.50 / $50.00    │
+│  ████████████████░░░░  85%          │
+│                                     │
+│  Monthly Budget  $312.00 / $500.00  │
+│  ████████████░░░░░░░░  62%          │
+└─────────────────────────────────────┘
+```
+
+## Per-Task Limits
+
+Per-task limits prevent runaway executions from consuming excessive resources. Each task has independent token and duration limits.
+
+```yaml
+budget:
+  per_task:
+    max_tokens: 100000    # ~$3-5 depending on model
+    max_duration: 30m     # Hard timeout
+```
+
+When a per-task limit is exceeded:
+- The executor terminates the Claude Code process
+- The task is marked as failed with a budget-related reason
+- The issue may be re-queued or escalated based on retry policy
+
+<Callout type="warning">
+Per-task limits help prevent infinite loops or stuck tasks from depleting your budget. Set them based on your typical task complexity.
+</Callout>
+
+## Polling Mode Enforcement
+
+In autopilot mode, the enforcer checks budget before picking each issue from the queue:
+
+```
+Issue Queue → Budget Check → Pick & Execute
+                  ↓
+           Budget exceeded?
+                  ↓
+            Block pickup
+```
+
+When budget is paused:
+- The poller continues running but skips task pickup
+- Existing tasks may complete (if action is `pause`)
+- Dashboard shows "Budget Paused" status
+- Issues remain in queue for later processing
+
+## Budget Alerts
+
+Budget events integrate with the [alerts engine](/features/alerts). Configure rules to notify your team:
+
+```yaml
+# ~/.pilot/config.yaml
+alerts:
+  enabled: true
+  rules:
+    - name: daily-budget-warning
+      type: daily_spend
+      enabled: true
+      condition:
+        daily_spend_threshold: 40.00  # 80% of $50
+      channels: [slack]
+      severity: warning
+      cooldown: 1h
+
+    - name: budget-exceeded
+      type: budget_depleted
+      enabled: true
+      condition:
+        budget_limit: 50.00
+      channels: [slack, telegram]
+      severity: critical
+```
+
+### Alert Types
+
+| Type | Trigger | Severity |
+|------|---------|----------|
+| `daily_budget_warning` | Daily spend reaches warn threshold | warning |
+| `daily_budget_exceeded` | Daily limit exceeded | critical |
+| `monthly_budget_warning` | Monthly spend reaches warn threshold | warning |
+| `monthly_budget_exceeded` | Monthly limit exceeded | critical |
+
+## Cost Tracking
+
+Costs are tracked per-execution and stored in SQLite (`~/.pilot/data/pilot.db`). The usage table records:
+
+- Input/output token counts
+- Model used
+- Estimated cost (USD)
+- Timestamp
+
+View historical costs:
+
+```bash
+# Cost breakdown by day
+pilot metrics daily --days 30
+
+# Cost breakdown by project
+pilot metrics projects
+
+# Export to CSV
+pilot metrics export --format csv --output costs.csv
+```
+
+## Best Practices
+
+1. **Start conservative** — Set lower limits initially and increase based on actual usage patterns
+
+2. **Use warning thresholds** — Get notified at 80% so you can adjust before hitting limits
+
+3. **Set per-task limits** — Prevent single tasks from consuming disproportionate budget
+
+4. **Monitor daily** — Review the dashboard's cost metrics regularly
+
+5. **Configure alerts** — Route budget warnings to Slack/Telegram for immediate visibility
+
+<Callout type="info">
+Budget enforcement is disabled by default. Enable it in production to prevent unexpected costs.
+</Callout>
+
+## Troubleshooting
+
+### Tasks not executing
+
+Check if budget is paused:
+
+```bash
+pilot budget status
+```
+
+If paused due to daily limit, wait for midnight reset or manually resume:
+
+```bash
+pilot budget resume
+```
+
+### Inaccurate cost estimates
+
+Cost estimates use published token pricing. Actual costs may vary based on:
+- Caching (reduced input costs)
+- Batch API usage
+- Pricing changes
+
+Compare Pilot estimates against your Anthropic Console billing for accuracy.
+
+### Budget resets
+
+- **Daily**: Midnight local time
+- **Monthly**: First day of month, midnight local time
+
+Reset times use the server's local timezone. Configure timezone if needed:
+
+```yaml
+budget:
+  timezone: America/New_York
+```
