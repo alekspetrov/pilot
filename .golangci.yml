@@ -27,3 +27,7 @@ linters:
         linters:
           - unused
         text: "save"
+      # Exclude onboard_ticket.go - stub implementation awaiting Issue 1 (skeleton) integration
+      - path: cmd/pilot/onboard_ticket.go
+        linters:
+          - unused
