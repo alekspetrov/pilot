@@ -1,12 +1,16 @@
 package executor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/alekspetrov/pilot/internal/webhooks"
 )
 
 // OnProgress registers a callback function to receive progress updates during task execution.
@@ -475,4 +479,185 @@ func (r *Runner) handleToolUse(taskID, toolName string, input map[string]interfa
 		state.phase = newPhase
 		r.reportProgress(taskID, newPhase, progress, message)
 	}
+}
+
+// formatToolMessage formats tool usage for display
+func formatToolMessage(toolName string, input map[string]interface{}) string {
+	switch toolName {
+	case "Write":
+		if fp, ok := input["file_path"].(string); ok {
+			return fmt.Sprintf("Writing %s", filepath.Base(fp))
+		}
+	case "Edit":
+		if fp, ok := input["file_path"].(string); ok {
+			return fmt.Sprintf("Editing %s", filepath.Base(fp))
+		}
+	case "Read":
+		if fp, ok := input["file_path"].(string); ok {
+			return fmt.Sprintf("Reading %s", filepath.Base(fp))
+		}
+	case "Bash":
+		if cmd, ok := input["command"].(string); ok {
+			return fmt.Sprintf("Running: %s", truncateText(cmd, 40))
+		}
+	case "Glob":
+		if pattern, ok := input["pattern"].(string); ok {
+			return fmt.Sprintf("Searching: %s", pattern)
+		}
+	case "Grep":
+		if pattern, ok := input["pattern"].(string); ok {
+			return fmt.Sprintf("Grep: %s", truncateText(pattern, 30))
+		}
+	case "Task":
+		if desc, ok := input["description"].(string); ok {
+			return fmt.Sprintf("Spawning: %s", truncateText(desc, 40))
+		}
+	}
+	return fmt.Sprintf("Using %s", toolName)
+}
+
+// truncateText truncates text to maxLen and adds ellipsis
+func truncateText(text string, maxLen int) string {
+	// Remove newlines for display
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.TrimSpace(text)
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen-3] + "..."
+}
+
+// min returns the smaller of two ints
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// extractCommitSHA extracts git commit SHA from tool output
+// Pattern: "[branch abc1234]" or "[main abc1234]" from git commit output
+func extractCommitSHA(content string, state *progressState) {
+	// Look for git commit output pattern: [branch sha]
+	// Example: "[main abc1234] feat: add feature"
+	// Example: "[pilot/TASK-123 def5678] fix: bug"
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "[") {
+			continue
+		}
+
+		// Find closing bracket
+		closeBracket := strings.Index(line, "]")
+		if closeBracket == -1 {
+			continue
+		}
+
+		// Extract branch and SHA: "[branch sha]"
+		inside := line[1:closeBracket]
+		parts := strings.Fields(inside)
+		if len(parts) >= 2 {
+			sha := parts[len(parts)-1]
+			// Validate SHA format (7-40 hex characters)
+			if isValidSHA(sha) {
+				state.commitSHAs = append(state.commitSHAs, sha)
+			}
+		}
+	}
+}
+
+// isValidSHA checks if a string looks like a git SHA (7-40 hex chars)
+func isValidSHA(s string) bool {
+	if len(s) < 7 || len(s) > 40 {
+		return false
+	}
+	for _, c := range s {
+		isDigit := c >= '0' && c <= '9'
+		isLowerHex := c >= 'a' && c <= 'f'
+		isUpperHex := c >= 'A' && c <= 'F'
+		if !isDigit && !isLowerHex && !isUpperHex {
+			return false
+		}
+	}
+	return true
+}
+
+// estimateCost calculates estimated cost from token usage (TASK-13)
+// Pricing source: https://platform.claude.com/docs/en/about-claude/pricing
+func estimateCost(inputTokens, outputTokens int64, model string) float64 {
+	// Model pricing in USD per 1M tokens
+	const (
+		// Sonnet 4.5/4
+		sonnetInputPrice  = 3.00
+		sonnetOutputPrice = 15.00
+		// Opus 4.6/4.5 (same pricing)
+		opusInputPrice  = 5.00
+		opusOutputPrice = 25.00
+		// Opus 4.1/4.0 (legacy)
+		opus41InputPrice  = 15.00
+		opus41OutputPrice = 75.00
+		// Haiku 4.5
+		haikuInputPrice  = 1.00
+		haikuOutputPrice = 5.00
+	)
+
+	var inputPrice, outputPrice float64
+	modelLower := strings.ToLower(model)
+	switch {
+	case strings.Contains(modelLower, "opus-4-1") || strings.Contains(modelLower, "opus-4-0") || model == "claude-opus-4":
+		// Legacy Opus 4.1/4.0
+		inputPrice = opus41InputPrice
+		outputPrice = opus41OutputPrice
+	case strings.Contains(modelLower, "opus"):
+		// Opus 4.6/4.5 ($5/$25)
+		inputPrice = opusInputPrice
+		outputPrice = opusOutputPrice
+	case strings.Contains(modelLower, "haiku"):
+		inputPrice = haikuInputPrice
+		outputPrice = haikuOutputPrice
+	default:
+		inputPrice = sonnetInputPrice
+		outputPrice = sonnetOutputPrice
+	}
+
+	inputCost := float64(inputTokens) * inputPrice / 1_000_000
+	outputCost := float64(outputTokens) * outputPrice / 1_000_000
+	return inputCost + outputCost
+}
+
+// emitAlertEvent sends an event to the alert processor if configured
+func (r *Runner) emitAlertEvent(event AlertEvent) {
+	if r.alertProcessor == nil {
+		return
+	}
+	r.alertProcessor.ProcessEvent(event)
+}
+
+// dispatchWebhook sends a webhook event if webhook manager is configured
+func (r *Runner) dispatchWebhook(ctx context.Context, eventType webhooks.EventType, data any) {
+	if r.webhooks == nil {
+		return
+	}
+	event := webhooks.NewEvent(eventType, data)
+	r.webhooks.Dispatch(ctx, event)
+}
+
+// parseStreamEvent wraps the package-level parseStreamEvent and processes the result
+// This method exists for test compatibility and integrates with the Runner's event processing
+func (r *Runner) parseStreamEvent(taskID, line string, state *progressState) (string, string) {
+	event := parseStreamEvent(line)
+	r.processBackendEvent(taskID, event, state)
+
+	// Extract result and error message from the event for test compatibility
+	var result, errMsg string
+	if event.Type == EventTypeResult {
+		result = event.Message
+		if event.IsError {
+			errMsg = event.Message
+			result = ""
+		}
+	}
+
+	return result, errMsg
 }
