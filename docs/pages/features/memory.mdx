@@ -1,0 +1,304 @@
+import { Callout, Tabs, Tab } from 'nextra/components'
+
+# Memory & Learning
+
+Pilot builds institutional knowledge through persistent memory systems that survive restarts and learn from execution history.
+
+## Overview
+
+The memory system consists of five interconnected components:
+
+| Component | Purpose | Storage |
+|-----------|---------|---------|
+| Execution History | Task tracking, metrics | SQLite |
+| Knowledge Store | Experiential memories | SQLite |
+| Knowledge Graph | Relationship mapping | JSON |
+| Pattern Store | Cross-project patterns | SQLite |
+| Profile Manager | User preferences | JSON |
+
+## Execution History
+
+Every task Pilot executes is recorded in SQLite with comprehensive metrics:
+
+```
+~/.pilot/data/pilot.db
+```
+
+### What's Tracked
+
+- **Task metadata**: ID, title, description, project path
+- **Status lifecycle**: queued → running → completed/failed
+- **Timing**: created_at, completed_at, duration_ms
+- **Output**: PR URLs, commit SHAs, error messages
+- **Token usage**: input, output, total tokens per execution
+- **Cost estimates**: USD cost based on model pricing
+- **Code changes**: files changed, lines added/removed
+
+### Querying History
+
+```bash
+# View recent executions in the dashboard
+pilot start --dashboard
+
+# Check execution metrics via API
+pilot metrics --executions --last 50
+```
+
+## Lifetime Metrics
+
+Pilot tracks cumulative metrics across all sessions and restarts:
+
+```go
+// Survives restarts by querying executions table directly
+type LifetimeTokens struct {
+    InputTokens  int64
+    OutputTokens int64
+    TotalTokens  int64
+    TotalCostUSD float64
+}
+
+type LifetimeTaskCounts struct {
+    Total     int
+    Succeeded int
+    Failed    int
+}
+```
+
+View lifetime stats in the dashboard or via:
+
+```bash
+pilot metrics --lifetime
+```
+
+## Cross-Project Patterns
+
+Pilot learns patterns from execution history and applies them across projects.
+
+### Pattern Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `code` | Code structure patterns | "Use early returns" |
+| `structure` | Project layout conventions | "Tests next to source files" |
+| `naming` | Naming conventions | "Handlers end with Handler" |
+| `workflow` | Process patterns | "Run tests before commit" |
+| `error` | Common error solutions | "Missing import causes X" |
+
+### CLI Commands
+
+<Tabs items={['List', 'Search', 'Stats']}>
+  <Tab>
+```bash
+# List learned patterns
+pilot patterns list
+
+# Filter by type
+pilot patterns list --type code
+
+# Show only high-confidence patterns
+pilot patterns list --min-confidence 0.8
+
+# Include anti-patterns
+pilot patterns list --anti
+```
+  </Tab>
+  <Tab>
+```bash
+# Search patterns by keyword
+pilot patterns search "authentication"
+
+# Search for error patterns
+pilot patterns search "timeout"
+```
+  </Tab>
+  <Tab>
+```bash
+# View pattern statistics
+pilot patterns stats
+```
+
+Output:
+```
+📊 Cross-Project Pattern Statistics
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total patterns: 42
+├── Patterns: 38
+└── Anti-patterns: 4
+
+Average confidence: 0.72
+Total occurrences: 156
+Projects using patterns: 5
+
+By Type:
+├── code: 15
+├── workflow: 12
+├── structure: 8
+├── naming: 4
+└── error: 3
+```
+  </Tab>
+</Tabs>
+
+### Confidence Scoring
+
+Patterns have confidence scores (0.0-1.0) that adjust based on outcomes:
+
+- **Success**: Confidence increases (+0.05 per successful use)
+- **Failure**: Confidence decreases (-0.1 per failed use)
+- **Bounds**: Capped at 0.1 minimum, 0.95 maximum
+
+<Callout type="info">
+  Low-confidence patterns (below 0.5) are still shown but marked as less reliable.
+</Callout>
+
+## Knowledge Graph
+
+The knowledge graph maps relationships between concepts, patterns, and learnings.
+
+```
+~/.pilot/data/knowledge.json
+```
+
+### Node Types
+
+- **pattern**: Recurring code structures or workflows
+- **learning**: Insights from debugging or exploration
+
+### Operations
+
+```go
+// Add a pattern to the graph
+graph.AddPattern("error-handling", "Always wrap errors with context", metadata)
+
+// Add a learning
+graph.AddLearning("API Rate Limits", "GitHub API rate limits to 5000/hr", metadata)
+
+// Search by keyword
+results := graph.Search("authentication")
+
+// Get related nodes
+related := graph.GetRelated(nodeID)
+```
+
+## Knowledge Store
+
+The knowledge store holds experiential memories with confidence decay.
+
+### Memory Types
+
+| Type | Purpose | Example |
+|------|---------|---------|
+| `pattern` | Recurring patterns in codebase | "We use JWT for auth" |
+| `pitfall` | Common mistakes to avoid | "Auth changes break tests" |
+| `decision` | Architectural decisions | "JWT over sessions for scaling" |
+| `learning` | Debugging insights | "This error usually means X" |
+
+### Confidence Decay
+
+Memories decay over time if not reinforced:
+
+```go
+// Apply daily decay (0.01 per day of inactivity)
+store.DecayConfidence(0.01)
+
+// Reinforce a useful memory
+store.ReinforceMemory(id, 0.1)
+
+// Prune stale memories (confidence < 0.1)
+store.PruneStale(0.1)
+```
+
+<Callout type="warning">
+  Memories with confidence below 0.1 are automatically excluded from queries.
+</Callout>
+
+### Querying Memories
+
+```go
+// Query by topic (searches content and context)
+memories, _ := store.QueryByTopic("authentication", projectID)
+
+// Query by type
+pitfalls, _ := store.QueryByType(MemoryTypePitfall, projectID)
+
+// Get recent memories
+recent, _ := store.GetRecentMemories(10)
+
+// Get statistics
+stats, _ := store.GetMemoryStats()
+```
+
+## Profile Manager
+
+The profile manager stores user preferences and learns from corrections.
+
+### Profile Locations
+
+| Scope | Path | Purpose |
+|-------|------|---------|
+| Global | `~/.pilot/profile.json` | User-wide defaults |
+| Project | `.agent/.user-profile.json` | Project overrides |
+
+Project profiles merge on top of global profiles.
+
+### Stored Preferences
+
+```json
+{
+  "verbosity": "concise",
+  "frameworks": ["gin", "gorm"],
+  "conventions": {
+    "indent": "tabs",
+    "line_length": "100"
+  },
+  "code_patterns": ["early_returns", "table_driven_tests"],
+  "corrections": [
+    {
+      "pattern": "using println",
+      "correction": "use slog for logging",
+      "count": 3
+    }
+  ]
+}
+```
+
+### Learning from Corrections
+
+When you correct Pilot, it remembers:
+
+```go
+// Record a correction
+profile.RecordCorrection("using println", "use slog for logging")
+
+// Check for learned corrections
+if correction, found := profile.GetCorrection("using println"); found {
+    // Apply the learned correction
+}
+```
+
+<Callout>
+  Corrections with higher counts take precedence. Pilot adapts to your preferences over time.
+</Callout>
+
+## Data Location
+
+All memory data is stored under the configured data path:
+
+```yaml
+# ~/.pilot/config.yaml
+memory:
+  path: ~/.pilot/data  # Default
+```
+
+Files:
+- `pilot.db` - SQLite database (executions, patterns, memories)
+- `knowledge.json` - Knowledge graph nodes
+- `global_patterns.json` - Cross-project patterns (legacy)
+
+## Best Practices
+
+1. **Review patterns regularly**: Run `pilot patterns list` to see what Pilot has learned
+2. **Correct mistakes early**: Pilot learns faster from early corrections
+3. **Clean stale data**: Confidence decay naturally prunes outdated memories
+4. **Project-specific profiles**: Use `.agent/.user-profile.json` for project conventions
+5. **Share patterns**: Patterns with `scope: org` apply across all your projects
