@@ -1,0 +1,601 @@
+import { Callout, Tabs } from 'nextra/components'
+
+# Infrastructure & Deployment
+
+Deploy Pilot in production with health monitoring, metrics, and secure webhook exposure.
+
+---
+
+## Self-Hosted Setup
+
+### Binary Installation
+
+Download the latest release for your platform:
+
+```bash
+# macOS (Apple Silicon)
+curl -L https://github.com/alekspetrov/pilot/releases/latest/download/pilot-darwin-arm64 -o pilot
+chmod +x pilot
+sudo mv pilot /usr/local/bin/
+
+# macOS (Intel)
+curl -L https://github.com/alekspetrov/pilot/releases/latest/download/pilot-darwin-amd64 -o pilot
+chmod +x pilot
+sudo mv pilot /usr/local/bin/
+
+# Linux (amd64)
+curl -L https://github.com/alekspetrov/pilot/releases/latest/download/pilot-linux-amd64 -o pilot
+chmod +x pilot
+sudo mv pilot /usr/local/bin/
+```
+
+Or use the install script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alekspetrov/pilot/main/install.sh | bash
+```
+
+### Configuration
+
+Create the config directory and file:
+
+```bash
+mkdir -p ~/.pilot
+cat > ~/.pilot/config.yaml << 'EOF'
+version: "1.0"
+
+gateway:
+  host: "127.0.0.1"
+  port: 9090
+
+adapters:
+  github:
+    enabled: true
+    token: "${GITHUB_TOKEN}"
+    repo: "your-org/your-repo"
+    pilot_label: "pilot"
+    polling:
+      enabled: true
+      interval: 30s
+
+autopilot:
+  enabled: true
+  auto_merge: true
+  merge_method: "squash"
+EOF
+```
+
+<Callout type="info">
+Use environment variables (`${VAR}`) in config for secrets. Never commit tokens to version control.
+</Callout>
+
+### systemd Service
+
+Create a systemd unit file for running Pilot as a service:
+
+```bash
+sudo cat > /etc/systemd/system/pilot.service << 'EOF'
+[Unit]
+Description=Pilot AI Development Pipeline
+After=network.target
+
+[Service]
+Type=simple
+User=pilot
+Group=pilot
+WorkingDirectory=/home/pilot
+ExecStart=/usr/local/bin/pilot start --log-format json
+Restart=on-failure
+RestartSec=10
+
+# Environment
+Environment="HOME=/home/pilot"
+EnvironmentFile=/home/pilot/.pilot/env
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/pilot/.pilot
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Create the environment file:
+
+```bash
+sudo cat > /home/pilot/.pilot/env << 'EOF'
+GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
+EOF
+sudo chmod 600 /home/pilot/.pilot/env
+sudo chown pilot:pilot /home/pilot/.pilot/env
+```
+
+Enable and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable pilot
+sudo systemctl start pilot
+
+# Check status
+sudo systemctl status pilot
+sudo journalctl -u pilot -f
+```
+
+---
+
+## Kubernetes Deployment
+
+### Deployment Manifest
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pilot
+  labels:
+    app: pilot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pilot
+  template:
+    metadata:
+      labels:
+        app: pilot
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: pilot
+          image: ghcr.io/alekspetrov/pilot:latest
+          ports:
+            - containerPort: 9090
+              name: http
+          env:
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pilot-secrets
+                  key: github-token
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pilot-secrets
+                  key: anthropic-api-key
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 2
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: config
+              mountPath: /home/pilot/.pilot/config.yaml
+              subPath: config.yaml
+            - name: data
+              mountPath: /home/pilot/.pilot/data
+      volumes:
+        - name: config
+          configMap:
+            name: pilot-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: pilot-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pilot
+spec:
+  selector:
+    app: pilot
+  ports:
+    - port: 9090
+      targetPort: 9090
+      name: http
+```
+
+### Health Probes
+
+Pilot exposes three health endpoints for Kubernetes orchestration:
+
+| Endpoint | Purpose | Response |
+|----------|---------|----------|
+| `/health` | Basic health check | `{"status": "healthy"}` |
+| `/ready` | Readiness probe | `{"ready": true/false, "checks": {...}}` |
+| `/live` | Liveness probe | `{"alive": true/false, "checks": {...}}` |
+
+**Readiness probe** (`/ready`) checks:
+- All registered component readiness checks
+- Returns 503 if any check fails
+
+**Liveness probe** (`/live`) checks:
+- Goroutine count (< 1000)
+- Recent panic count (none in last 5 minutes)
+- Main loop heartbeat (< 60 seconds old)
+
+Example liveness response:
+
+```json
+{
+  "alive": true,
+  "checks": {
+    "goroutines": {"count": 45, "max": 1000, "ok": true},
+    "panics": {"count": 0, "recent": false, "window_seconds": 300, "ok": true},
+    "heartbeat": {"last_seconds_ago": 2, "ok": true}
+  }
+}
+```
+
+### Secrets
+
+```bash
+kubectl create secret generic pilot-secrets \
+  --from-literal=github-token=ghp_xxxxxxxxxxxx \
+  --from-literal=anthropic-api-key=sk-ant-xxxxxxxxxxxx
+```
+
+---
+
+## Prometheus Metrics
+
+Pilot exposes metrics at `/metrics` in Prometheus text format.
+
+### Available Metrics
+
+**Counters:**
+
+| Metric | Description | Labels |
+|--------|-------------|--------|
+| `pilot_issues_processed_total` | Total issues processed | `result` (success, failed, rate_limited) |
+| `pilot_prs_merged_total` | Total PRs merged | - |
+| `pilot_prs_failed_total` | Total PRs that failed | - |
+| `pilot_prs_conflicting_total` | PRs with merge conflicts | - |
+| `pilot_circuit_breaker_trips_total` | Circuit breaker activations | - |
+| `pilot_api_errors_total` | API errors | `endpoint` |
+| `pilot_label_cleanups_total` | Label cleanup operations | `label` |
+
+**Gauges:**
+
+| Metric | Description |
+|--------|-------------|
+| `pilot_queue_depth` | Issues waiting in queue |
+| `pilot_failed_queue_depth` | Failed issues in queue |
+| `pilot_active_prs` | Active PRs by stage |
+| `pilot_active_prs_total` | Total active PRs |
+| `pilot_api_error_rate` | API errors per minute (5m window) |
+| `pilot_success_rate` | Issue processing success rate (0-1) |
+
+**Histograms:**
+
+| Metric | Description | Buckets |
+|--------|-------------|---------|
+| `pilot_pr_time_to_merge_seconds` | Time from PR creation to merge | 1m, 5m, 10m, 30m, 1h, 2h, 4h, 8h, 24h |
+| `pilot_execution_duration_seconds` | Task execution duration | 10s, 30s, 1m, 2m, 5m, 10m, 20m, 30m, 1h |
+| `pilot_ci_wait_duration_seconds` | CI wait duration | 30s, 1m, 2m, 5m, 10m, 15m, 20m, 30m, 1h |
+
+### Prometheus Configuration
+
+```yaml
+scrape_configs:
+  - job_name: 'pilot'
+    static_configs:
+      - targets: ['pilot:9090']
+    metrics_path: /metrics
+    scrape_interval: 15s
+```
+
+### Grafana Dashboard Tips
+
+Key panels to create:
+
+1. **Issue Processing Rate**: Rate of `pilot_issues_processed_total` by result
+2. **PR Lifecycle**: `pilot_prs_merged_total` vs `pilot_prs_failed_total`
+3. **Queue Health**: `pilot_queue_depth` + `pilot_failed_queue_depth`
+4. **Execution Time**: Histogram percentiles from `pilot_execution_duration_seconds`
+5. **Success Rate**: `pilot_success_rate` gauge
+
+Example PromQL for 95th percentile execution time:
+
+```promql
+histogram_quantile(0.95, rate(pilot_execution_duration_seconds_bucket[5m]))
+```
+
+---
+
+## JSON Structured Logging
+
+Enable JSON logging for log aggregation systems (ELK, Loki, CloudWatch):
+
+```bash
+pilot start --log-format json
+```
+
+Or in config:
+
+```yaml
+logging:
+  format: json
+  level: info
+```
+
+Example JSON log output:
+
+```json
+{"time":"2025-02-14T10:30:00Z","level":"INFO","msg":"task completed","component":"executor","task_id":"GH-123","duration_ms":45000}
+```
+
+Fields included:
+- `time`: ISO 8601 timestamp
+- `level`: DEBUG, INFO, WARN, ERROR
+- `msg`: Log message
+- `component`: Source component (gateway, executor, autopilot, etc.)
+- Additional context fields per log entry
+
+---
+
+## Cloudflare Tunnel
+
+Expose Pilot's webhook endpoints to the internet without opening firewall ports.
+
+### Quick Start
+
+```bash
+pilot start --tunnel
+```
+
+This starts a Cloudflare Quick Tunnel with a randomly assigned URL like `https://xyz-abc-123.trycloudflare.com`.
+
+### Prerequisites
+
+Install `cloudflared`:
+
+<Tabs items={['macOS', 'Linux', 'Windows']}>
+  <Tabs.Tab>
+    ```bash
+    brew install cloudflare/cloudflare/cloudflared
+    ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```bash
+    curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+    chmod +x cloudflared
+    sudo mv cloudflared /usr/local/bin/
+    ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```powershell
+    winget install Cloudflare.cloudflared
+    ```
+  </Tabs.Tab>
+</Tabs>
+
+### Persistent Tunnel
+
+For a stable URL, create a named tunnel:
+
+```bash
+# Authenticate with Cloudflare
+cloudflared tunnel login
+
+# Create a named tunnel
+cloudflared tunnel create pilot
+
+# Configure routing (creates ~/.cloudflared/config.yml)
+cloudflared tunnel route dns pilot pilot.yourdomain.com
+```
+
+Then configure Pilot:
+
+```yaml
+tunnel:
+  enabled: true
+  provider: cloudflare
+  domain: pilot.yourdomain.com
+  port: 9090
+```
+
+### ngrok Alternative
+
+If you prefer ngrok:
+
+```bash
+# Install ngrok
+brew install ngrok/ngrok/ngrok
+
+# Configure in pilot
+```
+
+```yaml
+tunnel:
+  enabled: true
+  provider: ngrok
+  port: 9090
+```
+
+<Callout type="warning">
+ngrok free tier URLs change on restart. Use a paid plan for stable URLs in production.
+</Callout>
+
+### Webhook URLs
+
+Once the tunnel is running, configure webhooks in your issue tracker:
+
+| Provider | Webhook URL |
+|----------|-------------|
+| GitHub | `https://your-tunnel.trycloudflare.com/webhooks/github` |
+| GitLab | `https://your-tunnel.trycloudflare.com/webhooks/gitlab` |
+| Linear | `https://your-tunnel.trycloudflare.com/webhooks/linear` |
+| Jira | `https://your-tunnel.trycloudflare.com/webhooks/jira` |
+| Asana | `https://your-tunnel.trycloudflare.com/webhooks/asana` |
+
+---
+
+## Docker
+
+### Using Pre-built Images
+
+```bash
+docker run -d \
+  --name pilot \
+  -p 9090:9090 \
+  -v ~/.pilot:/home/pilot/.pilot \
+  -e GITHUB_TOKEN \
+  -e ANTHROPIC_API_KEY \
+  ghcr.io/alekspetrov/pilot:latest
+```
+
+### Building from Source
+
+```dockerfile
+# Multi-stage build
+FROM golang:1.24-alpine AS builder
+
+WORKDIR /app
+RUN apk add --no-cache git ca-certificates
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o /pilot \
+    ./cmd/pilot
+
+# Runtime
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates tzdata git
+RUN adduser -D -g '' pilot
+
+COPY --from=builder /pilot /usr/local/bin/pilot
+RUN chown pilot:pilot /usr/local/bin/pilot
+
+USER pilot
+EXPOSE 9090
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:9090/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/pilot", "start"]
+```
+
+### Docker Compose
+
+```yaml
+version: '3.8'
+
+services:
+  pilot:
+    image: ghcr.io/alekspetrov/pilot:latest
+    container_name: pilot
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    environment:
+      - GITHUB_TOKEN
+      - ANTHROPIC_API_KEY
+    volumes:
+      - ./config.yaml:/home/pilot/.pilot/config.yaml:ro
+      - pilot-data:/home/pilot/.pilot/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pilot-data:
+```
+
+---
+
+## Gateway Configuration
+
+The gateway server handles WebSocket connections, REST APIs, and webhooks.
+
+### Configuration Options
+
+```yaml
+gateway:
+  host: "127.0.0.1"  # Bind address (use "0.0.0.0" for all interfaces)
+  port: 9090         # TCP port
+```
+
+### Endpoints
+
+| Path | Method | Description |
+|------|--------|-------------|
+| `/ws` | WebSocket | Control plane connection |
+| `/health` | GET | Basic health check |
+| `/ready` | GET | Kubernetes readiness probe |
+| `/live` | GET | Kubernetes liveness probe |
+| `/metrics` | GET | Prometheus metrics |
+| `/api/v1/status` | GET | Pilot status (auth required) |
+| `/api/v1/tasks` | GET | Task list (auth required) |
+| `/webhooks/github` | POST | GitHub webhook receiver |
+| `/webhooks/gitlab` | POST | GitLab webhook receiver |
+| `/webhooks/linear` | POST | Linear webhook receiver |
+| `/webhooks/jira` | POST | Jira webhook receiver |
+| `/webhooks/asana` | POST | Asana webhook receiver |
+
+### Security
+
+- WebSocket connections only accept localhost origins by default
+- API endpoints (`/api/v1/*`) can require authentication when configured
+- Webhook endpoints validate signatures (GitHub HMAC-SHA256, GitLab token, etc.)
+
+```yaml
+auth:
+  type: "api-token"
+  token: "${PILOT_API_TOKEN}"
+```
+
+### Timeouts
+
+The gateway uses sensible defaults:
+
+| Setting | Value |
+|---------|-------|
+| Read timeout | 15 seconds |
+| Write timeout | 15 seconds |
+| Idle timeout | 60 seconds |
+| Shutdown grace | 30 seconds |
+
+---
+
+## Production Checklist
+
+- [ ] **Secrets management**: Use environment variables or a secrets manager (Vault, AWS Secrets Manager)
+- [ ] **Health probes**: Configure `/ready` and `/live` in your orchestrator
+- [ ] **Metrics**: Connect `/metrics` to Prometheus
+- [ ] **Logging**: Enable `--log-format json` for log aggregation
+- [ ] **Persistence**: Mount `/home/pilot/.pilot/data` to persistent storage
+- [ ] **Resource limits**: Set appropriate CPU/memory limits
+- [ ] **Webhook security**: Configure webhook secrets for all adapters
+- [ ] **Tunnel**: Use named tunnels for stable webhook URLs
+- [ ] **Backups**: Regularly backup `~/.pilot/data/` (SQLite database)
+- [ ] **Monitoring**: Set alerts on `pilot_queue_depth` and `pilot_success_rate`
