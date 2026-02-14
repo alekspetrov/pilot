@@ -8,6 +8,10 @@ Quality gates enforce code quality standards between implementation and PR creat
   Quality gates run automatically after task implementation. If gates fail, Pilot receives feedback and retries the implementation.
 </Callout>
 
+<Callout type="warning">
+  Quality gates are disabled by default (`enabled: false`). You must explicitly enable them in your configuration.
+</Callout>
+
 ## Overview
 
 Quality gates provide automated quality assurance by running checks like build verification, tests, linting, and security scans. When gates fail, the system provides specific error feedback to guide fixes.
