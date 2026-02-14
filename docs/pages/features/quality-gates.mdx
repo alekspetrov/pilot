@@ -109,17 +109,23 @@ Run project-specific checks:
 
 Enable quality gates in `~/.pilot/config.yaml`:
 
+### Complete YAML Schema
+
 ```yaml
 quality:
+  # Enable quality gates (default: false)
   enabled: true
+
+  # Gate definitions
   gates:
-    - name: build
-      type: build
-      command: "make build"
-      required: true
-      timeout: 5m
-      max_retries: 2
-      failure_hint: "Fix compilation errors in the changed files"
+    - name: build           # Gate identifier (required)
+      type: build           # Gate type: build, test, lint, coverage, security, typecheck, custom
+      command: "make build" # Command to execute (required)
+      required: true        # Fail pipeline if gate fails (default: false)
+      timeout: 5m           # Max execution time (default varies by type)
+      max_retries: 2        # Retry count on failure (default: 0)
+      retry_delay: 5s       # Delay between retries (default: 0s)
+      failure_hint: "Fix compilation errors in the changed files"  # Hint for Claude on failure
 
     - name: test
       type: test
@@ -127,33 +133,39 @@ quality:
       required: true
       timeout: 10m
       max_retries: 2
+      retry_delay: 5s
       failure_hint: "Fix failing tests or update test expectations"
 
     - name: lint
       type: lint
       command: "make lint"
-      required: false  # warn only
+      required: false       # Warn only, don't fail pipeline
       timeout: 2m
       max_retries: 1
+      retry_delay: 2s
       failure_hint: "Fix linting errors: formatting, unused imports, etc."
 
     - name: coverage
       type: coverage
-      command: "go test -cover ./..."
+      command: "go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out"
       required: true
-      threshold: 80  # minimum coverage percentage
+      threshold: 80         # Minimum coverage percentage (0-100)
       timeout: 10m
+      failure_hint: "Add tests to increase coverage above 80%"
 
     - name: security
       type: security
-      command: "npm audit"
+      command: "gosec ./..."
       required: false
       timeout: 5m
+      failure_hint: "Address security vulnerabilities found by gosec"
 
+  # Behavior when gates fail
   on_failure:
-    action: retry  # retry | fail | warn
-    max_retries: 2
-    notify_on: [failed]
+    action: retry           # retry | fail | warn
+    max_retries: 2          # Max retry attempts before failing
+    notify_on:              # Statuses that trigger notifications
+      - failed
 ```
 
 ### Gate Properties
@@ -205,6 +217,88 @@ quality:
 ```
 
 This enables build verification only, with commands auto-detected from project type.
+
+### Node.js/TypeScript Example
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: typecheck
+      type: typecheck
+      command: "npx tsc --noEmit"
+      required: true
+      timeout: 3m
+      failure_hint: "Fix TypeScript compilation errors"
+
+    - name: lint
+      type: lint
+      command: "npm run lint"
+      required: true
+      timeout: 2m
+      failure_hint: "Fix ESLint errors"
+
+    - name: test
+      type: test
+      command: "npm test"
+      required: true
+      timeout: 10m
+      max_retries: 1
+      retry_delay: 3s
+      failure_hint: "Fix failing tests"
+
+    - name: build
+      type: build
+      command: "npm run build"
+      required: true
+      timeout: 5m
+      failure_hint: "Fix build errors"
+
+  on_failure:
+    action: retry
+    max_retries: 2
+```
+
+### Python Example
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: typecheck
+      type: typecheck
+      command: "mypy src/"
+      required: true
+      timeout: 3m
+      failure_hint: "Fix type errors found by mypy"
+
+    - name: lint
+      type: lint
+      command: "ruff check ."
+      required: true
+      timeout: 2m
+      failure_hint: "Fix linting errors from ruff"
+
+    - name: format
+      type: custom
+      command: "ruff format --check ."
+      required: false
+      timeout: 1m
+      failure_hint: "Run 'ruff format .' to fix formatting"
+
+    - name: test
+      type: test
+      command: "pytest -v"
+      required: true
+      timeout: 10m
+      max_retries: 1
+      retry_delay: 3s
+      failure_hint: "Fix failing tests"
+
+  on_failure:
+    action: retry
+    max_retries: 2
+```
 
 ## Monitoring
 
