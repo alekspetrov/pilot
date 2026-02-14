@@ -35,10 +35,18 @@ Pilot delegates AI execution to **Claude Code**, which manages its own authentic
 |----------|-------------|----------|
 | `GITHUB_TOKEN` | GitHub personal access token (`repo` + `workflow` scopes) | If using GitHub |
 | `GITLAB_TOKEN` | GitLab personal or project access token | If using GitLab |
+| `AZURE_DEVOPS_PAT` | Azure DevOps personal access token | If using Azure DevOps |
+| `LINEAR_API_KEY` | Linear API key | If using Linear |
+| `JIRA_API_TOKEN` | Jira API token | If using Jira |
+| `ASANA_ACCESS_TOKEN` | Asana personal access token | If using Asana |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token for chat interface | No |
+| `TELEGRAM_CHAT_ID` | Default Telegram chat ID for notifications | No |
 | `ANTHROPIC_API_KEY` | Enables LLM intent classifier and structured subtask parsing | No |
 | `OPENAI_API_KEY` | Enables Whisper voice transcription in Telegram | No |
 | `SLACK_BOT_TOKEN` | Slack bot token for notifications | No |
+| `SLACK_APP_TOKEN` | Slack app-level token for Socket Mode | If using Socket Mode |
+| `SLACK_SIGNING_SECRET` | Slack signing secret for webhook verification | If using webhooks |
+| `PAGERDUTY_KEY` | PagerDuty integration/routing key | If using PagerDuty alerts |
 
 <Callout type="info">
 Use `${VAR_NAME}` in any string field to reference environment variables. Pilot expands them at load time. Paths starting with `~` are expanded to your home directory.
@@ -1322,23 +1330,46 @@ adapters:
 
 ### Slack
 
+Slack adapter supports both webhook-based and Socket Mode operations for notifications and task execution approval.
+
 ```yaml
 adapters:
   slack:
     enabled: false
     bot_token: ${SLACK_BOT_TOKEN}
+    app_token: ${SLACK_APP_TOKEN}            # Required for Socket Mode
     channel: "#pilot-updates"
-    signing_secret: ""
+    signing_secret: ${SLACK_SIGNING_SECRET}
+    socket_mode: false                        # Enable Socket Mode for real-time events
+    allowed_users:
+      - "U12345678"                           # User IDs authorized to interact
+    allowed_channels:
+      - "#dev-team"                           # Channels where bot can respond
+    approval:
+      enabled: false
+      timeout: 1h                             # Approval request timeout
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable Slack adapter |
 | `bot_token` | string | — | Slack bot token (`xoxb-...`) |
-| `channel` | string | — | Default notification channel |
+| `app_token` | string | — | Slack app-level token (`xapp-...`) for Socket Mode |
+| `channel` | string | `"#dev-notifications"` | Default notification channel |
 | `signing_secret` | string | — | Slack signing secret for webhook verification |
+| `socket_mode` | bool | `false` | Enable Socket Mode for real-time events (requires `app_token`) |
+| `allowed_users` | []string | `[]` | User IDs authorized to interact with the bot |
+| `allowed_channels` | []string | `[]` | Channels where bot can respond |
+| `approval.enabled` | bool | `false` | Enable approval workflow via Slack |
+| `approval.timeout` | duration | `1h` | Timeout for approval requests |
+
+<Callout type="info">
+**Socket Mode vs Webhooks**: Socket Mode establishes a WebSocket connection to Slack, eliminating the need for a public webhook URL. This is ideal for local development or firewall-restricted environments. Requires an app-level token with `connections:write` scope.
+</Callout>
 
 ### Jira
+
+Connects Pilot to Jira Cloud or Jira Server/Data Center for issue tracking.
 
 ```yaml
 adapters:
@@ -1350,22 +1381,33 @@ adapters:
     api_token: ${JIRA_API_TOKEN}
     webhook_secret: ""
     pilot_label: "pilot"
+    project_key: "PROJ"                   # Optional project filter
     transitions:
       in_progress: "In Progress"
       done: "Done"
+    polling:
+      enabled: false
+      interval: 30s
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable Jira adapter |
 | `platform` | string | `"cloud"` | Jira platform: `cloud` or `server` |
-| `base_url` | string | — | Jira instance URL |
-| `username` | string | — | Jira username or email |
+| `base_url` | string | — | Jira instance URL (e.g., `https://company.atlassian.net`) |
+| `username` | string | — | Jira username (Server) or email (Cloud) |
 | `api_token` | string | — | Jira API token |
 | `webhook_secret` | string | — | Webhook verification secret |
 | `pilot_label` | string | `"pilot"` | Label that marks issues for Pilot |
+| `project_key` | string | — | Optional project key filter (e.g., `PROJ`) |
 | `transitions.in_progress` | string | — | Jira transition name for "In Progress" |
 | `transitions.done` | string | — | Jira transition name for "Done" |
+| `polling.enabled` | bool | `false` | Enable issue polling (alternative to webhooks) |
+| `polling.interval` | duration | `30s` | Polling interval |
+
+<Callout type="info">
+**Cloud vs Server authentication**: For Jira Cloud, use your email as `username` and an API token. For Server/Data Center, use your username and either a PAT or password. Generate API tokens at [id.atlassian.com/manage/api-tokens](https://id.atlassian.com/manage/api-tokens).
+</Callout>
 
 ### Asana
 
@@ -1480,6 +1522,37 @@ memory:
 |-------|------|---------|-------------|
 | `dashboard.refresh_interval` | int | `1000` | TUI refresh interval in milliseconds |
 | `dashboard.show_logs` | bool | `true` | Show execution logs panel in dashboard |
+
+---
+
+## Teams
+
+Team-based access control scopes task execution to specific projects based on team membership. When enabled, tasks are only executed in projects that the requesting user has access to.
+
+```yaml
+team:
+  enabled: true
+  team_id: "engineering"                    # Team identifier
+  member_email: "dev@example.com"           # Member email for access lookup
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `team.enabled` | bool | `false` | Enable team-based project access control |
+| `team.team_id` | string | — | Team identifier or name to scope execution |
+| `team.member_email` | string | — | Email of the team member executing tasks |
+
+When `team.enabled` is `true`, Pilot looks up which projects the member has access to based on their email and team membership. Tasks targeting projects outside the member's scope are rejected.
+
+<Callout type="info">
+Team configuration is useful for organizations with multiple teams sharing a single Pilot instance. Each team member can only execute tasks in projects they have access to.
+</Callout>
+
+You can also set a global `team_id` at the root config level for simpler setups:
+
+```yaml
+team_id: "engineering"                      # Global team scope
+```
 
 ---
 
