@@ -1631,13 +1631,19 @@ The previous execution completed but made no code changes. This task requires ac
 			// Track quality gate results across retries (GH-209)
 			var finalOutcome *QualityOutcome
 			var totalQualityRetries int
-			var maxAutoRetries int = 2 // Default circuit breaker to prevent infinite loops
+			var maxAutoRetries = 2 // Default circuit breaker to prevent infinite loops
 
 			for retryAttempt := 0; retryAttempt <= maxAutoRetries; retryAttempt++ {
 				r.reportProgress(task.ID, "Quality Gates", 91, "Running quality checks...")
 
 				checker := r.qualityCheckerFactory(task.ID, executionPath)
 				outcome, qErr := checker.Check(ctx)
+
+				// Update max retries from configuration on first outcome (GH-1165)
+				if retryAttempt == 0 && outcome != nil && outcome.MaxRetries > 0 {
+					maxAutoRetries = outcome.MaxRetries
+				}
+
 				if qErr != nil {
 					log.Error("Quality gate check error", slog.Any("error", qErr))
 					result.Success = false
@@ -1677,11 +1683,6 @@ The previous execution completed but made no code changes. This task requires ac
 				// Quality gates passed - exit retry loop
 				if outcome.Passed {
 					finalOutcome = outcome
-
-					// Update max retries from configuration on first outcome (GH-1165)
-					if retryAttempt == 0 && outcome.MaxRetries > 0 {
-						maxAutoRetries = outcome.MaxRetries
-					}
 					r.reportProgress(task.ID, "Quality Passed", 94, "All quality gates passed")
 
 					// Log quality gate success metrics (GH-1165)
