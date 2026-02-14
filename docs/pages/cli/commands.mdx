@@ -130,6 +130,234 @@ pilot rollback [flags]
 | `--last` | Revert the most recent merge |
 | `--pr=N` | Revert specific PR |
 
+## pilot brief
+
+Generate development briefs and status reports.
+
+```bash
+pilot brief [flags]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--now` | Generate immediate status brief |
+| `--weekly` | Generate weekly progress summary |
+
+### Description
+
+Creates comprehensive reports on development progress, task completion, and project metrics.
+
+### Examples
+
+```bash
+# Quick status update
+pilot brief --now
+
+# Weekly progress report
+pilot brief --weekly
+```
+
+## pilot patterns
+
+Analyze and manage code patterns across the project.
+
+```bash
+pilot patterns <command> [flags]
+```
+
+### Commands
+
+#### pilot patterns list
+
+List discovered patterns in the codebase.
+
+```bash
+pilot patterns list [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--category=TYPE` | Filter by pattern type |
+| `--frequency=N` | Show patterns with N+ occurrences |
+| `--recent` | Show recently discovered patterns |
+
+#### pilot patterns search
+
+Search for specific patterns in the codebase.
+
+```bash
+pilot patterns search <query> [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--type=PATTERN` | Pattern type to search for |
+| `--context=N` | Show N lines of context |
+| `--files=GLOB` | Limit search to matching files |
+
+#### pilot patterns stats
+
+Show pattern analysis statistics.
+
+```bash
+pilot patterns stats [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--detailed` | Show detailed breakdown |
+| `--export=FORMAT` | Export stats (json, csv, yaml) |
+| `--period=DAYS` | Analyze patterns from last N days |
+
+### Examples
+
+```bash
+# List all patterns
+pilot patterns list
+
+# Search for error handling patterns
+pilot patterns search "error handling" --type=function
+
+# Show pattern statistics
+pilot patterns stats --detailed
+```
+
+## pilot replay
+
+Replay and analyze past development sessions.
+
+```bash
+pilot replay <command> [flags]
+```
+
+### Commands
+
+#### pilot replay list
+
+List available replay sessions.
+
+```bash
+pilot replay list [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--recent=N` | Show last N sessions |
+| `--project=NAME` | Filter by project name |
+| `--date=YYYY-MM-DD` | Filter by specific date |
+
+#### pilot replay show
+
+Show details of a specific replay session.
+
+```bash
+pilot replay show <session-id> [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--verbose` | Show detailed execution steps |
+| `--metrics` | Include performance metrics |
+| `--diff` | Show code changes made |
+
+#### pilot replay play
+
+Re-execute a previous session.
+
+```bash
+pilot replay play <session-id> [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview without executing |
+| `--step-by-step` | Execute with manual confirmation |
+| `--from=STEP` | Start replay from specific step |
+
+#### pilot replay analyze
+
+Analyze patterns and performance from replay data.
+
+```bash
+pilot replay analyze [session-id] [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--pattern=TYPE` | Focus on specific pattern type |
+| `--performance` | Analyze execution performance |
+| `--success-rate` | Calculate task success metrics |
+
+#### pilot replay export
+
+Export replay session data.
+
+```bash
+pilot replay export <session-id> [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--format=TYPE` | Export format (json, yaml, csv) |
+| `--output=FILE` | Output file path |
+| `--include=DATA` | Data to include (steps, metrics, diffs) |
+
+#### pilot replay delete
+
+Delete replay session data.
+
+```bash
+pilot replay delete <session-id> [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--confirm` | Skip confirmation prompt |
+| `--batch` | Delete multiple sessions |
+| `--older-than=DAYS` | Delete sessions older than N days |
+
+### Examples
+
+```bash
+# List recent sessions
+pilot replay list --recent=10
+
+# Show session details
+pilot replay show abc123 --verbose
+
+# Re-run a successful session
+pilot replay play abc123 --dry-run
+
+# Analyze performance patterns
+pilot replay analyze --performance
+
+# Export session data
+pilot replay export abc123 --format=json
+
+# Clean up old sessions
+pilot replay delete --older-than=30
+```
+
 ## pilot navigator
 
 Navigator-related commands.
