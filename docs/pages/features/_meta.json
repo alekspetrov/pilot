@@ -3,6 +3,7 @@
   "github": "GitHub Integration",
   "dashboard": "Dashboard TUI",
   "autopilot": "Autopilot Mode",
+  "quality-gates": "Quality Gates",
   "autopilot-environments": "Autopilot Environments",
   "approval-workflows": "Approval Workflows",
   "hot-upgrade": "Hot Upgrade",
