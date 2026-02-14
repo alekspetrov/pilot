@@ -1,0 +1,464 @@
+# Quality Gates
+
+Quality gates are automated validation checks that run after Pilot completes implementation but before creating a pull request. They ensure code quality, catch errors early, and provide feedback to Claude Code for automatic fixes.
+
+## Overview
+
+Quality gates sit between code implementation and PR creation in Pilot's execution pipeline:
+
+```
+Issue → Plan → Implement → Quality Gates → Self-Review → PR Creation
+                               │
+                               ├── Build Check
+                               ├── Test Suite
+                               ├── Lint Check
+                               ├── Type Check
+                               ├── Coverage Analysis
+                               ├── Security Scan
+                               └── Custom Gates
+```
+
+When a gate fails, Pilot automatically:
+
+1. **Analyzes** the failure output
+2. **Provides context** to Claude Code about what broke
+3. **Retries** implementation with the error feedback
+4. **Re-runs** all gates to verify the fix
+
+This feedback loop ensures higher code quality and reduces manual review time.
+
+## Pipeline Flow
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Claude Code   │    │ Quality Gates   │    │   PR Creation   │
+│   Implements    │───▶│    Validate     │───▶│   (if passed)   │
+│     Changes     │    │  Code Quality   │    │                 │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                               │
+                               ▼ (if failed)
+                       ┌─────────────────┐
+                       │   Error Feedback│
+                       │   Auto-Retry    │───┐
+                       │  Implementation │   │
+                       └─────────────────┘   │
+                               ▲             │
+                               └─────────────┘
+```
+
+**Sequential Execution:** Gates run one after another, not in parallel. If a gate fails, subsequent gates are skipped and the implementation is retried with failure context.
+
+## Gate Types
+
+### Reference Table
+
+| Gate Type | Default Timeout | Purpose | Typical Commands |
+|-----------|-----------------|---------|------------------|
+| `build` | 5 minutes | Compilation check | `go build`, `npm run build`, `cargo check` |
+| `test` | 10 minutes | Test suite execution | `go test`, `npm test`, `pytest` |
+| `lint` | 2 minutes | Code style/formatting | `golangci-lint`, `eslint`, `flake8` |
+| `coverage` | 10 minutes | Test coverage analysis | `go test -cover`, `jest --coverage` |
+| `security` | 5 minutes | Security vulnerability scan | `gosec`, `npm audit`, `bandit` |
+| `typecheck` | 3 minutes | Static type checking | `tsc --noEmit`, `mypy`, `flow check` |
+| `custom` | 5 minutes | Project-specific checks | Any custom command |
+
+### Gate Definitions
+
+#### Build Gate
+Verifies that code compiles without errors. This is the most basic quality check.
+
+```yaml
+gates:
+  - name: "build"
+    type: "build"
+    command: "go build ./..."
+    required: true
+    timeout: 5m
+    max_retries: 2
+    failure_hint: "Fix compilation errors in the changed files"
+```
+
+#### Test Gate
+Runs the project's test suite to ensure functionality isn't broken.
+
+```yaml
+gates:
+  - name: "test"
+    type: "test"
+    command: "go test ./..."
+    required: true
+    timeout: 10m
+    max_retries: 2
+    failure_hint: "Fix failing tests or update test expectations"
+```
+
+#### Lint Gate
+Checks code style, formatting, and common issues.
+
+```yaml
+gates:
+  - name: "lint"
+    type: "lint"
+    command: "golangci-lint run"
+    required: false  # Warn-only by default
+    timeout: 2m
+    max_retries: 1
+    failure_hint: "Fix linting errors: formatting, unused imports, etc."
+```
+
+#### Coverage Gate
+Analyzes test coverage and enforces minimum thresholds.
+
+```yaml
+gates:
+  - name: "coverage"
+    type: "coverage"
+    command: "go test -cover ./..."
+    required: false
+    timeout: 10m
+    threshold: 80.0  # Minimum coverage percentage
+    failure_hint: "Add tests to improve coverage or lower threshold"
+```
+
+#### Security Gate
+Scans for security vulnerabilities and common security issues.
+
+```yaml
+gates:
+  - name: "security"
+    type: "security"
+    command: "gosec ./..."
+    required: true
+    timeout: 5m
+    failure_hint: "Fix security vulnerabilities or add nolint comments with justification"
+```
+
+#### Type Check Gate
+Performs static type analysis (useful for TypeScript, Python with type hints).
+
+```yaml
+gates:
+  - name: "typecheck"
+    type: "typecheck"
+    command: "tsc --noEmit"
+    required: true
+    timeout: 3m
+    failure_hint: "Fix type errors or update type definitions"
+```
+
+#### Custom Gate
+Project-specific validation that doesn't fit other categories.
+
+```yaml
+gates:
+  - name: "api-schema-check"
+    type: "custom"
+    command: "npm run validate-schema"
+    required: true
+    timeout: 5m
+    failure_hint: "Update API schema or fix schema validation errors"
+```
+
+## Configuration
+
+### Basic Setup
+
+Enable quality gates in your `~/.pilot/config.yaml`:
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: "build"
+      type: "build"
+      command: "make build"
+      required: true
+    - name: "test"
+      type: "test"
+      command: "make test"
+      required: true
+    - name: "lint"
+      type: "lint"
+      command: "make lint"
+      required: false
+```
+
+### Auto-Detection
+
+When quality gates aren't explicitly configured, Pilot detects your project type and applies a minimal build check:
+
+| Project Type | Detection | Default Command |
+|-------------|-----------|-----------------|
+| Go | `go.mod` present | `go build ./...` |
+| Node.js | `package.json` present | `npm run build --if-present` |
+| TypeScript | `tsconfig.json` + `package.json` | `npm run build \|\| npx tsc --noEmit` |
+| Rust | `Cargo.toml` present | `cargo check` |
+| Python | `pyproject.toml` or `setup.py` | `python -m py_compile *.py` |
+
+### Advanced Configuration
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: "comprehensive-test"
+      type: "test"
+      command: "go test -race -cover ./..."
+      required: true
+      timeout: 15m
+      max_retries: 1
+      retry_delay: 10s
+      threshold: 85.0  # For coverage gates
+      failure_hint: "Check for race conditions and improve test coverage"
+
+  on_failure:
+    action: "retry"  # retry | fail | warn
+    max_retries: 2
+    notify_on: ["failed", "retrying"]
+```
+
+### Per-Environment Settings
+
+Different quality gate strictness for different environments:
+
+```yaml
+# Development - fast feedback
+quality:
+  enabled: true
+  gates:
+    - {name: "build", type: "build", command: "go build", required: true}
+
+# Staging - more thorough
+quality:
+  enabled: true
+  gates:
+    - {name: "build", type: "build", command: "go build", required: true}
+    - {name: "test", type: "test", command: "go test", required: true}
+    - {name: "lint", type: "lint", command: "golangci-lint run", required: false}
+
+# Production - comprehensive validation
+quality:
+  enabled: true
+  gates:
+    - {name: "build", type: "build", command: "go build", required: true}
+    - {name: "test", type: "test", command: "go test -race", required: true}
+    - {name: "lint", type: "lint", command: "golangci-lint run", required: true}
+    - {name: "security", type: "security", command: "gosec", required: true}
+    - {name: "coverage", type: "coverage", command: "go test -cover", threshold: 80.0, required: true}
+```
+
+## How Gates Execute
+
+### Sequential Processing
+
+Gates execute **sequentially**, not in parallel:
+
+1. **Gate 1** (build) runs → passes → continue
+2. **Gate 2** (test) runs → passes → continue
+3. **Gate 3** (lint) runs → **fails** → stop, retry implementation
+4. Implementation retried with lint failure context
+5. All gates re-run from the beginning
+
+### Retry Logic
+
+When a required gate fails:
+
+1. **Failure Analysis**: Error output is parsed and categorized
+2. **Context Generation**: Failure details are formatted for Claude Code
+3. **Implementation Retry**: Claude Code receives the error context and re-implements
+4. **Full Re-validation**: All gates run again from the beginning
+
+```yaml
+gates:
+  - name: "test"
+    type: "test"
+    command: "go test ./..."
+    max_retries: 2      # Retry the gate itself
+    retry_delay: 5s     # Wait between gate retries
+
+on_failure:
+  action: "retry"       # Retry entire implementation
+  max_retries: 2        # Max implementation retries
+```
+
+### Status Tracking
+
+Each gate progresses through these states:
+
+- `pending` → Gate queued for execution
+- `running` → Gate currently executing
+- `passed` → Gate completed successfully
+- `failed` → Gate failed (triggers retry if required)
+- `skipped` → Gate skipped due to earlier failure
+- `retrying` → Gate being retried after failure
+
+## Dashboard Integration
+
+Monitor quality gate execution in real-time:
+
+```bash
+pilot start --dashboard
+```
+
+```
+┌─ Quality Gates ───────────────────────────────────────────┐
+│                                                           │
+│  ● build     ✓ passed     (1.2s)                        │
+│  ● test      ⚠ running    (45s / 10m timeout)           │
+│  ○ lint      - pending                                    │
+│  ○ security  - pending                                    │
+│                                                           │
+│  Overall: 2/4 gates complete                            │
+│                                                           │
+└───────────────────────────────────────────────────────────┘
+```
+
+## Best Practices
+
+### Gate Selection
+
+**Start Simple**: Begin with just build + test gates, add more as needed.
+
+```yaml
+# Good starting point
+quality:
+  enabled: true
+  gates:
+    - {name: "build", type: "build", command: "make build", required: true}
+    - {name: "test", type: "test", command: "make test", required: true}
+```
+
+**Add Gradually**: Introduce lint, security, and coverage gates over time.
+
+### Timeout Tuning
+
+Set realistic timeouts based on your project:
+
+- **Small projects**: Use default timeouts
+- **Large codebases**: Increase test and build timeouts
+- **CI/CD pipelines**: Match your CI timeout settings
+
+### Required vs Optional
+
+Make gates **required** only if failures should block PR creation:
+
+```yaml
+gates:
+  - {name: "build", type: "build", required: true}    # Block on compilation errors
+  - {name: "test", type: "test", required: true}      # Block on test failures
+  - {name: "lint", type: "lint", required: false}     # Warn but don't block
+  - {name: "coverage", type: "coverage", required: false} # Monitor but don't enforce
+```
+
+### Command Optimization
+
+Use fast commands that provide good signal:
+
+```yaml
+# Good - fast and accurate
+- {name: "build", command: "go build"}
+
+# Avoid - too slow for feedback loop
+- {name: "build", command: "docker build --no-cache"}
+
+# Good - essential tests only
+- {name: "test", command: "go test -short"}
+
+# Avoid - full integration test suite
+- {name: "test", command: "make integration-test-full"}
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**Gates always failing?** Check that commands work in your project directory:
+
+```bash
+cd /path/to/project
+go build ./...  # Test your gate command manually
+```
+
+**Timeouts too aggressive?** Increase timeout for slow operations:
+
+```yaml
+gates:
+  - name: "test"
+    command: "go test ./..."
+    timeout: 20m  # Increased from default 10m
+```
+
+**Too many retries?** Reduce retry counts for faster feedback:
+
+```yaml
+gates:
+  - name: "lint"
+    max_retries: 1  # Reduced from default 2
+
+on_failure:
+  max_retries: 1    # Reduced implementation retries
+```
+
+### Debug Mode
+
+Enable verbose logging to see gate execution details:
+
+```bash
+pilot start --log-level debug
+```
+
+```
+DEBUG Quality gate 'build' starting: go build ./...
+DEBUG Quality gate 'build' completed in 2.3s: exit code 0
+DEBUG Quality gate 'test' starting: go test ./...
+DEBUG Quality gate 'test' failed in 15.2s: exit code 1
+DEBUG Retrying implementation with test failure context
+```
+
+## Integration Examples
+
+### GitHub Actions Alignment
+
+Match your quality gates with GitHub Actions for consistency:
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: go build ./...
+      - run: go test ./...
+      - run: golangci-lint run
+
+# ~/.pilot/config.yaml
+quality:
+  gates:
+    - {name: "build", command: "go build ./..."}
+    - {name: "test", command: "go test ./..."}
+    - {name: "lint", command: "golangci-lint run"}
+```
+
+### Multi-Language Projects
+
+Configure different gates for different parts of your codebase:
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    # Backend (Go)
+    - {name: "go-build", command: "cd backend && go build", required: true}
+    - {name: "go-test", command: "cd backend && go test", required: true}
+
+    # Frontend (TypeScript)
+    - {name: "ts-build", command: "cd frontend && npm run build", required: true}
+    - {name: "ts-test", command: "cd frontend && npm test", required: true}
+
+    # Infrastructure
+    - {name: "terraform", command: "cd infra && terraform validate", required: true}
+```
+
+Quality gates provide a safety net that catches issues early and improves code quality through automated feedback. Start with basic build and test gates, then expand based on your project's needs.
