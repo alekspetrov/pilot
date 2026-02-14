@@ -80,7 +80,7 @@ func DefaultRules() []SimplificationRule {
 			Name:        "simplify_boolean_return",
 			Description: "Convert if(cond) return true; return false; to return cond;",
 			Check: func(code string) bool {
-				pattern := regexp.MustCompile(`(?m)if\s*\([^)]+\)\s*{\s*return\s+true\s*;?\s*}\s*return\s+false`)
+				pattern := regexp.MustCompile(`(?m)if\s*\([^)]+\)\s*{\s*return\s+true\s*;?\s*}\s*return\s+false;?`)
 				return pattern.MatchString(code)
 			},
 			Apply: func(code string) string {
