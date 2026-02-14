@@ -2,6 +2,7 @@ package memory
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -1090,5 +1091,90 @@ func TestRecordBriefSent_SetsID(t *testing.T) {
 
 	if record.ID == 0 {
 		t.Error("ID should be set after insert")
+	}
+}
+
+func TestStore_withRetry(t *testing.T) {
+	tmpDir := t.TempDir()
+	store, err := NewStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	tests := []struct {
+		name           string
+		fn             func() error
+		wantErr        bool
+		wantErrContain string
+	}{
+		{
+			name: "success on first try",
+			fn: func() error {
+				return nil
+			},
+			wantErr: false,
+		},
+		{
+			name: "non-retryable error returns immediately",
+			fn: func() error {
+				return fmt.Errorf("some other error")
+			},
+			wantErr:        true,
+			wantErrContain: "some other error",
+		},
+		{
+			name: "database is locked triggers retry",
+			fn: func() func() error {
+				attempts := 0
+				return func() error {
+					attempts++
+					if attempts < 3 {
+						return fmt.Errorf("database is locked (SQLITE_BUSY)")
+					}
+					return nil
+				}
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "sqlite_busy triggers retry",
+			fn: func() func() error {
+				attempts := 0
+				return func() error {
+					attempts++
+					if attempts < 2 {
+						return fmt.Errorf("sqlite_busy error")
+					}
+					return nil
+				}
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "max retries exceeded",
+			fn: func() error {
+				return fmt.Errorf("database is locked")
+			},
+			wantErr:        true,
+			wantErrContain: "failed after 5 retries",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := store.withRetry("test", tt.fn)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				} else if tt.wantErrContain != "" && !strings.Contains(err.Error(), tt.wantErrContain) {
+					t.Errorf("error = %q, want containing %q", err.Error(), tt.wantErrContain)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
 	}
 }
