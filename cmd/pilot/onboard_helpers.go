@@ -14,10 +14,6 @@ const onboardPanelWidth = 69
 
 // Color palette (matching dashboard styles)
 var (
-	onboardTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("#7eb8da")) // steel blue
-
 	onboardBorderStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#3d4450")) // slate
 
