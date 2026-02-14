@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -14,18 +13,11 @@ const onboardPanelWidth = 69
 
 // Color palette (matching dashboard styles)
 var (
-	onboardTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("#7eb8da")) // steel blue
-
 	onboardBorderStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#3d4450")) // slate
 
 	onboardSuccessStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#7ec699")) // sage green
-
-	onboardFailStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#d48a8a")) // dusty rose
 
 	onboardLabelStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#c9d1d9")) // light gray
@@ -103,69 +95,6 @@ func printStageFooter() {
 	dashCount := onboardPanelWidth - 2
 	line := "╰" + strings.Repeat("─", dashCount) + "╯"
 	fmt.Println(onboardBorderStyle.Render(line))
-}
-
-// readLineWithDefault prompts with a default value
-// Output: "  Repository [me/myapp] ▸ "
-func readLineWithDefault(reader *bufio.Reader, prompt, defaultVal string) string {
-	if defaultVal != "" {
-		fmt.Printf("  %s %s %s ",
-			prompt,
-			onboardDimStyle.Render("["+defaultVal+"]"),
-			onboardCursorStyle.Render("▸"))
-	} else {
-		fmt.Printf("  %s %s ", prompt, onboardCursorStyle.Render("▸"))
-	}
-
-	line := readLine(reader)
-	if line == "" {
-		return defaultVal
-	}
-	return line
-}
-
-// detectGitRemote extracts owner/repo from git remote origin
-func detectGitRemote(projectPath string) (owner, repo string, err error) {
-	cmd := exec.Command("git", "remote", "get-url", "origin")
-	cmd.Dir = projectPath
-	out, err := cmd.Output()
-	if err != nil {
-		return "", "", fmt.Errorf("no git remote found")
-	}
-
-	url := strings.TrimSpace(string(out))
-	return parseGitURL(url)
-}
-
-// parseGitURL extracts owner/repo from various git URL formats
-func parseGitURL(url string) (owner, repo string, err error) {
-	// Handle SSH format: git@github.com:owner/repo.git
-	if strings.HasPrefix(url, "git@") {
-		// git@github.com:owner/repo.git -> owner/repo
-		parts := strings.Split(url, ":")
-		if len(parts) != 2 {
-			return "", "", fmt.Errorf("invalid SSH URL")
-		}
-		path := strings.TrimSuffix(parts[1], ".git")
-		pathParts := strings.Split(path, "/")
-		if len(pathParts) >= 2 {
-			return pathParts[len(pathParts)-2], pathParts[len(pathParts)-1], nil
-		}
-	}
-
-	// Handle HTTPS format: https://github.com/owner/repo.git
-	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
-		path := strings.TrimPrefix(url, "https://")
-		path = strings.TrimPrefix(path, "http://")
-		path = strings.TrimSuffix(path, ".git")
-		// github.com/owner/repo -> owner, repo
-		parts := strings.Split(path, "/")
-		if len(parts) >= 3 {
-			return parts[len(parts)-2], parts[len(parts)-1], nil
-		}
-	}
-
-	return "", "", fmt.Errorf("unrecognized URL format")
 }
 
 // printSectionDivider prints a section divider with label
