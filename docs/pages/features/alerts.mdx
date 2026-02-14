@@ -297,3 +297,193 @@ alerts:
 <Callout type="tip">
 Use severity filtering to route alerts appropriately: critical alerts to PagerDuty for immediate response, warning alerts to Slack/Telegram for awareness, and info alerts to webhooks for logging and analytics.
 </Callout>
+
+## Alert Rules
+
+Alert rules define when to trigger notifications. Each rule specifies a condition, severity, target channels, and cooldown period.
+
+### AlertRule Structure
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique rule identifier |
+| `type` | string | Yes | Alert type (e.g., `task_stuck`, `daily_spend_exceeded`) |
+| `enabled` | boolean | Yes | Whether the rule is active |
+| `condition` | object | Yes | Trigger conditions (see RuleCondition below) |
+| `severity` | string | Yes | Alert severity: `info`, `warning`, or `critical` |
+| `channels` | string[] | No | Channel names to send to (empty = all channels) |
+| `cooldown` | duration | No | Minimum time between alerts (e.g., `15m`, `1h`) |
+| `labels` | map | No | Additional labels for filtering |
+| `description` | string | No | Human-readable description |
+
+### Default Rules
+
+Pilot ships with 11 pre-configured rules covering task health, cost management, and autopilot operations:
+
+| Rule Name | Type | Severity | Threshold | Cooldown | Description |
+|-----------|------|----------|-----------|----------|-------------|
+| `task_stuck` | `task_stuck` | warning | 10 minutes no progress | 15m | Alert when a task has no progress for 10 minutes |
+| `task_failed` | `task_failed` | warning | Any failure | 0 | Alert when a task fails |
+| `consecutive_failures` | `consecutive_failures` | critical | 3 consecutive | 30m | Alert when 3 or more consecutive tasks fail |
+| `daily_spend` | `daily_spend_exceeded` | warning | $50 USD | 1h | Alert when daily spend exceeds threshold |
+| `budget_depleted` | `budget_depleted` | critical | $500 USD | 4h | Alert when budget limit is exceeded |
+| `failed_queue_high` | `failed_queue_high` | warning | 5 issues | 30m | Alert when failed issue queue exceeds threshold |
+| `circuit_breaker_trip` | `circuit_breaker_trip` | critical | Any trip | 30m | Alert when autopilot circuit breaker trips |
+| `api_error_rate_high` | `api_error_rate_high` | warning | 10 errors/min | 15m | Alert when API error rate exceeds 10/min |
+| `pr_stuck_waiting_ci` | `pr_stuck_waiting_ci` | info | 15 minutes | 15m | Alert when a PR is stuck in waiting_ci for too long |
+| `autopilot_deadlock` | `deadlock` | critical | 1 hour | 1h | Alert when autopilot has no state transitions for 1 hour |
+| `escalation` | `escalation` | critical | 3 retries | 1h | Escalate to PagerDuty after repeated failures |
+
+<Callout type="info">
+Cost-related rules (`daily_spend`, `budget_depleted`) are disabled by default. Enable them and set appropriate thresholds in your configuration.
+</Callout>
+
+### RuleCondition Fields
+
+Rule conditions define when an alert fires. Fields are grouped by category:
+
+**Task-Related Conditions**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `progress_unchanged_for` | duration | Time without progress to trigger stuck alert (e.g., `10m`) |
+| `consecutive_failures` | integer | Number of consecutive task failures to trigger alert |
+
+**Cost-Related Conditions**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `daily_spend_threshold` | float | USD amount for daily spend alert |
+| `budget_limit` | float | USD amount for budget depletion alert |
+| `usage_spike_percent` | float | Percentage increase to trigger spike alert (e.g., `200` = 200%) |
+
+**Pattern Matching Conditions**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `pattern` | string | Regex pattern for matching event content |
+| `file_pattern` | string | Glob pattern for file paths (e.g., `*.env`, `secrets/**`) |
+| `paths` | string[] | Specific file paths to watch |
+
+**Autopilot Health Conditions**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `failed_queue_threshold` | integer | Maximum failed issues before alert |
+| `api_error_rate_per_min` | float | Errors per minute threshold |
+| `pr_stuck_timeout` | duration | Maximum time a PR can wait in CI state |
+
+**Advanced Conditions**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `deadlock_timeout` | duration | Time without state transitions to detect deadlock |
+| `escalation_retries` | integer | Number of failures before escalating (default: 3) |
+
+## Cooldown Periods
+
+Cooldowns prevent alert fatigue by limiting how often a rule can fire.
+
+### How Cooldowns Work
+
+1. **Per-rule tracking** — Each rule maintains its own last-fired timestamp
+2. **Check before firing** — The engine calls `shouldFire()` before dispatching an alert
+3. **Zero cooldown** — A cooldown of `0` means fire every time (no rate limiting)
+4. **Independent tracking** — Different rules have independent cooldown timers
+
+```
+Rule fires at t=0
+├── t=5m: New event matches rule → Cooldown active (15m), skip
+├── t=10m: New event matches rule → Cooldown active, skip
+├── t=15m: New event matches rule → Cooldown expired, fire alert
+└── t=16m: New event matches rule → Cooldown active (15m), skip
+```
+
+### When to Use Which Cooldown
+
+| Scenario | Recommended Cooldown |
+|----------|---------------------|
+| Critical failures requiring immediate attention | `0` (fire every time) |
+| Task failures (need immediate visibility) | `0` |
+| Stuck task detection | `15m` (matches detection threshold) |
+| Budget warnings | `1h` (avoid hourly spam) |
+| Rate-limit based alerts | Match the detection window |
+| Health check alerts | `15-30m` (balance visibility and noise) |
+| Escalation alerts | `1h` (give time to resolve) |
+
+### Custom Rules Example
+
+This example shows custom rules with conditions and cooldowns:
+
+```yaml
+alerts:
+  enabled: true
+  rules:
+    # Custom: Alert on long-running tasks
+    - name: task_long_running
+      type: task_stuck
+      enabled: true
+      condition:
+        progress_unchanged_for: 30m
+      severity: warning
+      channels: [slack-ops]
+      cooldown: 30m
+      description: "Task has been running for 30+ minutes without progress"
+
+    # Custom: Aggressive budget monitoring
+    - name: budget_warning_25
+      type: daily_spend_exceeded
+      enabled: true
+      condition:
+        daily_spend_threshold: 25.0
+      severity: info
+      channels: [slack-finance]
+      cooldown: 4h
+      labels:
+        team: finance
+        priority: low
+      description: "Daily spend exceeded $25"
+
+    # Custom: Security - sensitive file changes
+    - name: env_file_modified
+      type: sensitive_file_modified
+      enabled: true
+      condition:
+        file_pattern: "*.env*"
+        paths:
+          - ".env"
+          - ".env.production"
+          - "secrets/**"
+      severity: critical
+      channels: [pagerduty-security, slack-security]
+      cooldown: 0
+      description: "Environment or secrets file was modified"
+
+    # Custom: Lower API error threshold for production
+    - name: api_errors_prod
+      type: api_error_rate_high
+      enabled: true
+      condition:
+        api_error_rate_per_min: 5.0
+      severity: critical
+      channels: [pagerduty-oncall]
+      cooldown: 10m
+      labels:
+        environment: production
+      description: "Production API error rate exceeds 5/min"
+
+    # Custom: Escalate after 2 retries instead of 3
+    - name: fast_escalation
+      type: escalation
+      enabled: true
+      condition:
+        escalation_retries: 2
+      severity: critical
+      channels: [pagerduty-oncall]
+      cooldown: 30m
+      description: "Escalate quickly after 2 consecutive failures"
+```
+
+<Callout type="warning">
+When defining custom rules, ensure the `type` matches one of the 17 built-in event types. Custom rules override defaults only if they share the same `name`.
+</Callout>
