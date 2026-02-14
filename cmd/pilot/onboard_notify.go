@@ -16,6 +16,8 @@ import (
 // onboardNotifySetup handles the notification setup stage.
 // For Solo persona: asks if user wants notifications (default no).
 // For Team/Enterprise: shows options with Slack as recommended.
+//
+//nolint:unused // Will be called from onboard.go (Issue #1 in epic)
 func onboardNotifySetup(state *OnboardState) error {
 	reader := state.Reader
 
@@ -50,6 +52,8 @@ func onboardNotifySetup(state *OnboardState) error {
 }
 
 // onboardSlackNotify configures Slack notifications.
+//
+//nolint:unused // Called from onboardNotifySetup
 func onboardSlackNotify(state *OnboardState) error {
 	cfg := state.Config
 	reader := state.Reader
@@ -113,6 +117,8 @@ func onboardSlackNotify(state *OnboardState) error {
 }
 
 // onboardTelegramNotify configures Telegram notifications.
+//
+//nolint:unused // Called from onboardNotifySetup
 func onboardTelegramNotify(state *OnboardState) error {
 	cfg := state.Config
 	reader := state.Reader
@@ -170,6 +176,8 @@ func onboardTelegramNotify(state *OnboardState) error {
 
 // validateSlackConn validates a Slack bot token and returns the bot name.
 // Stub implementation - will be replaced by onboard_validate.go from Issue 5.
+//
+//nolint:unused // Called from onboardSlackNotify
 func validateSlackConn(token string) (string, error) {
 	// Basic format validation
 	if !strings.HasPrefix(token, "xoxb-") {
@@ -192,6 +200,8 @@ func validateSlackConn(token string) (string, error) {
 
 // validateTelegramConn validates a Telegram bot token and returns the bot username.
 // Stub implementation - will be replaced by onboard_validate.go from Issue 5.
+//
+//nolint:unused // Called from onboardTelegramNotify
 func validateTelegramConn(token string) (string, error) {
 	// Basic format validation
 	if !strings.Contains(token, ":") {
@@ -234,6 +244,8 @@ const (
 
 // showBox displays a TUI box with title and content.
 // Stub - will be provided by onboard_helpers.go from Issue 1.
+//
+//nolint:unused // Stub for onboard_helpers.go integration
 func showBox(title, badge, content string) {
 	width := 70
 	fmt.Println()
@@ -243,6 +255,8 @@ func showBox(title, badge, content string) {
 
 // selectOption displays numbered options and returns the selected index.
 // Stub - will be provided by onboard_helpers.go from Issue 1.
+//
+//nolint:unused // Stub for onboard_helpers.go integration
 func selectOption(reader *bufio.Reader, options []string) int {
 	for i, opt := range options {
 		fmt.Printf("    %d  %s\n", i+1, opt)
@@ -253,8 +267,7 @@ func selectOption(reader *bufio.Reader, options []string) int {
 		return 0
 	}
 	var choice int
-	fmt.Sscanf(line, "%d", &choice)
-	if choice < 1 || choice > len(options) {
+	if _, err := fmt.Sscanf(line, "%d", &choice); err != nil || choice < 1 || choice > len(options) {
 		return 0
 	}
 	return choice - 1

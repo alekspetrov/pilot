@@ -11,6 +11,8 @@ import (
 // onboardOptionalSetup handles the automation/optional features stage.
 // For Solo persona: skips entirely (returns nil immediately).
 // For Team/Enterprise: shows autopilot, alerts, and daily brief sections.
+//
+//nolint:unused // Will be called from onboard.go (Issue #1 in epic)
 func onboardOptionalSetup(state *OnboardState) error {
 	// Solo persona: skip entirely
 	if state.Persona == PersonaSolo {
@@ -38,6 +40,8 @@ func onboardOptionalSetup(state *OnboardState) error {
 }
 
 // onboardAutopilot configures autopilot settings.
+//
+//nolint:unused // Called from onboardOptionalSetup
 func onboardAutopilot(state *OnboardState) error {
 	cfg := state.Config
 	reader := state.Reader
@@ -91,6 +95,8 @@ func onboardAutopilot(state *OnboardState) error {
 }
 
 // onboardAlerts configures failure alerts.
+//
+//nolint:unused // Called from onboardOptionalSetup
 func onboardAlerts(state *OnboardState) error {
 	cfg := state.Config
 	reader := state.Reader
@@ -137,6 +143,8 @@ func onboardAlerts(state *OnboardState) error {
 }
 
 // onboardDailyBrief configures daily brief settings.
+//
+//nolint:unused // Called from onboardOptionalSetup
 func onboardDailyBrief(state *OnboardState) error {
 	cfg := state.Config
 	reader := state.Reader
@@ -210,6 +218,8 @@ func onboardDailyBrief(state *OnboardState) error {
 }
 
 // parseTimeToCron converts "HH:MM" to cron format "M H * * 1-5" (weekdays).
+//
+//nolint:unused // Called from onboardDailyBrief
 func parseTimeToCron(timeStr string) string {
 	hour := "9"
 	minute := "0"
