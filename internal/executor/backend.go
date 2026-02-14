@@ -390,6 +390,9 @@ type ClaudeCodeConfig struct {
 
 	// ExtraArgs are additional arguments to pass to the CLI
 	ExtraArgs []string `yaml:"extra_args,omitempty"`
+
+	// UseStructuredOutput enables --json-schema structured output for classifiers and post-execution summary (default: false)
+	UseStructuredOutput bool `yaml:"use_structured_output,omitempty"`
 }
 
 // OpenCodeConfig contains OpenCode backend configuration.
