@@ -754,3 +754,139 @@ func TestShouldRetry_ActionWarn(t *testing.T) {
 		t.Error("expected ShouldRetry to be false for ActionWarn")
 	}
 }
+
+func TestRunner_RunAll_Parallel(t *testing.T) {
+	// Gates that sleep briefly - if parallel, total time should be ~sleep duration
+	// If sequential, total time should be ~2x sleep duration
+	config := &Config{
+		Enabled:  true,
+		Parallel: true,
+		Gates: []*Gate{
+			{
+				Name:     "sleep1",
+				Type:     GateCustom,
+				Command:  "sleep 0.1 && echo 'done1'",
+				Required: true,
+				Timeout:  5 * time.Second,
+			},
+			{
+				Name:     "sleep2",
+				Type:     GateCustom,
+				Command:  "sleep 0.1 && echo 'done2'",
+				Required: true,
+				Timeout:  5 * time.Second,
+			},
+		},
+	}
+
+	runner := NewRunner(config, "/tmp")
+	start := time.Now()
+	results, err := runner.RunAll(context.Background(), "parallel-test")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !results.AllPassed {
+		t.Error("expected AllPassed to be true")
+	}
+	if len(results.Results) != 2 {
+		t.Errorf("expected 2 results, got %d", len(results.Results))
+	}
+
+	// Parallel execution should complete in roughly the time of one sleep
+	// (allowing generous margin for process overhead)
+	if elapsed > 300*time.Millisecond {
+		t.Errorf("parallel execution took too long: %v (expected < 300ms)", elapsed)
+	}
+}
+
+func TestRunner_RunAll_Sequential(t *testing.T) {
+	// Same gates but with parallel=false - should take ~2x as long
+	config := &Config{
+		Enabled:  true,
+		Parallel: false,
+		Gates: []*Gate{
+			{
+				Name:     "seq1",
+				Type:     GateCustom,
+				Command:  "sleep 0.1 && echo 'done1'",
+				Required: true,
+				Timeout:  5 * time.Second,
+			},
+			{
+				Name:     "seq2",
+				Type:     GateCustom,
+				Command:  "sleep 0.1 && echo 'done2'",
+				Required: true,
+				Timeout:  5 * time.Second,
+			},
+		},
+	}
+
+	runner := NewRunner(config, "/tmp")
+	start := time.Now()
+	results, err := runner.RunAll(context.Background(), "sequential-test")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !results.AllPassed {
+		t.Error("expected AllPassed to be true")
+	}
+	if len(results.Results) != 2 {
+		t.Errorf("expected 2 results, got %d", len(results.Results))
+	}
+
+	// Sequential execution should take at least 2x sleep time
+	if elapsed < 180*time.Millisecond {
+		t.Errorf("sequential execution was too fast: %v (expected > 180ms)", elapsed)
+	}
+}
+
+func TestRunner_RunAll_ParallelDefault(t *testing.T) {
+	// DefaultConfig should have Parallel=true
+	config := DefaultConfig()
+	if !config.Parallel {
+		t.Error("expected DefaultConfig to have Parallel=true")
+	}
+}
+
+func TestRunner_RunAll_ParallelRaceCondition(t *testing.T) {
+	// Run with -race to verify no race conditions in parallel execution
+	config := &Config{
+		Enabled:  true,
+		Parallel: true,
+		Gates: []*Gate{
+			{Name: "gate1", Type: GateCustom, Command: "echo 'a'", Required: true, Timeout: 5 * time.Second},
+			{Name: "gate2", Type: GateCustom, Command: "echo 'b'", Required: true, Timeout: 5 * time.Second},
+			{Name: "gate3", Type: GateCustom, Command: "echo 'c'", Required: true, Timeout: 5 * time.Second},
+			{Name: "gate4", Type: GateCustom, Command: "echo 'd'", Required: true, Timeout: 5 * time.Second},
+		},
+	}
+
+	runner := NewRunner(config, "/tmp")
+	results, err := runner.RunAll(context.Background(), "race-test")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !results.AllPassed {
+		t.Error("expected AllPassed to be true")
+	}
+	if len(results.Results) != 4 {
+		t.Errorf("expected 4 results, got %d", len(results.Results))
+	}
+
+	// Verify all gates have correct names (no data races in result assignment)
+	gateNames := make(map[string]bool)
+	for _, r := range results.Results {
+		gateNames[r.GateName] = true
+	}
+	for _, expected := range []string{"gate1", "gate2", "gate3", "gate4"} {
+		if !gateNames[expected] {
+			t.Errorf("missing gate result: %s", expected)
+		}
+	}
+}

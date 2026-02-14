@@ -58,21 +58,33 @@ func (r *Runner) RunAll(ctx context.Context, taskID string) (*CheckResults, erro
 		Results:   make([]*Result, len(r.config.Gates)),
 	}
 
-	r.log.Info("Starting quality gate checks (parallel)",
-		slog.String("task_id", taskID),
-		slog.Int("gate_count", len(r.config.Gates)),
-	)
+	if r.config.Parallel {
+		r.log.Info("Starting quality gate checks (parallel)",
+			slog.String("task_id", taskID),
+			slog.Int("gate_count", len(r.config.Gates)),
+		)
 
-	// Execute all gates in parallel
-	var wg sync.WaitGroup
-	for i, gate := range r.config.Gates {
-		wg.Add(1)
-		go func(idx int, g *Gate) {
-			defer wg.Done()
-			results.Results[idx] = r.runGate(ctx, g)
-		}(i, gate)
+		// Execute all gates in parallel
+		var wg sync.WaitGroup
+		for i, gate := range r.config.Gates {
+			wg.Add(1)
+			go func(idx int, g *Gate) {
+				defer wg.Done()
+				results.Results[idx] = r.runGate(ctx, g)
+			}(i, gate)
+		}
+		wg.Wait()
+	} else {
+		r.log.Info("Starting quality gate checks (sequential)",
+			slog.String("task_id", taskID),
+			slog.Int("gate_count", len(r.config.Gates)),
+		)
+
+		// Execute gates sequentially
+		for i, gate := range r.config.Gates {
+			results.Results[i] = r.runGate(ctx, gate)
+		}
 	}
-	wg.Wait()
 
 	// Evaluate results
 	allPassed := true
