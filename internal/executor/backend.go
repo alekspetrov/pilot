@@ -41,6 +41,16 @@ type ExecuteOptions struct {
 	// Maps to Claude API output_config.effort or Claude Code --effort flag.
 	Effort string
 
+	// ResumeSessionID enables session resume for continued context (GH-1265).
+	// When set, uses --resume <session_id> to continue an existing Claude Code session,
+	// eliminating context rebuild overhead (~40% token savings for self-review).
+	ResumeSessionID string
+
+	// FromPR specifies a PR number to use for --from-pr session resumption (GH-1267).
+	// When set, uses --from-pr <N> to resume the session linked to that PR,
+	// giving Claude full context of what was previously changed.
+	FromPR int
+
 	// EventHandler receives streaming events during execution
 	// The handler receives the raw event line from the backend
 	EventHandler func(event BackendEvent)
@@ -96,6 +106,9 @@ type BackendEvent struct {
 
 	// Model is the model name used (if available)
 	Model string
+
+	// SessionID is the Claude Code session ID for resume support (GH-1265)
+	SessionID string
 }
 
 // BackendEventType categorizes backend events.
@@ -143,6 +156,9 @@ type BackendResult struct {
 
 	// Model is the model used for execution
 	Model string
+
+	// SessionID is the Claude Code session ID for resume support (GH-1265)
+	SessionID string
 }
 
 // BackendConfig contains configuration for executor backends.
@@ -393,6 +409,18 @@ type ClaudeCodeConfig struct {
 
 	// UseStructuredOutput enables --json-schema structured output for classifiers and post-execution summary (default: false)
 	UseStructuredOutput bool `yaml:"use_structured_output,omitempty"`
+
+	// UseSessionResume enables session resume for self-review (GH-1265).
+	// When true, self-review uses --resume <session_id> to continue the
+	// original session, eliminating ~40% token waste from context rebuild.
+	// Default: false
+	UseSessionResume bool `yaml:"use_session_resume,omitempty"`
+
+	// UseFromPR enables --from-pr session resumption for autopilot fix issues (GH-1267).
+	// When true and a FromPR is specified, uses --from-pr <N> to resume the session
+	// linked to the original PR, giving Claude full context of previous changes.
+	// Default: false
+	UseFromPR bool `yaml:"use_from_pr,omitempty"`
 }
 
 // OpenCodeConfig contains OpenCode backend configuration.

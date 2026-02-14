@@ -34,6 +34,8 @@ type StreamEvent struct {
 	// Token usage (TASK-13)
 	Usage *UsageInfo `json:"usage,omitempty"`
 	Model string     `json:"model,omitempty"`
+	// Session ID for resume support (GH-1265)
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // UsageInfo represents token usage in stream events
@@ -88,6 +90,8 @@ type progressState struct {
 	budgetCancel   context.CancelFunc // Cancel function to terminate execution on budget breach
 	// Smart retry tracking (GH-920)
 	smartRetryAttempt int // Current retry attempt for error-based retries
+	// Session resume support (GH-1265)
+	sessionID string // Claude Code session ID for resume in self-review
 }
 
 // Task represents a task to be executed by the Runner.
@@ -130,6 +134,11 @@ type Task struct {
 	// AcceptanceCriteria contains extracted acceptance criteria from the issue body (GH-920).
 	// When present, included in the prompt and verified before commit.
 	AcceptanceCriteria []string
+	// FromPR is the PR number to resume session context from (GH-1267).
+	// When set and UseFromPR is enabled, uses --from-pr <N> to resume the session
+	// linked to the original PR, giving Claude full context of previous changes.
+	// Typically set for autopilot-fix issues to continue from the failed PR's session.
+	FromPR int
 }
 
 // QualityGateResult represents the result of a single quality gate check.
@@ -1126,6 +1135,7 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 		Verbose:         task.Verbose,
 		Model:           selectedModel,
 		Effort:          selectedEffort,
+		FromPR:          task.FromPR, // GH-1267: session resumption from PR context
 		WatchdogTimeout: watchdogTimeout,
 		WatchdogCallback: func(pid int, watchdogDuration time.Duration) {
 			log.Warn("Watchdog killed subprocess",
@@ -2446,12 +2456,25 @@ func (r *Runner) runSelfReview(ctx context.Context, task *Task, state *progressS
 	selectedModel := r.modelRouter.SelectModel(task)
 	selectedEffort := r.modelRouter.SelectEffort(task)
 
+	// GH-1265: Determine if session resume is enabled and session ID is available
+	var resumeSessionID string
+	if r.config != nil && r.config.ClaudeCode != nil && r.config.ClaudeCode.UseSessionResume {
+		if state.sessionID != "" {
+			resumeSessionID = state.sessionID
+			r.log.Debug("Using session resume for self-review",
+				slog.String("task_id", task.ID),
+				slog.String("session_id", resumeSessionID),
+			)
+		}
+	}
+
 	result, err := r.backend.Execute(reviewCtx, ExecuteOptions{
-		Prompt:      reviewPrompt,
-		ProjectPath: task.ProjectPath,
-		Verbose:     task.Verbose,
-		Model:       selectedModel,
-		Effort:      selectedEffort,
+		Prompt:          reviewPrompt,
+		ProjectPath:     task.ProjectPath,
+		Verbose:         task.Verbose,
+		Model:           selectedModel,
+		Effort:          selectedEffort,
+		ResumeSessionID: resumeSessionID,
 		EventHandler: func(event BackendEvent) {
 			// Track tokens from self-review
 			state.tokensInput += event.TokensInput
@@ -2603,6 +2626,10 @@ func (r *Runner) processBackendEvent(taskID string, event BackendEvent, state *p
 
 	switch event.Type {
 	case EventTypeInit:
+		// GH-1265: Capture session ID for resume in self-review
+		if event.SessionID != "" {
+			state.sessionID = event.SessionID
+		}
 		r.reportProgress(taskID, "🚀 Started", 5, event.Message)
 
 	case EventTypeText:
