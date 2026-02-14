@@ -1,0 +1,80 @@
+import { Callout } from 'nextra/components'
+
+# Alerts & Notifications
+
+Pilot's event-driven alert engine monitors task execution, autopilot health, budget consumption, and security events, delivering notifications to Slack, Telegram, email, webhooks, and PagerDuty.
+
+## Overview
+
+The alert engine provides:
+
+- **Event-driven architecture** — Events flow asynchronously through an evaluation pipeline
+- **Rule-based evaluation** — Configurable conditions with cooldown enforcement
+- **Multi-channel dispatch** — Parallel delivery to Slack, Telegram, email, webhook, PagerDuty
+- **Severity filtering** — Route alerts by severity level to appropriate channels
+
+<Callout type="info">
+Pilot ships with 17 built-in alert types covering task lifecycle, budget, autopilot health, and security events. All rules are configurable via YAML.
+</Callout>
+
+### Event Flow
+
+```
+┌─────────────┐     ┌──────────────┐     ┌────────────────┐
+│  Executor   │────▶│ Engine       │────▶│ Event Channel  │
+│  (events)   │     │ Adapter      │     │ (buffered: 100)│
+└─────────────┘     └──────────────┘     └───────┬────────┘
+                                                  │
+                                                  ▼
+┌─────────────┐     ┌──────────────┐     ┌────────────────┐
+│  Channels   │◀────│ Dispatcher   │◀────│ Rule Evaluator │
+│  (parallel) │     │              │     │ + Cooldown     │
+└─────────────┘     └──────────────┘     └────────────────┘
+```
+
+1. **Event generation** — The executor emits events for task start, progress, completion, and failure
+2. **Adapter conversion** — `EngineAdapter` converts executor events to alert events (avoids import cycles)
+3. **Async queue** — Events enter a buffered channel (capacity 100) for non-blocking processing
+4. **Rule evaluation** — Engine matches events against enabled rules, checking conditions and cooldowns
+5. **Parallel dispatch** — Matching alerts route to configured channels concurrently via goroutines
+
+### Severity Levels
+
+| Level | Use Case | Example |
+|-------|----------|---------|
+| `info` | Informational, no action required | PR stuck in CI for 15 minutes |
+| `warning` | Attention needed, not urgent | Daily spend at 80% of limit |
+| `critical` | Immediate action required | Circuit breaker tripped, budget depleted |
+
+### Built-in Event Types
+
+Pilot monitors 17 event types across four categories:
+
+**Task Lifecycle**
+- `task_started` — Task execution began
+- `task_progress` — Progress update received
+- `task_completed` — Task finished successfully
+- `task_failed` — Task failed with error
+- `task_stuck` — No progress for configured duration
+- `consecutive_failures` — Multiple tasks failed in sequence
+
+**Budget & Cost**
+- `budget_exceeded` — Budget limit breached
+- `budget_warning` — Approaching budget threshold
+- `daily_spend_exceeded` — Daily spend over threshold
+- `budget_depleted` — Monthly budget exhausted
+- `usage_spike` — Unusual cost increase detected
+
+**Autopilot Health**
+- `failed_queue_high` — Too many issues in failed queue
+- `circuit_breaker_trip` — Autopilot circuit breaker activated
+- `api_error_rate_high` — API errors exceeding threshold
+- `pr_stuck_waiting_ci` — PR waiting on CI too long
+- `deadlock` — No state transitions for extended period
+- `heartbeat_timeout` — Executor heartbeat missed
+
+**Security**
+- `unauthorized_access` — Unauthorized access attempt
+- `sensitive_file_modified` — Protected file changed
+- `unusual_pattern` — Suspicious activity detected
+- `escalation` — Repeated failures requiring human intervention
