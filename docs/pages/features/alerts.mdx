@@ -78,3 +78,222 @@ Pilot monitors 17 event types across four categories:
 - `sensitive_file_modified` — Protected file changed
 - `unusual_pattern` — Suspicious activity detected
 - `escalation` — Repeated failures requiring human intervention
+
+## Alert Channels
+
+Pilot supports five alert channel types. Each channel can filter alerts by severity level, enabling routing of critical alerts to PagerDuty while sending informational alerts to Slack.
+
+### Slack
+
+Sends Block Kit formatted messages with color-coded attachments based on severity.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `channel` | string | Yes | Slack channel name (e.g., `#alerts`) |
+
+**Formatting:**
+- Header block with severity emoji and level
+- Section block with alert title and message
+- Context block with type, source, and project metadata
+- Color-coded attachment: `danger` (critical), `warning` (warning), `#0066cc` (info)
+
+```yaml
+- name: slack-alerts
+  type: slack
+  enabled: true
+  severities: [critical, warning, info]
+  slack:
+    channel: "#pilot-alerts"
+```
+
+### Telegram
+
+Sends MarkdownV2 formatted messages with emoji indicators.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `chat_id` | integer | Yes | Telegram chat or group ID |
+
+**Formatting:**
+- Severity emoji header (🚨 critical, ⚠️ warning, ℹ️ info)
+- Bold title and message body
+- Metadata with type, source, and project
+- Timestamp footer
+
+```yaml
+- name: telegram-alerts
+  type: telegram
+  enabled: true
+  severities: [critical, warning]
+  telegram:
+    chat_id: -1001234567890
+```
+
+### Email (SMTP)
+
+Sends HTML formatted emails with CSS styling and responsive layout.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `to` | string[] | Yes | Recipient email addresses |
+| `smtp_host` | string | Yes | SMTP server hostname |
+| `smtp_port` | integer | Yes | SMTP server port |
+| `from` | string | Yes | Sender email address |
+| `username` | string | Yes | SMTP authentication username |
+| `password` | string | Yes | SMTP authentication password |
+| `subject` | string | No | Custom subject template |
+
+**Subject templates:**
+- `{{severity}}` — Alert severity level
+- `{{type}}` — Event type
+- `{{title}}` — Alert title
+
+**Formatting:**
+- Responsive HTML with inline CSS
+- Color-coded alert boxes by severity
+- Metadata table with type, source, project
+- Alert ID and timestamp footer
+
+```yaml
+- name: email-oncall
+  type: email
+  enabled: true
+  severities: [critical]
+  email:
+    to:
+      - oncall@company.com
+      - platform-team@company.com
+    smtp_host: smtp.gmail.com
+    smtp_port: 587
+    from: pilot@company.com
+    username: pilot@company.com
+    password: ${SMTP_PASSWORD}
+    subject: "[{{severity}}] Pilot: {{title}}"
+```
+
+### Webhook
+
+Sends HTTP POST/PUT requests with JSON payload and optional HMAC-SHA256 signing.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | Yes | Webhook endpoint URL |
+| `method` | string | No | HTTP method (`POST` or `PUT`, default: `POST`) |
+| `headers` | map | No | Custom HTTP headers |
+| `secret` | string | No | HMAC-SHA256 signing secret |
+
+**Payload:** JSON-serialized `Alert` object with all fields.
+
+**Signature:** When `secret` is configured, the request includes an `X-Signature-256` header with format `sha256=<hex-encoded-hmac>`.
+
+```yaml
+- name: internal-webhook
+  type: webhook
+  enabled: true
+  severities: [critical, warning, info]
+  webhook:
+    url: https://api.internal.company.com/alerts
+    method: POST
+    headers:
+      Authorization: "Bearer ${WEBHOOK_TOKEN}"
+      X-Source: pilot
+    secret: ${WEBHOOK_SECRET}
+```
+
+### PagerDuty
+
+Sends events to PagerDuty Events API v2 with automatic deduplication.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `routing_key` | string | Yes | PagerDuty integration routing key |
+| `service_id` | string | No | Optional service identifier |
+
+**API endpoint:** `https://events.pagerduty.com/v2/enqueue`
+
+**Deduplication key:** `pilot-{type}-{source}` — Prevents duplicate incidents for the same alert.
+
+**Severity mapping:**
+- Pilot `critical` → PagerDuty `critical`
+- Pilot `warning` → PagerDuty `warning`
+- Pilot `info` → PagerDuty `info`
+
+**Payload fields:**
+- `summary` — Combined title and message
+- `source` — Alert source
+- `component` — Always `pilot`
+- `group` — Project path
+- `class` — Alert type
+- `custom_details` — Alert metadata
+
+```yaml
+- name: pagerduty-critical
+  type: pagerduty
+  enabled: true
+  severities: [critical]
+  pagerduty:
+    routing_key: ${PAGERDUTY_ROUTING_KEY}
+    service_id: P1234567
+```
+
+### Complete Configuration Example
+
+This example shows all five channel types configured with severity filtering:
+
+```yaml
+alerts:
+  enabled: true
+  channels:
+    # All alerts to Slack
+    - name: slack-all
+      type: slack
+      enabled: true
+      severities: [critical, warning, info]
+      slack:
+        channel: "#pilot-alerts"
+
+    # Critical + warning to Telegram
+    - name: telegram-ops
+      type: telegram
+      enabled: true
+      severities: [critical, warning]
+      telegram:
+        chat_id: -1001234567890
+
+    # Critical only to email
+    - name: email-oncall
+      type: email
+      enabled: true
+      severities: [critical]
+      email:
+        to: [oncall@company.com]
+        smtp_host: smtp.gmail.com
+        smtp_port: 587
+        from: pilot@company.com
+        username: pilot@company.com
+        password: ${SMTP_PASSWORD}
+        subject: "🚨 [{{severity}}] {{title}}"
+
+    # All alerts to internal system
+    - name: webhook-internal
+      type: webhook
+      enabled: true
+      severities: [critical, warning, info]
+      webhook:
+        url: https://api.internal.company.com/pilot/alerts
+        headers:
+          Authorization: "Bearer ${INTERNAL_API_TOKEN}"
+        secret: ${WEBHOOK_HMAC_SECRET}
+
+    # Critical only to PagerDuty
+    - name: pagerduty-oncall
+      type: pagerduty
+      enabled: true
+      severities: [critical]
+      pagerduty:
+        routing_key: ${PAGERDUTY_ROUTING_KEY}
+```
+
+<Callout type="tip">
+Use severity filtering to route alerts appropriately: critical alerts to PagerDuty for immediate response, warning alerts to Slack/Telegram for awareness, and info alerts to webhooks for logging and analytics.
+</Callout>
