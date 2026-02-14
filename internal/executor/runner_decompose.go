@@ -68,15 +68,20 @@ func (r *Runner) executeDecomposedTask(ctx context.Context, parentTask *Task, su
 		}
 		r.reportProgress(parentTask.ID, "Branching", 2, fmt.Sprintf("On %s, creating %s...", defaultBranch, parentTask.Branch))
 
-		// GH-1235: Use CreateOrResetBranch (-B flag) instead of CreateBranch (-b flag)
-		// because worktree mode may have already created this branch. The -B flag
-		// handles both cases: creates if missing, resets if exists.
+		// GH-1236: Use CreateOrResetBranch (-B flag) instead of CreateBranch (-b flag)
+		// because the branch may already exist. The -B flag handles both cases:
+		// creates if missing, resets if exists.
 		if err := git.CreateOrResetBranch(ctx, parentTask.Branch); err != nil {
 			return nil, fmt.Errorf("failed to create/reset branch: %w", err)
 		}
 		r.reportProgress(parentTask.ID, "Branching", 5, fmt.Sprintf("Branch %s ready", parentTask.Branch))
 	} else if parentTask.Branch != "" && inWorktreeMode {
-		r.reportProgress(parentTask.ID, "Branching", 5, fmt.Sprintf("Branch %s already checked out in worktree", parentTask.Branch))
+		// Worktree mode: branch already created and checked out by CreateWorktreeWithBranch
+		r.log.Info("Skipping branch creation in worktree mode - branch already active",
+			slog.String("branch", parentTask.Branch),
+			slog.String("worktree_path", executionPath),
+		)
+		r.reportProgress(parentTask.ID, "Branching", 5, fmt.Sprintf("Branch %s ready (worktree)", parentTask.Branch))
 	}
 
 	// Aggregate result
@@ -102,11 +107,10 @@ func (r *Runner) executeDecomposedTask(ctx context.Context, parentTask *Task, su
 		)
 
 		// Execute subtask (recursively calls Execute, but subtasks won't decompose further)
+		// GH-1235: Set ProjectPath to executionPath so subtasks run in the worktree (if active)
+		subtask.ProjectPath = executionPath
 		// Clear the branch since we already created it
 		subtask.Branch = ""
-
-		// GH-1235: Execute subtasks in the worktree when worktree mode is active
-		subtask.ProjectPath = executionPath
 
 		// Temporarily disable decomposer to prevent recursive decomposition
 		savedDecomposer := r.decomposer
