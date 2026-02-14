@@ -1,0 +1,257 @@
+import { Callout } from 'nextra/components'
+
+# Quality Gates
+
+Quality gates enforce code quality standards between implementation and PR creation. They ensure all code passes basic checks before being submitted for review.
+
+<Callout type="info">
+  Quality gates run automatically after task implementation. If gates fail, Pilot receives feedback and retries the implementation.
+</Callout>
+
+## Overview
+
+Quality gates provide automated quality assurance by running checks like build verification, tests, linting, and security scans. When gates fail, the system provides specific error feedback to guide fixes.
+
+### When Gates Run
+
+```
+Task Implementation → Quality Gates → Pass? → Create PR
+                            ↓ Fail
+                      Retry with feedback
+                            ↓ Still fail
+                      Notify & Stop
+```
+
+Gates execute in the project directory after code changes are complete but before PR creation. This catches issues early while providing actionable feedback for automatic fixes.
+
+## Gate Types
+
+Quality gates support seven built-in types with configurable commands and thresholds:
+
+| Type | Default Timeout | Description |
+|------|----------------|-------------|
+| **build** | 5 minutes | Compilation and syntax checking |
+| **test** | 10 minutes | Unit, integration, and e2e test execution |
+| **lint** | 2 minutes | Code style, formatting, and static analysis |
+| **coverage** | 10 minutes | Test coverage measurement and threshold enforcement |
+| **security** | 5 minutes | Security vulnerability scanning |
+| **typecheck** | 3 minutes | Type checking for TypeScript, Flow, or similar |
+| **custom** | 5 minutes | Project-specific checks and validations |
+
+### Build Gates
+
+Verify code compiles and has no syntax errors. Auto-detects project type:
+
+- **Go**: `go build ./...`
+- **Node.js + TypeScript**: `npm run build || npx tsc --noEmit`
+- **Rust**: `cargo check`
+- **Python**: `python -m py_compile *.py`
+
+### Test Gates
+
+Execute test suites with configurable timeout. Common commands:
+
+- `make test`
+- `npm test`
+- `go test ./...`
+- `pytest`
+
+### Lint Gates
+
+Enforce code style and catch common issues:
+
+- `make lint`
+- `npm run lint`
+- `golangci-lint run`
+- `eslint .`
+
+### Coverage Gates
+
+Measure test coverage and enforce minimum thresholds. Supports parsing:
+
+- **Go**: `go test -cover ./...`
+- **Jest**: `npm test -- --coverage`
+- **Python**: `pytest --cov=.`
+
+Set `threshold: 80` to require 80% coverage.
+
+### Security Gates
+
+Scan for vulnerabilities and security issues:
+
+- `npm audit`
+- `go mod audit`
+- `safety check` (Python)
+- `cargo audit` (Rust)
+
+### Type Check Gates
+
+Verify type safety in typed languages:
+
+- `npx tsc --noEmit` (TypeScript)
+- `mypy .` (Python)
+- `flow check` (Flow)
+
+### Custom Gates
+
+Run project-specific checks:
+
+- Bundle size validation
+- Performance benchmarks
+- API contract verification
+- Database migration validation
+
+## Configuration
+
+Enable quality gates in `~/.pilot/config.yaml`:
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: build
+      type: build
+      command: "make build"
+      required: true
+      timeout: 5m
+      max_retries: 2
+      failure_hint: "Fix compilation errors in the changed files"
+
+    - name: test
+      type: test
+      command: "make test"
+      required: true
+      timeout: 10m
+      max_retries: 2
+      failure_hint: "Fix failing tests or update test expectations"
+
+    - name: lint
+      type: lint
+      command: "make lint"
+      required: false  # warn only
+      timeout: 2m
+      max_retries: 1
+      failure_hint: "Fix linting errors: formatting, unused imports, etc."
+
+    - name: coverage
+      type: coverage
+      command: "go test -cover ./..."
+      required: true
+      threshold: 80  # minimum coverage percentage
+      timeout: 10m
+
+    - name: security
+      type: security
+      command: "npm audit"
+      required: false
+      timeout: 5m
+
+  on_failure:
+    action: retry  # retry | fail | warn
+    max_retries: 2
+    notify_on: [failed]
+```
+
+### Gate Properties
+
+| Property | Description | Required |
+|----------|-------------|----------|
+| `name` | Unique gate identifier | ✓ |
+| `type` | Gate type (build, test, etc.) | ✓ |
+| `command` | Shell command to execute | ✓ |
+| `required` | Fail pipeline if gate fails | |
+| `timeout` | Maximum execution time | |
+| `threshold` | Coverage percentage (coverage gates only) | |
+| `max_retries` | Retry attempts on failure | |
+| `retry_delay` | Delay between retries | |
+| `failure_hint` | Guidance for Claude on failure | |
+
+## Behavior
+
+### Required vs Optional Gates
+
+- **Required gates**: Pipeline fails if gate fails after retries
+- **Optional gates**: Generate warnings but allow PR creation
+
+### Retry Logic
+
+Failed gates trigger automatic retries with:
+
+1. **Error feedback**: Gate output is provided to Claude
+2. **Failure hints**: Custom guidance for common issues
+3. **Delay**: Configurable wait between attempts
+4. **Max attempts**: Prevents infinite retry loops
+
+### Failure Actions
+
+Configure pipeline behavior when required gates fail:
+
+- **retry**: Provide feedback and retry implementation (default)
+- **fail**: Stop pipeline immediately
+- **warn**: Log warning but continue to PR creation
+
+## Minimal Configuration
+
+For basic protection without full configuration:
+
+```yaml
+quality:
+  enabled: true
+  # Uses minimal build gate with auto-detection
+```
+
+This enables build verification only, with commands auto-detected from project type.
+
+## Monitoring
+
+Quality gate results are logged and tracked:
+
+```bash
+# View recent gate results
+pilot logs --quality
+
+# Dashboard with gate status
+pilot start --dashboard
+```
+
+## Best Practices
+
+<Callout type="warning">
+  Start with build and test gates only. Add linting and coverage gates gradually to avoid overwhelming the system with failures.
+</Callout>
+
+1. **Start simple**: Enable build gates first, add others incrementally
+2. **Tune timeouts**: Adjust based on project size and CI performance
+3. **Meaningful hints**: Provide specific guidance in `failure_hint`
+4. **Optional first**: Make new gates optional until they're stable
+5. **Test locally**: Verify gate commands work in your environment
+
+## Troubleshooting
+
+### Gates Always Failing
+
+Check that gate commands work in your project:
+
+```bash
+# Test gate commands manually
+make build
+make test
+make lint
+```
+
+### Timeout Issues
+
+Increase timeout for slow operations:
+
+```yaml
+- name: integration-test
+  timeout: 20m  # Longer for slow tests
+```
+
+### Coverage Parsing
+
+Ensure coverage output format is supported. Quality gates parse:
+
+- Go: `coverage: X.X% of statements`
+- Jest: `All files | X.X |`
+- Python: `TOTAL.*X%`
