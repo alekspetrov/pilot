@@ -1670,13 +1670,14 @@ The previous execution completed but made no code changes. This task requires ac
 			}
 		}
 
+		// Track quality gate results across retries (GH-209)
+		// Declared here so it's accessible for self-review conditional (GH-1079)
+		var finalOutcome *QualityOutcome
+		var totalQualityRetries int
+
 		// Run quality gates if configured
 		if r.qualityCheckerFactory != nil {
 			const maxAutoRetries = 2 // Circuit breaker to prevent infinite loops
-
-			// Track quality gate results across retries (GH-209)
-			var finalOutcome *QualityOutcome
-			var totalQualityRetries int
 
 			for retryAttempt := 0; retryAttempt <= maxAutoRetries; retryAttempt++ {
 				r.reportProgress(task.ID, "Quality Gates", 91, "Running quality checks...")
@@ -1736,11 +1737,7 @@ The previous execution completed but made no code changes. This task requires ac
 						}
 					}
 
-					// Run self-review phase (GH-364)
-					if err := r.runSelfReview(ctx, task, state); err != nil {
-						log.Warn("Self-review error", slog.Any("error", err))
-						// Continue anyway - self-review is advisory
-					}
+					// NOTE: Self-review moved to run in parallel with intent judge (GH-1079)
 
 					break
 				}
@@ -1947,15 +1944,90 @@ The previous execution completed but made no code changes. This task requires ac
 				slog.String("task_id", task.ID),
 				slog.String("project", task.ProjectPath),
 			)
+			// NOTE: Self-review now runs in parallel with intent judge below (GH-1079)
+		}
 
-			// Run self-review even without quality gates (GH-364)
-			if err := r.runSelfReview(ctx, task, state); err != nil {
-				log.Warn("Self-review error", slog.Any("error", err))
-				// Continue anyway - self-review is advisory
+		// Run self-review and intent judge in parallel (GH-1079)
+		// Both are independent read-only operations:
+		// - Self-review reads files and checks code quality
+		// - Intent judge reads diff and classifies task type
+		var selfReviewErr error
+		var intentVerdict *JudgeVerdict
+		var intentJudgeErr error
+		var intentDiff string
+
+		// Determine if self-review should run:
+		// - Quality gates passed, OR
+		// - No quality gates configured but CreatePR is true
+		qualityGatesPassed := finalOutcome != nil && finalOutcome.Passed
+		noQualityGatesButCreatePR := task.CreatePR && r.qualityCheckerFactory == nil
+		runSelfReview := qualityGatesPassed || noQualityGatesButCreatePR
+
+		// Determine if intent judge should run
+		runIntentJudge := r.intentJudge != nil && task.CreatePR && !task.DirectCommit && task.Branch != ""
+
+		// Get base branch and diff for intent judge (needed before goroutine)
+		var baseBranch string
+		if runIntentJudge {
+			baseBranch = task.BaseBranch
+			if baseBranch == "" {
+				baseBranch, _ = git.GetDefaultBranch(ctx)
+				if baseBranch == "" {
+					baseBranch = "main"
+				}
+			}
+			var diffErr error
+			intentDiff, diffErr = git.GetDiff(ctx, baseBranch)
+			if diffErr != nil {
+				log.Warn("Intent judge skipped: failed to get diff",
+					slog.String("task_id", task.ID),
+					slog.Any("error", diffErr),
+				)
+				runIntentJudge = false
+			} else if intentDiff == "" {
+				runIntentJudge = false
 			}
 		}
 
-		// Intent judge: verify diff aligns with issue intent (GH-624, industry pattern from Spotify)
+		// Launch parallel goroutines
+		var wg sync.WaitGroup
+
+		// Self-review goroutine (only if should run)
+		if runSelfReview {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				r.reportProgress(task.ID, "Self-Review", 95, "Reviewing changes...")
+				if err := r.runSelfReview(ctx, task, state); err != nil {
+					selfReviewErr = err
+				}
+			}()
+		}
+
+		// Intent judge goroutine (initial check only)
+		if runIntentJudge {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				log.Info("Intent judge running",
+					slog.String("task_id", task.ID),
+					slog.Int("diff_len", len(intentDiff)),
+				)
+				r.reportProgress(task.ID, "Intent Check", 96, "Verifying diff matches intent...")
+				intentVerdict, intentJudgeErr = r.intentJudge.Judge(ctx, task.Title, task.Description, intentDiff)
+			}()
+		}
+
+		// Wait for both to complete
+		wg.Wait()
+
+		// Handle self-review result
+		if selfReviewErr != nil {
+			log.Warn("Self-review error", slog.Any("error", selfReviewErr))
+			// Continue anyway - self-review is advisory
+		}
+
+		// Handle intent judge result (including retry logic)
 		if r.intentJudge == nil {
 			log.Debug("Intent judge skipped: not initialized")
 		} else if !task.CreatePR {
@@ -1965,85 +2037,62 @@ The previous execution completed but made no code changes. This task requires ac
 		} else if task.Branch == "" {
 			log.Debug("Intent judge skipped: no branch")
 		}
-		if r.intentJudge != nil && task.CreatePR && !task.DirectCommit && task.Branch != "" {
-			baseBranch := task.BaseBranch
-			if baseBranch == "" {
-				baseBranch, _ = git.GetDefaultBranch(ctx)
-				if baseBranch == "" {
-					baseBranch = "main"
-				}
-			}
-
-			diff, diffErr := git.GetDiff(ctx, baseBranch)
-			if diffErr != nil {
-				log.Warn("Intent judge skipped: failed to get diff",
+		if runIntentJudge {
+			if intentJudgeErr != nil {
+				log.Warn("Intent judge error (continuing to PR)",
 					slog.String("task_id", task.ID),
-					slog.Any("error", diffErr),
+					slog.Any("error", intentJudgeErr),
 				)
-			} else if diff != "" {
-				log.Info("Intent judge running",
+			} else if intentVerdict != nil && !intentVerdict.Passed {
+				log.Warn("Intent judge vetoed diff",
 					slog.String("task_id", task.ID),
-					slog.Int("diff_len", len(diff)),
+					slog.String("reason", intentVerdict.Reason),
+					slog.Float64("confidence", intentVerdict.Confidence),
 				)
-				r.reportProgress(task.ID, "Intent Check", 96, "Verifying diff matches intent...")
 
-				verdict, judgeErr := r.intentJudge.Judge(ctx, task.Title, task.Description, diff)
-				if judgeErr != nil {
-					log.Warn("Intent judge error (continuing to PR)",
-						slog.String("task_id", task.ID),
-						slog.Any("error", judgeErr),
-					)
-				} else if !verdict.Passed {
-					log.Warn("Intent judge vetoed diff",
-						slog.String("task_id", task.ID),
-						slog.String("reason", verdict.Reason),
-						slog.Float64("confidence", verdict.Confidence),
+				if !state.intentRetried {
+					state.intentRetried = true
+					r.reportProgress(task.ID, "Intent Retry", 80, "Retrying with intent feedback...")
+
+					retryPrompt := fmt.Sprintf(
+						"## Intent Alignment Retry\n\nThe intent judge flagged the previous implementation:\n\n**Reason:** %s\n\nPlease fix the issues above. Focus on implementing exactly what the issue asks for.\n\n## Original Task: %s\n\n%s",
+						intentVerdict.Reason, task.Title, task.Description,
 					)
 
-					if !state.intentRetried {
-						state.intentRetried = true
-						r.reportProgress(task.ID, "Intent Retry", 80, "Retrying with intent feedback...")
-
-						retryPrompt := fmt.Sprintf(
-							"## Intent Alignment Retry\n\nThe intent judge flagged the previous implementation:\n\n**Reason:** %s\n\nPlease fix the issues above. Focus on implementing exactly what the issue asks for.\n\n## Original Task: %s\n\n%s",
-							verdict.Reason, task.Title, task.Description,
-						)
-
-						_, retryErr := r.backend.Execute(ctx, ExecuteOptions{
-							Prompt:      retryPrompt,
-							ProjectPath: task.ProjectPath,
-							Verbose:     task.Verbose,
-							Model:       selectedModel,
-							Effort:      selectedEffort,
-							EventHandler: func(event BackendEvent) {
-								state.tokensInput += event.TokensInput
-								state.tokensOutput += event.TokensOutput
-								if event.Type == EventTypeToolResult && event.ToolResult != "" {
-									extractCommitSHA(event.ToolResult, state)
-								}
-							},
-						})
-
-						if retryErr == nil {
-							// Update result tokens
-							result.TokensInput = state.tokensInput
-							result.TokensOutput = state.tokensOutput
-							result.TokensTotal = state.tokensInput + state.tokensOutput
-
-							// Re-judge the new diff
-							newDiff, _ := git.GetDiff(ctx, baseBranch)
-							if newDiff != "" {
-								v2, _ := r.intentJudge.Judge(ctx, task.Title, task.Description, newDiff)
-								if v2 != nil && !v2.Passed {
-									result.IntentWarning = v2.Reason
-								}
+					_, retryErr := r.backend.Execute(ctx, ExecuteOptions{
+						Prompt:      retryPrompt,
+						ProjectPath: task.ProjectPath,
+						Verbose:     task.Verbose,
+						Model:       selectedModel,
+						Effort:      selectedEffort,
+						EventHandler: func(event BackendEvent) {
+							state.tokensInput += event.TokensInput
+							state.tokensOutput += event.TokensOutput
+							if event.Type == EventTypeToolResult && event.ToolResult != "" {
+								extractCommitSHA(event.ToolResult, state)
 							}
-						} else {
-							result.IntentWarning = verdict.Reason
+						},
+					})
+
+					if retryErr == nil {
+						// Update result tokens
+						result.TokensInput = state.tokensInput
+						result.TokensOutput = state.tokensOutput
+						result.TokensTotal = state.tokensInput + state.tokensOutput
+
+						// Re-judge the new diff
+						newDiff, _ := git.GetDiff(ctx, baseBranch)
+						if newDiff != "" {
+							v2, _ := r.intentJudge.Judge(ctx, task.Title, task.Description, newDiff)
+							if v2 != nil && !v2.Passed {
+								result.IntentWarning = v2.Reason
+							}
 						}
 					} else {
-						result.IntentWarning = verdict.Reason
+						result.IntentWarning = intentVerdict.Reason
 					}
+				} else {
+					result.IntentWarning = intentVerdict.Reason
 				}
 			}
 		}
