@@ -4,6 +4,7 @@
   "autopilot": "Autopilot Mode",
   "autopilot-environments": "Autopilot Environments",
   "approval-workflows": "Approval Workflows",
+  "teams": "Teams & Permissions",
   "hot-upgrade": "Hot Upgrade",
   "replay": "Replay & Debug",
   "memory": "Memory & Learning"

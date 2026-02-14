@@ -1,0 +1,230 @@
+import { Callout } from 'nextra/components'
+
+# Teams & Permissions
+
+Pilot supports team-based access control for multi-user environments. Teams let you manage who can execute tasks on which projects, with role-based permission enforcement.
+
+## Overview
+
+The teams system provides:
+
+- **Role-based access control (RBAC)** — Four permission levels from viewer to owner
+- **Project scoping** — Restrict members to specific repositories
+- **Identity mapping** — Link GitHub/Telegram/Slack users to team members
+- **Audit logging** — Track all team actions for compliance
+
+## Team CLI Commands
+
+Manage teams with the `pilot team` subcommands:
+
+```bash
+# Create a team with yourself as owner
+pilot team create "My Team" --owner you@example.com
+
+# List all teams
+pilot team list
+
+# Show team details (members, projects)
+pilot team show <team-id>
+
+# Delete a team (owner only)
+pilot team delete <team-id> --as owner@example.com
+```
+
+### Member Management
+
+```bash
+# Add a member
+pilot team member add <team-id> dev@example.com --role developer --as admin@example.com
+
+# Remove a member
+pilot team member remove <team-id> dev@example.com --as admin@example.com
+
+# Change a member's role
+pilot team member role <team-id> dev@example.com admin --as owner@example.com
+```
+
+### Project Access
+
+```bash
+# Grant team access to a project
+pilot team project set <team-id> /path/to/project --role developer --as admin@example.com
+
+# Remove project access
+pilot team project remove <team-id> /path/to/project --as admin@example.com
+
+# List project access entries
+pilot team project list <team-id>
+```
+
+### Audit Log
+
+```bash
+# View team audit log
+pilot team audit <team-id> --as admin@example.com --limit 50
+```
+
+## Roles & Permissions
+
+| Role | Level | Capabilities |
+|------|-------|-------------|
+| `owner` | 4 | Full access, delete team, manage billing |
+| `admin` | 3 | Manage members, manage projects, view audit log |
+| `developer` | 2 | Execute tasks, create tasks, cancel tasks |
+| `viewer` | 1 | View projects, view tasks (read-only) |
+
+### Permission Matrix
+
+| Permission | Owner | Admin | Developer | Viewer |
+|------------|-------|-------|-----------|--------|
+| `manage_team` | Yes | | | |
+| `manage_members` | Yes | Yes | | |
+| `manage_billing` | Yes | | | |
+| `manage_projects` | Yes | Yes | | |
+| `execute_tasks` | Yes | Yes | Yes | |
+| `create_tasks` | Yes | Yes | Yes | |
+| `cancel_tasks` | Yes | Yes | Yes | |
+| `view_projects` | Yes | Yes | Yes | Yes |
+| `view_tasks` | Yes | Yes | Yes | Yes |
+| `view_audit_log` | Yes | Yes | | |
+
+<Callout type="info">
+Higher roles can manage lower roles. An admin can add/remove developers and viewers, but cannot modify other admins or the owner.
+</Callout>
+
+## Project Mapping
+
+Members can be restricted to specific projects:
+
+```bash
+# Add member with project restrictions
+pilot team member add <team-id> dev@example.com \
+  --role developer \
+  --projects /home/user/project-a,/home/user/project-b \
+  --as admin@example.com
+```
+
+When a member has project restrictions:
+- Task execution is blocked on unlisted projects
+- The pre-execution check validates project access before running Claude Code
+
+<Callout type="warning">
+Members without project restrictions (`--projects` empty) have access to all projects within their role's permissions.
+</Callout>
+
+## Configuration
+
+Enable team-based access control in your config file:
+
+```yaml
+# ~/.pilot/config.yaml
+team:
+  enabled: true
+  team_id: "my-team"           # Team ID or name
+  member_email: "dev@example.com"  # Member executing tasks
+```
+
+### CLI Flag Overrides
+
+Override config with flags on `pilot start` or `pilot run`:
+
+```bash
+# Use a different team
+pilot start --team "other-team" --team-member "other@example.com"
+
+# With GitHub polling
+pilot start --github --team "my-team" --team-member "dev@example.com"
+```
+
+## Identity Resolution
+
+Pilot maps external identities to team members for RBAC enforcement:
+
+| Source | Identity Field | Member Field |
+|--------|---------------|--------------|
+| GitHub | `issue.user.login` | `github_user` |
+| Telegram | `message.from.id` | `telegram_id` |
+| Slack | `event.user` (email via API) | `email` |
+
+### GitHub User Mapping
+
+When a GitHub issue is processed, Pilot resolves the author to a team member:
+
+1. Looks up member by `github_user` field (exact match)
+2. Falls back to `email` if GitHub provides it
+3. If no match found, RBAC is not enforced (open access)
+
+To enable GitHub identity mapping, update the member:
+
+```bash
+# Add GitHub username to existing member (via SQL)
+sqlite3 ~/.pilot/data/pilot.db "UPDATE members SET github_user='octocat' WHERE email='dev@example.com'"
+```
+
+### Telegram User Mapping
+
+```bash
+# Add Telegram ID to member (via SQL)
+sqlite3 ~/.pilot/data/pilot.db "UPDATE members SET telegram_id=123456789 WHERE email='dev@example.com'"
+```
+
+<Callout type="info">
+Identity mapping fields (`github_user`, `telegram_id`, `slack_user_id`) are stored in the members table. Future CLI commands will support updating these directly.
+</Callout>
+
+## Pre-Execution Check
+
+When teams are enabled, the executor checks project access before running:
+
+```
+1. Resolve user identity → member ID
+2. Load member's role and project restrictions
+3. Check if member has `execute_tasks` permission
+4. If member has project restrictions, verify current project is listed
+5. Block or proceed based on result
+```
+
+### Error Messages
+
+| Error | Cause |
+|-------|-------|
+| `permission denied` | Member lacks required permission |
+| `team not found` | Configured `team_id` doesn't exist |
+| `member not found` | Configured `member_email` not in team |
+
+## Data Storage
+
+Team data is stored in the SQLite database (`~/.pilot/data/pilot.db`):
+
+| Table | Purpose |
+|-------|---------|
+| `teams` | Team records |
+| `members` | Team membership with roles |
+| `project_access` | Project-to-team mappings |
+| `audit_log` | Action history |
+
+## Example Workflow
+
+```bash
+# 1. Create a team
+pilot team create "Engineering" --owner alice@example.com
+
+# 2. Add team members
+pilot team member add eng-xyz dev@example.com --role developer --as alice@example.com
+pilot team member add eng-xyz ops@example.com --role admin --as alice@example.com
+
+# 3. Set up project access
+pilot team project set eng-xyz /home/team/api-server --role developer --as ops@example.com
+pilot team project set eng-xyz /home/team/frontend --role developer --as ops@example.com
+
+# 4. Configure Pilot to use the team
+cat >> ~/.pilot/config.yaml << EOF
+team:
+  enabled: true
+  team_id: "Engineering"
+  member_email: "dev@example.com"
+EOF
+
+# 5. Start Pilot with team RBAC
+pilot start --github --team "Engineering" --team-member "dev@example.com"
+```
