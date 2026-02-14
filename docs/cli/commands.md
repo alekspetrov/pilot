@@ -13,16 +13,20 @@ pilot start                          # Config-driven
 pilot start --telegram               # Enable Telegram polling
 pilot start --github                 # Enable GitHub issue polling
 pilot start --linear                 # Enable Linear webhooks
+pilot start --slack                  # Enable Slack Socket Mode
 pilot start --telegram --github      # Enable both
 pilot start --dashboard              # With TUI dashboard
 pilot start --no-gateway             # Polling only (no HTTP server)
 pilot start --sequential             # Sequential execution mode
-pilot start --parallel               # Parallel execution mode
 pilot start --autopilot=stage        # Autopilot mode (dev/stage/prod)
-pilot start --no-pr                  # Skip PR creation (local only)
-pilot start --direct-commit          # Push directly to main (danger)
+pilot start --auto-release           # Enable automatic releases after PR merge
+pilot start --tunnel                 # Enable public tunnel for webhook ingress
+pilot start --daemon                 # Run in background (daemon mode)
 pilot start -p ~/Projects/myapp      # Specify project
 pilot start --replace                # Kill existing instance first
+pilot start --team myteam            # Team ID for project scoping
+pilot start --team-member user@email # Member email for team scoping
+pilot start --log-format json        # Log output format (text or json)
 ```
 
 ### `pilot stop`
@@ -69,21 +73,23 @@ Execute a single task.
 ```bash
 pilot task "Add user authentication"                    # Run in cwd
 pilot task "Fix login bug" -p ~/Projects/myapp          # Specify project
-pilot task "Add feature" --create-pr                    # Auto-create PR
+pilot task "Add feature" --alerts                       # Enable alerts
 pilot task "Refactor API" --verbose                     # Stream output
 pilot task "Update docs" --dry-run                      # Preview only
-pilot task "Quick fix" --no-branch                      # Skip branch
-pilot task "Implement feature" --backend opencode       # Use OpenCode
+pilot task "Budget task" --budget                       # Enable budget enforcement
+pilot task "Team task" --team myteam                    # Team scoping
+pilot task "Member task" --team-member user@email       # Member scoping
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-p, --project` | Project path |
-| `--create-pr` | Create PR after completion |
-| `--verbose` | Stream raw JSON output |
-| `--dry-run` | Show prompt without executing |
-| `--no-branch` | Skip branch creation |
-| `--backend` | Executor backend (claude-code/opencode) |
+| `--alerts` | Enable alerts for task execution |
+| `--budget` | Enable budget enforcement for this task |
+| `--verbose` | Stream Claude Code output |
+| `--dry-run` | Show what would be executed without running |
+| `--team` | Team ID or name for project access scoping |
+| `--team-member` | Member email for team access scoping |
 
 ---
 
@@ -109,10 +115,11 @@ Check for and install updates.
 ```bash
 pilot upgrade                    # Check and upgrade
 pilot upgrade check              # Only check for updates
+pilot upgrade check --json       # Check with JSON output
+pilot upgrade run                # Download and install latest version
+pilot upgrade run --force        # Skip task completion wait
+pilot upgrade run --yes          # Skip confirmation prompt
 pilot upgrade rollback           # Restore previous version
-pilot upgrade --force            # Skip task completion wait
-pilot upgrade --no-restart       # Don't restart after upgrade
-pilot upgrade --yes              # Skip confirmation
 ```
 
 ### `pilot doctor`
@@ -120,7 +127,21 @@ pilot upgrade --yes              # Skip confirmation
 Run system health checks.
 
 ```bash
-pilot doctor
+pilot doctor                     # Run all checks
+pilot doctor --verbose          # Show detailed output with fix suggestions
+```
+
+### `pilot logs`
+
+View task execution logs.
+
+```bash
+pilot logs                       # Show recent task logs
+pilot logs TASK-12345            # Show logs for specific task
+pilot logs GH-15                 # Show logs for GitHub issue task
+pilot logs --limit 20            # Show last 20 tasks
+pilot logs --verbose             # Show detailed output
+pilot logs --json                # Output as JSON
 ```
 
 ---
