@@ -1,0 +1,489 @@
+import { Callout } from 'nextra/components'
+
+# Alerts & Notifications
+
+Pilot's event-driven alert engine monitors task execution, autopilot health, budget consumption, and security events, delivering notifications to Slack, Telegram, email, webhooks, and PagerDuty.
+
+## Overview
+
+The alert engine provides:
+
+- **Event-driven architecture** — Events flow asynchronously through an evaluation pipeline
+- **Rule-based evaluation** — Configurable conditions with cooldown enforcement
+- **Multi-channel dispatch** — Parallel delivery to Slack, Telegram, email, webhook, PagerDuty
+- **Severity filtering** — Route alerts by severity level to appropriate channels
+
+<Callout type="info">
+Pilot ships with 17 built-in alert types covering task lifecycle, budget, autopilot health, and security events. All rules are configurable via YAML.
+</Callout>
+
+### Event Flow
+
+```
+┌─────────────┐     ┌──────────────┐     ┌────────────────┐
+│  Executor   │────▶│ Engine       │────▶│ Event Channel  │
+│  (events)   │     │ Adapter      │     │ (buffered: 100)│
+└─────────────┘     └──────────────┘     └───────┬────────┘
+                                                  │
+                                                  ▼
+┌─────────────┐     ┌──────────────┐     ┌────────────────┐
+│  Channels   │◀────│ Dispatcher   │◀────│ Rule Evaluator │
+│  (parallel) │     │              │     │ + Cooldown     │
+└─────────────┘     └──────────────┘     └────────────────┘
+```
+
+1. **Event generation** — The executor emits events for task start, progress, completion, and failure
+2. **Adapter conversion** — `EngineAdapter` converts executor events to alert events (avoids import cycles)
+3. **Async queue** — Events enter a buffered channel (capacity 100) for non-blocking processing
+4. **Rule evaluation** — Engine matches events against enabled rules, checking conditions and cooldowns
+5. **Parallel dispatch** — Matching alerts route to configured channels concurrently via goroutines
+
+### Severity Levels
+
+| Level | Use Case | Example |
+|-------|----------|---------|
+| `info` | Informational, no action required | PR stuck in CI for 15 minutes |
+| `warning` | Attention needed, not urgent | Daily spend at 80% of limit |
+| `critical` | Immediate action required | Circuit breaker tripped, budget depleted |
+
+### Built-in Event Types
+
+Pilot monitors 17 event types across four categories:
+
+**Task Lifecycle**
+- `task_started` — Task execution began
+- `task_progress` — Progress update received
+- `task_completed` — Task finished successfully
+- `task_failed` — Task failed with error
+- `task_stuck` — No progress for configured duration
+- `consecutive_failures` — Multiple tasks failed in sequence
+
+**Budget & Cost**
+- `budget_exceeded` — Budget limit breached
+- `budget_warning` — Approaching budget threshold
+- `daily_spend_exceeded` — Daily spend over threshold
+- `budget_depleted` — Monthly budget exhausted
+- `usage_spike` — Unusual cost increase detected
+
+**Autopilot Health**
+- `failed_queue_high` — Too many issues in failed queue
+- `circuit_breaker_trip` — Autopilot circuit breaker activated
+- `api_error_rate_high` — API errors exceeding threshold
+- `pr_stuck_waiting_ci` — PR waiting on CI too long
+- `deadlock` — No state transitions for extended period
+- `heartbeat_timeout` — Executor heartbeat missed
+
+**Security**
+- `unauthorized_access` — Unauthorized access attempt
+- `sensitive_file_modified` — Protected file changed
+- `unusual_pattern` — Suspicious activity detected
+- `escalation` — Repeated failures requiring human intervention
+
+## Alert Channels
+
+Pilot supports five alert channel types. Each channel can filter alerts by severity level, enabling routing of critical alerts to PagerDuty while sending informational alerts to Slack.
+
+### Slack
+
+Sends Block Kit formatted messages with color-coded attachments based on severity.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `channel` | string | Yes | Slack channel name (e.g., `#alerts`) |
+
+**Formatting:**
+- Header block with severity emoji and level
+- Section block with alert title and message
+- Context block with type, source, and project metadata
+- Color-coded attachment: `danger` (critical), `warning` (warning), `#0066cc` (info)
+
+```yaml
+- name: slack-alerts
+  type: slack
+  enabled: true
+  severities: [critical, warning, info]
+  slack:
+    channel: "#pilot-alerts"
+```
+
+### Telegram
+
+Sends MarkdownV2 formatted messages with emoji indicators.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `chat_id` | integer | Yes | Telegram chat or group ID |
+
+**Formatting:**
+- Severity emoji header (🚨 critical, ⚠️ warning, ℹ️ info)
+- Bold title and message body
+- Metadata with type, source, and project
+- Timestamp footer
+
+```yaml
+- name: telegram-alerts
+  type: telegram
+  enabled: true
+  severities: [critical, warning]
+  telegram:
+    chat_id: -1001234567890
+```
+
+### Email (SMTP)
+
+Sends HTML formatted emails with CSS styling and responsive layout.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `to` | string[] | Yes | Recipient email addresses |
+| `smtp_host` | string | Yes | SMTP server hostname |
+| `smtp_port` | integer | Yes | SMTP server port |
+| `from` | string | Yes | Sender email address |
+| `username` | string | Yes | SMTP authentication username |
+| `password` | string | Yes | SMTP authentication password |
+| `subject` | string | No | Custom subject template |
+
+**Subject templates:**
+- `{{severity}}` — Alert severity level
+- `{{type}}` — Event type
+- `{{title}}` — Alert title
+
+**Formatting:**
+- Responsive HTML with inline CSS
+- Color-coded alert boxes by severity
+- Metadata table with type, source, project
+- Alert ID and timestamp footer
+
+```yaml
+- name: email-oncall
+  type: email
+  enabled: true
+  severities: [critical]
+  email:
+    to:
+      - oncall@company.com
+      - platform-team@company.com
+    smtp_host: smtp.gmail.com
+    smtp_port: 587
+    from: pilot@company.com
+    username: pilot@company.com
+    password: ${SMTP_PASSWORD}
+    subject: "[{{severity}}] Pilot: {{title}}"
+```
+
+### Webhook
+
+Sends HTTP POST/PUT requests with JSON payload and optional HMAC-SHA256 signing.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | Yes | Webhook endpoint URL |
+| `method` | string | No | HTTP method (`POST` or `PUT`, default: `POST`) |
+| `headers` | map | No | Custom HTTP headers |
+| `secret` | string | No | HMAC-SHA256 signing secret |
+
+**Payload:** JSON-serialized `Alert` object with all fields.
+
+**Signature:** When `secret` is configured, the request includes an `X-Signature-256` header with format `sha256=<hex-encoded-hmac>`.
+
+```yaml
+- name: internal-webhook
+  type: webhook
+  enabled: true
+  severities: [critical, warning, info]
+  webhook:
+    url: https://api.internal.company.com/alerts
+    method: POST
+    headers:
+      Authorization: "Bearer ${WEBHOOK_TOKEN}"
+      X-Source: pilot
+    secret: ${WEBHOOK_SECRET}
+```
+
+### PagerDuty
+
+Sends events to PagerDuty Events API v2 with automatic deduplication.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `routing_key` | string | Yes | PagerDuty integration routing key |
+| `service_id` | string | No | Optional service identifier |
+
+**API endpoint:** `https://events.pagerduty.com/v2/enqueue`
+
+**Deduplication key:** `pilot-{type}-{source}` — Prevents duplicate incidents for the same alert.
+
+**Severity mapping:**
+- Pilot `critical` → PagerDuty `critical`
+- Pilot `warning` → PagerDuty `warning`
+- Pilot `info` → PagerDuty `info`
+
+**Payload fields:**
+- `summary` — Combined title and message
+- `source` — Alert source
+- `component` — Always `pilot`
+- `group` — Project path
+- `class` — Alert type
+- `custom_details` — Alert metadata
+
+```yaml
+- name: pagerduty-critical
+  type: pagerduty
+  enabled: true
+  severities: [critical]
+  pagerduty:
+    routing_key: ${PAGERDUTY_ROUTING_KEY}
+    service_id: P1234567
+```
+
+### Complete Configuration Example
+
+This example shows all five channel types configured with severity filtering:
+
+```yaml
+alerts:
+  enabled: true
+  channels:
+    # All alerts to Slack
+    - name: slack-all
+      type: slack
+      enabled: true
+      severities: [critical, warning, info]
+      slack:
+        channel: "#pilot-alerts"
+
+    # Critical + warning to Telegram
+    - name: telegram-ops
+      type: telegram
+      enabled: true
+      severities: [critical, warning]
+      telegram:
+        chat_id: -1001234567890
+
+    # Critical only to email
+    - name: email-oncall
+      type: email
+      enabled: true
+      severities: [critical]
+      email:
+        to: [oncall@company.com]
+        smtp_host: smtp.gmail.com
+        smtp_port: 587
+        from: pilot@company.com
+        username: pilot@company.com
+        password: ${SMTP_PASSWORD}
+        subject: "🚨 [{{severity}}] {{title}}"
+
+    # All alerts to internal system
+    - name: webhook-internal
+      type: webhook
+      enabled: true
+      severities: [critical, warning, info]
+      webhook:
+        url: https://api.internal.company.com/pilot/alerts
+        headers:
+          Authorization: "Bearer ${INTERNAL_API_TOKEN}"
+        secret: ${WEBHOOK_HMAC_SECRET}
+
+    # Critical only to PagerDuty
+    - name: pagerduty-oncall
+      type: pagerduty
+      enabled: true
+      severities: [critical]
+      pagerduty:
+        routing_key: ${PAGERDUTY_ROUTING_KEY}
+```
+
+<Callout type="tip">
+Use severity filtering to route alerts appropriately: critical alerts to PagerDuty for immediate response, warning alerts to Slack/Telegram for awareness, and info alerts to webhooks for logging and analytics.
+</Callout>
+
+## Alert Rules
+
+Alert rules define when to trigger notifications. Each rule specifies a condition, severity, target channels, and cooldown period.
+
+### AlertRule Structure
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique rule identifier |
+| `type` | string | Yes | Alert type (e.g., `task_stuck`, `daily_spend_exceeded`) |
+| `enabled` | boolean | Yes | Whether the rule is active |
+| `condition` | object | Yes | Trigger conditions (see RuleCondition below) |
+| `severity` | string | Yes | Alert severity: `info`, `warning`, or `critical` |
+| `channels` | string[] | No | Channel names to send to (empty = all channels) |
+| `cooldown` | duration | No | Minimum time between alerts (e.g., `15m`, `1h`) |
+| `labels` | map | No | Additional labels for filtering |
+| `description` | string | No | Human-readable description |
+
+### Default Rules
+
+Pilot ships with 11 pre-configured rules covering task health, cost management, and autopilot operations:
+
+| Rule Name | Type | Severity | Threshold | Cooldown | Description |
+|-----------|------|----------|-----------|----------|-------------|
+| `task_stuck` | `task_stuck` | warning | 10 minutes no progress | 15m | Alert when a task has no progress for 10 minutes |
+| `task_failed` | `task_failed` | warning | Any failure | 0 | Alert when a task fails |
+| `consecutive_failures` | `consecutive_failures` | critical | 3 consecutive | 30m | Alert when 3 or more consecutive tasks fail |
+| `daily_spend` | `daily_spend_exceeded` | warning | $50 USD | 1h | Alert when daily spend exceeds threshold |
+| `budget_depleted` | `budget_depleted` | critical | $500 USD | 4h | Alert when budget limit is exceeded |
+| `failed_queue_high` | `failed_queue_high` | warning | 5 issues | 30m | Alert when failed issue queue exceeds threshold |
+| `circuit_breaker_trip` | `circuit_breaker_trip` | critical | Any trip | 30m | Alert when autopilot circuit breaker trips |
+| `api_error_rate_high` | `api_error_rate_high` | warning | 10 errors/min | 15m | Alert when API error rate exceeds 10/min |
+| `pr_stuck_waiting_ci` | `pr_stuck_waiting_ci` | info | 15 minutes | 15m | Alert when a PR is stuck in waiting_ci for too long |
+| `autopilot_deadlock` | `deadlock` | critical | 1 hour | 1h | Alert when autopilot has no state transitions for 1 hour |
+| `escalation` | `escalation` | critical | 3 retries | 1h | Escalate to PagerDuty after repeated failures |
+
+<Callout type="info">
+Cost-related rules (`daily_spend`, `budget_depleted`) are disabled by default. Enable them and set appropriate thresholds in your configuration.
+</Callout>
+
+### RuleCondition Fields
+
+Rule conditions define when an alert fires. Fields are grouped by category:
+
+**Task-Related Conditions**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `progress_unchanged_for` | duration | Time without progress to trigger stuck alert (e.g., `10m`) |
+| `consecutive_failures` | integer | Number of consecutive task failures to trigger alert |
+
+**Cost-Related Conditions**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `daily_spend_threshold` | float | USD amount for daily spend alert |
+| `budget_limit` | float | USD amount for budget depletion alert |
+| `usage_spike_percent` | float | Percentage increase to trigger spike alert (e.g., `200` = 200%) |
+
+**Pattern Matching Conditions**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `pattern` | string | Regex pattern for matching event content |
+| `file_pattern` | string | Glob pattern for file paths (e.g., `*.env`, `secrets/**`) |
+| `paths` | string[] | Specific file paths to watch |
+
+**Autopilot Health Conditions**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `failed_queue_threshold` | integer | Maximum failed issues before alert |
+| `api_error_rate_per_min` | float | Errors per minute threshold |
+| `pr_stuck_timeout` | duration | Maximum time a PR can wait in CI state |
+
+**Advanced Conditions**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `deadlock_timeout` | duration | Time without state transitions to detect deadlock |
+| `escalation_retries` | integer | Number of failures before escalating (default: 3) |
+
+## Cooldown Periods
+
+Cooldowns prevent alert fatigue by limiting how often a rule can fire.
+
+### How Cooldowns Work
+
+1. **Per-rule tracking** — Each rule maintains its own last-fired timestamp
+2. **Check before firing** — The engine calls `shouldFire()` before dispatching an alert
+3. **Zero cooldown** — A cooldown of `0` means fire every time (no rate limiting)
+4. **Independent tracking** — Different rules have independent cooldown timers
+
+```
+Rule fires at t=0
+├── t=5m: New event matches rule → Cooldown active (15m), skip
+├── t=10m: New event matches rule → Cooldown active, skip
+├── t=15m: New event matches rule → Cooldown expired, fire alert
+└── t=16m: New event matches rule → Cooldown active (15m), skip
+```
+
+### When to Use Which Cooldown
+
+| Scenario | Recommended Cooldown |
+|----------|---------------------|
+| Critical failures requiring immediate attention | `0` (fire every time) |
+| Task failures (need immediate visibility) | `0` |
+| Stuck task detection | `15m` (matches detection threshold) |
+| Budget warnings | `1h` (avoid hourly spam) |
+| Rate-limit based alerts | Match the detection window |
+| Health check alerts | `15-30m` (balance visibility and noise) |
+| Escalation alerts | `1h` (give time to resolve) |
+
+### Custom Rules Example
+
+This example shows custom rules with conditions and cooldowns:
+
+```yaml
+alerts:
+  enabled: true
+  rules:
+    # Custom: Alert on long-running tasks
+    - name: task_long_running
+      type: task_stuck
+      enabled: true
+      condition:
+        progress_unchanged_for: 30m
+      severity: warning
+      channels: [slack-ops]
+      cooldown: 30m
+      description: "Task has been running for 30+ minutes without progress"
+
+    # Custom: Aggressive budget monitoring
+    - name: budget_warning_25
+      type: daily_spend_exceeded
+      enabled: true
+      condition:
+        daily_spend_threshold: 25.0
+      severity: info
+      channels: [slack-finance]
+      cooldown: 4h
+      labels:
+        team: finance
+        priority: low
+      description: "Daily spend exceeded $25"
+
+    # Custom: Security - sensitive file changes
+    - name: env_file_modified
+      type: sensitive_file_modified
+      enabled: true
+      condition:
+        file_pattern: "*.env*"
+        paths:
+          - ".env"
+          - ".env.production"
+          - "secrets/**"
+      severity: critical
+      channels: [pagerduty-security, slack-security]
+      cooldown: 0
+      description: "Environment or secrets file was modified"
+
+    # Custom: Lower API error threshold for production
+    - name: api_errors_prod
+      type: api_error_rate_high
+      enabled: true
+      condition:
+        api_error_rate_per_min: 5.0
+      severity: critical
+      channels: [pagerduty-oncall]
+      cooldown: 10m
+      labels:
+        environment: production
+      description: "Production API error rate exceeds 5/min"
+
+    # Custom: Escalate after 2 retries instead of 3
+    - name: fast_escalation
+      type: escalation
+      enabled: true
+      condition:
+        escalation_retries: 2
+      severity: critical
+      channels: [pagerduty-oncall]
+      cooldown: 30m
+      description: "Escalate quickly after 2 consecutive failures"
+```
+
+<Callout type="warning">
+When defining custom rules, ensure the `type` matches one of the 17 built-in event types. Custom rules override defaults only if they share the same `name`.
+</Callout>
