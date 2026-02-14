@@ -50,7 +50,6 @@ func TestClaudeCodeBackendName(t *testing.T) {
 }
 
 func TestClaudeCodeBackendParseStreamEvent(t *testing.T) {
-	backend := NewClaudeCodeBackend(nil)
 
 	tests := []struct {
 		name        string
@@ -106,7 +105,7 @@ func TestClaudeCodeBackendParseStreamEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			event := backend.parseStreamEvent(tt.line)
+			event := parseStreamEvent(tt.line)
 
 			if event.Type != tt.expectType {
 				t.Errorf("Type = %q, want %q", event.Type, tt.expectType)
@@ -125,10 +124,9 @@ func TestClaudeCodeBackendParseStreamEvent(t *testing.T) {
 }
 
 func TestClaudeCodeBackendParseUsageInfo(t *testing.T) {
-	backend := NewClaudeCodeBackend(nil)
 
 	line := `{"type":"result","result":"Done","usage":{"input_tokens":100,"output_tokens":50},"model":"claude-sonnet-4-5"}`
-	event := backend.parseStreamEvent(line)
+	event := parseStreamEvent(line)
 
 	if event.TokensInput != 100 {
 		t.Errorf("TokensInput = %d, want 100", event.TokensInput)
@@ -142,10 +140,9 @@ func TestClaudeCodeBackendParseUsageInfo(t *testing.T) {
 }
 
 func TestClaudeCodeBackendParseToolInput(t *testing.T) {
-	backend := NewClaudeCodeBackend(nil)
 
 	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}`
-	event := backend.parseStreamEvent(line)
+	event := parseStreamEvent(line)
 
 	if event.ToolName != "Bash" {
 		t.Errorf("ToolName = %q, want Bash", event.ToolName)

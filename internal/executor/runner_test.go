@@ -201,19 +201,19 @@ func TestParseStreamEvent(t *testing.T) {
 			name:          "tool use Write triggers Implementing phase",
 			json:          `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/tmp/test.go"}}]}}`,
 			wantProgress:  true,
-			expectedPhase: "Implementing",
+			expectedPhase: "Implement",
 		},
 		{
 			name:          "tool use Read triggers Exploring phase",
 			json:          `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/test.go"}}]}}`,
 			wantProgress:  true,
-			expectedPhase: "Exploring",
+			expectedPhase: "Research",
 		},
 		{
 			name:          "git commit triggers Committing phase",
 			json:          `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git commit -m 'test'"}}]}}`,
 			wantProgress:  true,
-			expectedPhase: "Committing",
+			expectedPhase: "Finalizing",
 		},
 		{
 			name:       "result success",
@@ -927,7 +927,7 @@ func TestHandleToolUseGlob(t *testing.T) {
 		t.Errorf("filesRead = %d, want 1", state.filesRead)
 	}
 	if lastPhase != "Exploring" {
-		t.Errorf("phase = %q, want Exploring", lastPhase)
+		t.Errorf("phase = %q, want Research", lastPhase)
 	}
 }
 
@@ -948,7 +948,7 @@ func TestHandleToolUseGrep(t *testing.T) {
 		t.Errorf("filesRead = %d, want 1", state.filesRead)
 	}
 	if lastPhase != "Exploring" {
-		t.Errorf("phase = %q, want Exploring", lastPhase)
+		t.Errorf("phase = %q, want Research", lastPhase)
 	}
 }
 
@@ -1369,7 +1369,7 @@ func TestProcessBackendEvent(t *testing.T) {
 				ToolName:  "Read",
 				ToolInput: map[string]interface{}{"file_path": "/test.go"},
 			},
-			expectedPhase: "Exploring",
+			expectedPhase: "Research",
 		},
 		{
 			name: "tool use Write",
@@ -1378,7 +1378,7 @@ func TestProcessBackendEvent(t *testing.T) {
 				ToolName:  "Write",
 				ToolInput: map[string]interface{}{"file_path": "/output.go"},
 			},
-			expectedPhase: "Implementing",
+			expectedPhase: "Implement",
 		},
 		{
 			name: "text with Navigator session",

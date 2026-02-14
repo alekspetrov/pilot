@@ -435,21 +435,29 @@ func (r *Runner) handleToolUse(taskID, toolName string, input map[string]interfa
 		}
 
 	case "Bash":
-		// Check if it's a test command
+		// Check if it's a specific type of bash command (order matters - check specific patterns first)
 		if bashCommand, ok := input["command"].(string); ok {
-			if strings.Contains(bashCommand, "test") ||
-				strings.Contains(bashCommand, "build") ||
-				strings.Contains(bashCommand, "lint") {
+			cmdLower := strings.ToLower(bashCommand)
+
+			// Check git commands first (more specific)
+			if strings.Contains(cmdLower, "git commit") ||
+				strings.Contains(cmdLower, "git push") {
+				newPhase = "Finalizing"
+				progress = 85
+				message = "Committing changes..."
+			} else if strings.Contains(cmdLower, "go test") ||
+				strings.Contains(cmdLower, "npm test") ||
+				strings.Contains(cmdLower, "pytest") ||
+				strings.Contains(cmdLower, "make test") ||
+				strings.Contains(cmdLower, "go build") ||
+				strings.Contains(cmdLower, "npm run build") ||
+				strings.Contains(cmdLower, "make build") ||
+				strings.Contains(cmdLower, "lint") {
 				if state.phase != "Verify" {
 					newPhase = "Verify"
 					progress = 70
 					message = "Running tests..."
 				}
-			} else if strings.Contains(bashCommand, "git commit") ||
-				strings.Contains(bashCommand, "git push") {
-				newPhase = "Finalizing"
-				progress = 85
-				message = "Committing changes..."
 			}
 		}
 
