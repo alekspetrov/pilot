@@ -194,6 +194,288 @@ Configure pipeline behavior when required gates fail:
 - **fail**: Stop pipeline immediately
 - **warn**: Log warning but continue to PR creation
 
+## Retry Behavior
+
+Quality gates use a two-level retry system to maximize recovery from failures:
+
+### Two-Level Retry System
+
+**Level 1: Gate-Level Retries**
+
+Individual gates retry their command with configurable delay before reporting failure:
+
+```yaml
+- name: build
+  max_retries: 2      # Retry up to 2 times
+  retry_delay: 5s     # Wait 5 seconds between attempts
+```
+
+Gate-level retries handle transient failures (network issues, flaky commands) without re-invoking Claude Code.
+
+**Level 2: Pipeline-Level Retries**
+
+When gate-level retries are exhausted, the pipeline can re-invoke Claude Code with error feedback:
+
+```yaml
+on_failure:
+  action: retry       # Re-invoke Claude with feedback
+  max_retries: 2      # Maximum pipeline-level retries
+```
+
+Pipeline-level retries provide Claude with the full error output and `failure_hint`, allowing it to fix the underlying code issues.
+
+### Retry Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         QUALITY GATE EXECUTION                       │
+└─────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+                           ┌───────────────┐
+                           │   Run Gate    │
+                           │   Command     │
+                           └───────────────┘
+                                    │
+                          ┌─────────┴─────────┐
+                          │                   │
+                          ▼                   ▼
+                    ┌──────────┐        ┌──────────┐
+                    │  Pass    │        │  Fail    │
+                    └──────────┘        └──────────┘
+                          │                   │
+                          │           ┌───────┴───────┐
+                          │           │  Gate-level   │
+                          │           │  retries      │
+                          │           │  remaining?   │
+                          │           └───────────────┘
+                          │                   │
+                          │         ┌─────────┴─────────┐
+                          │         │ YES               │ NO
+                          │         ▼                   ▼
+                          │   ┌───────────┐      ┌─────────────┐
+                          │   │   Wait    │      │ Check       │
+                          │   │   delay   │      │ on_failure  │
+                          │   └───────────┘      │ action      │
+                          │         │            └─────────────┘
+                          │         │                   │
+                          │         └──────┐    ┌───────┴───────┬────────┐
+                          │                │    │               │        │
+                          │                ▼    ▼               ▼        ▼
+                          │           [retry]  "retry"        "fail"   "warn"
+                          │                     │               │        │
+                          │           ┌─────────┴─────────┐     │        │
+                          │           │ Pipeline retries  │     │        │
+                          │           │ remaining?        │     │        │
+                          │           └───────────────────┘     │        │
+                          │                   │                 │        │
+                          │         ┌─────────┴─────────┐       │        │
+                          │         │ YES               │ NO    │        │
+                          │         ▼                   ▼       ▼        ▼
+                          │   ┌───────────────┐   ┌──────────┐  │  ┌──────────┐
+                          │   │ Re-invoke     │   │ Pipeline │  │  │ Continue │
+                          │   │ Claude Code   │   │ Failed   │◄─┘  │ to PR    │
+                          │   │ with feedback │   └──────────┘     └──────────┘
+                          │   └───────────────┘
+                          │         │
+                          │         └───────────────┐
+                          │                         │
+                          ▼                         ▼
+                    ┌──────────┐             [run gates again]
+                    │ Continue │
+                    │  to PR   │
+                    └──────────┘
+```
+
+### on_failure Actions
+
+| Action | Behavior | Use Case |
+|--------|----------|----------|
+| `retry` | Re-invoke Claude Code with error feedback | Default. Allows AI to fix issues |
+| `fail` | Stop pipeline immediately | Strict mode. No automatic recovery |
+| `warn` | Log warning, continue to PR creation | Non-blocking gates |
+
+### Example: Full Retry Configuration
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: build
+      type: build
+      command: "go build ./..."
+      required: true
+      max_retries: 2        # Gate-level: retry command 2 times
+      retry_delay: 3s       # Wait 3s between gate retries
+      failure_hint: "Fix compilation errors shown above"
+
+    - name: test
+      type: test
+      command: "go test ./..."
+      required: true
+      max_retries: 1
+      retry_delay: 5s
+      failure_hint: "Fix failing tests. Check assertions and expected values"
+
+  on_failure:
+    action: retry           # Pipeline-level: re-invoke Claude
+    max_retries: 2          # Up to 2 full re-runs with feedback
+    notify_on: [failed]     # Alert when pipeline fails
+```
+
+With this configuration:
+1. Build gate runs, fails → waits 3s, retries → fails → waits 3s, retries → fails
+2. Gate-level retries exhausted → pipeline checks `on_failure.action`
+3. Action is `retry` → Claude Code re-invoked with build error output
+4. Claude fixes code → gates run again
+5. Up to 2 pipeline retries before final failure
+
+## Auto Build Gate
+
+When quality gates are enabled but no gates are configured, Pilot automatically creates a minimal build gate by detecting the project type.
+
+### Detection Priority
+
+Pilot checks for project indicators in this order:
+
+| Priority | File | Build Command |
+|----------|------|---------------|
+| 1 | `go.mod` | `go build ./...` |
+| 2 | `package.json` + `tsconfig.json` | `npm run build \|\| npx tsc --noEmit` |
+| 3 | `package.json` | `npm run build --if-present` |
+| 4 | `Cargo.toml` | `cargo check` |
+| 5 | `pyproject.toml` or `setup.py` | `python -m py_compile ...` |
+
+### Generated Configuration
+
+When auto-detection triggers, Pilot generates this minimal config:
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: build
+      type: build
+      command: "<detected-command>"  # Based on project type
+      required: true
+      timeout: 3m
+      max_retries: 1
+      retry_delay: 3s
+      failure_hint: "Fix compilation errors in the changed files"
+
+  on_failure:
+    action: retry
+    max_retries: 1
+```
+
+### Enabling Auto Build Gate
+
+Simply enable quality gates without specifying any gates:
+
+```yaml
+quality:
+  enabled: true
+  # No gates specified - auto-detection kicks in
+```
+
+<Callout type="info">
+  Auto build gate provides basic compilation safety with zero configuration. For test, lint, or coverage gates, you must configure them explicitly.
+</Callout>
+
+### Override Auto-Detection
+
+To use a custom build command instead of auto-detection:
+
+```yaml
+quality:
+  enabled: true
+  gates:
+    - name: build
+      type: build
+      command: "make build"  # Custom command overrides detection
+```
+
+## Self-Review
+
+After quality gates pass, Pilot runs an automatic self-review phase where Claude examines its own changes for common issues. This runs before PR creation.
+
+<Callout type="warning">
+  Self-review is **advisory only**. Errors during self-review do not block PR creation. The phase is designed to catch and fix issues when possible, but failures are logged and execution continues.
+</Callout>
+
+### What Self-Review Checks
+
+1. **Diff Analysis**: Examines staged changes for:
+   - Methods called that don't exist
+   - Struct fields added but never used
+   - Config fields that aren't wired through
+   - Unused imports
+
+2. **Build Verification**: Runs build command to catch compile errors
+
+3. **Wiring Check**: For new struct fields:
+   - Verifies field is assigned when creating the struct
+   - Verifies field is used somewhere in the code
+
+4. **Method Existence Check**: For new method calls:
+   - Searches for method implementation
+   - Implements missing methods if needed
+
+5. **Issue-to-Changes Alignment**: Compares issue title/body with actual changes:
+   - Detects if files mentioned in the issue weren't modified
+   - Flags incomplete implementations
+
+### Self-Review Flow
+
+```
+Quality Gates Pass
+        │
+        ▼
+┌───────────────────┐
+│   Self-Review     │
+│   Phase           │
+│   (2 min timeout) │
+└───────────────────┘
+        │
+        ├─── Issues found? ───► Fix automatically
+        │                              │
+        │                              ▼
+        │                       Commit fixes
+        │                              │
+        ▼                              │
+  No issues / ◄────────────────────────┘
+  Review passed
+        │
+        ▼
+   Create PR
+```
+
+### Configuration
+
+Self-review is enabled by default. To disable:
+
+```yaml
+executor:
+  skip_self_review: true
+```
+
+### Skipped Conditions
+
+Self-review is automatically skipped for:
+
+- **Trivial tasks**: Simple changes that don't warrant review
+- **Disabled in config**: When `skip_self_review: true`
+
+### Output Signals
+
+Self-review emits signals in its output:
+
+| Signal | Meaning |
+|--------|---------|
+| `REVIEW_PASSED` | No issues found |
+| `REVIEW_FIXED:` | Issues found and fixed |
+| `INCOMPLETE:` | Files mentioned in issue but not modified |
+
 ## Minimal Configuration
 
 For basic protection without full configuration:
