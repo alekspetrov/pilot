@@ -192,7 +192,9 @@ func TestMergeWithExisting(t *testing.T) {
 				}
 
 				var parsed map[string]interface{}
-				json.Unmarshal(data, &parsed)
+				if err := json.Unmarshal(data, &parsed); err != nil {
+					t.Fatalf("Failed to unmarshal merged file: %v", err)
+				}
 				if _, ok := parsed["hooks"]; !ok {
 					t.Error("Expected hooks in merged file")
 				}
@@ -225,7 +227,9 @@ func TestMergeWithExisting(t *testing.T) {
 				}
 
 				var parsed map[string]interface{}
-				json.Unmarshal(data, &parsed)
+				if err := json.Unmarshal(data, &parsed); err != nil {
+					t.Fatalf("Failed to unmarshal merged file: %v", err)
+				}
 
 				// Should have both "other" and "hooks"
 				if parsed["other"] != "value" {
@@ -243,9 +247,14 @@ func TestMergeWithExisting(t *testing.T) {
 				}
 
 				// Original content should be restored
-				data, _ = os.ReadFile(settingsPath)
+				data, err = os.ReadFile(settingsPath)
+				if err != nil {
+					t.Fatalf("Failed to read restored file: %v", err)
+				}
 				var restored map[string]interface{}
-				json.Unmarshal(data, &restored)
+				if err := json.Unmarshal(data, &restored); err != nil {
+					t.Fatalf("Failed to unmarshal restored file: %v", err)
+				}
 
 				restoredHooks := restored["hooks"].(map[string]interface{})
 				if len(restoredHooks) != 1 {
@@ -272,11 +281,15 @@ func TestMergeWithExisting(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup existing file if specified
 			if tt.existingJSON != "" {
-				os.MkdirAll(filepath.Dir(settingsPath), 0755)
-				os.WriteFile(settingsPath, []byte(tt.existingJSON), 0644)
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+					t.Fatalf("Failed to create test directory: %v", err)
+				}
+				if err := os.WriteFile(settingsPath, []byte(tt.existingJSON), 0644); err != nil {
+					t.Fatalf("Failed to write test file: %v", err)
+				}
 			} else {
 				// Clean up any existing file
-				os.RemoveAll(settingsPath)
+				_ = os.RemoveAll(settingsPath) // Ignore error - file may not exist
 			}
 
 			restoreFunc, err := MergeWithExisting(settingsPath, tt.pilotSettings)

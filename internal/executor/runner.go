@@ -1132,7 +1132,9 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 				if mergeErr != nil {
 					log.Error("Failed to setup Claude hooks", slog.Any("error", mergeErr))
 					// Clean up script directory
-					os.RemoveAll(scriptDir)
+					if rmErr := os.RemoveAll(scriptDir); rmErr != nil {
+						log.Warn("Failed to clean up hook scripts after merge error", slog.Any("error", rmErr))
+					}
 				} else {
 					hookRestoreFunc = func() error {
 						// Restore original settings.json
@@ -1156,7 +1158,7 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 	// Ensure cleanup happens regardless of execution outcome
 	defer func() {
 		if hookRestoreFunc != nil {
-			hookRestoreFunc()
+			_ = hookRestoreFunc() // Error already logged inside hookRestoreFunc
 		}
 	}()
 
