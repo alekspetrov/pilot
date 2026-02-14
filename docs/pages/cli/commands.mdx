@@ -612,3 +612,380 @@ pilot version
 # Pilot v0.63.0
 # Built: 2024-01-15T10:30:00Z
 ```
+
+---
+
+## Execution & Review
+
+Commands for executing tasks and reviewing work history.
+
+### pilot github run
+
+Execute a GitHub issue as a Pilot task.
+
+```bash
+pilot github run <issue-number> [flags]
+```
+
+Fetches a GitHub issue and executes it as a Pilot task. PRs are always created to enable autopilot workflow.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-p`, `--project` | Project path |
+| `--repo` | GitHub repository (owner/repo) |
+| `--dry-run` | Show what would execute without running |
+| `-v`, `--verbose` | Verbose output |
+| `--team` | Team ID or name for project access scoping |
+| `--team-member` | Member email for team access scoping |
+
+#### Examples
+
+```bash
+# Execute issue #8
+pilot github run 8
+
+# Execute from specific repository
+pilot github run 8 --repo owner/repo
+
+# Preview execution
+pilot github run 8 --dry-run
+
+# With verbose output
+pilot github run 8 --verbose
+```
+
+### pilot brief
+
+Generate and send daily/weekly briefs.
+
+```bash
+pilot brief [flags]
+```
+
+Generate and optionally send daily/weekly briefs summarizing Pilot activity.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--now` | Generate and send brief immediately |
+| `--weekly` | Generate a weekly summary |
+
+#### Examples
+
+```bash
+# Show scheduler status
+pilot brief
+
+# Generate and send brief immediately
+pilot brief --now
+
+# Generate a weekly summary
+pilot brief --weekly
+```
+
+### pilot replay
+
+Replay and debug execution recordings.
+
+```bash
+pilot replay <subcommand>
+```
+
+View, replay, and analyze execution recordings for debugging and improvement.
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List available recordings |
+| `show` | Show recording details |
+| `play` | Replay execution with interactive viewer |
+| `analyze` | Generate detailed analysis |
+| `export` | Export recording to HTML/JSON/Markdown |
+| `delete` | Delete a recording |
+
+### pilot replay list
+
+List available execution recordings.
+
+```bash
+pilot replay list [flags]
+```
+
+Display recordings with filtering options.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--limit` | Maximum number of recordings to show (default: 20) |
+| `--project` | Filter by project name |
+| `--status` | Filter by status (success, error, timeout) |
+
+#### Examples
+
+```bash
+# List recent recordings
+pilot replay list
+
+# Show only last 10
+pilot replay list --limit 10
+
+# Filter by project
+pilot replay list --project pilot
+
+# Show only failed executions
+pilot replay list --status error
+```
+
+### pilot replay show
+
+Show detailed information about a recording.
+
+```bash
+pilot replay show <recording-id>
+```
+
+Display metadata, events summary, and performance metrics for a specific recording.
+
+#### Examples
+
+```bash
+# Show recording details
+pilot replay show TG-1234567890
+
+# Example output includes:
+# - Basic info (task ID, duration, token usage)
+# - Phase breakdown
+# - Tool usage statistics
+# - Error summary (if any)
+```
+
+### pilot replay play
+
+Replay execution with interactive viewer.
+
+```bash
+pilot replay play <recording-id> [flags]
+```
+
+Interactive playback of the execution with step-by-step navigation.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--start` | Start from event sequence number |
+| `--stop` | Stop at event sequence number (0 = end) |
+| `-v`, `--verbose` | Show all event details |
+| `--tui` | Use interactive TUI viewer (default: true) |
+| `--speed` | Playback speed (0 = instant, 1 = real-time, 2 = 2x) |
+
+#### Examples
+
+```bash
+# Interactive replay
+pilot replay play TG-1234567890
+
+# Start from event 50
+pilot replay play TG-1234567890 --start 50
+
+# Simple output mode (no TUI)
+pilot replay play TG-1234567890 --no-tui
+
+# Show verbose details
+pilot replay play TG-1234567890 --verbose
+```
+
+### pilot replay analyze
+
+Generate detailed analysis of execution recording.
+
+```bash
+pilot replay analyze <recording-id>
+```
+
+Provides analysis of token usage, phase timing, tool usage patterns, and error diagnostics.
+
+#### Examples
+
+```bash
+# Analyze execution
+pilot replay analyze TG-1234567890
+
+# Output includes:
+# - Token usage breakdown by phase
+# - Tool usage patterns
+# - Performance bottlenecks
+# - Error analysis and recommendations
+```
+
+### pilot replay export
+
+Export recording to various formats.
+
+```bash
+pilot replay export <recording-id> [flags]
+```
+
+Export execution recording for sharing or external analysis.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--format` | Output format: html, json, markdown (default: html) |
+| `--output` | Output file path (default: auto-generated) |
+| `--with-analysis` | Include detailed analysis in export |
+
+#### Examples
+
+```bash
+# Export as HTML
+pilot replay export TG-1234567890
+
+# Export with analysis
+pilot replay export TG-1234567890 --with-analysis
+
+# Export as JSON
+pilot replay export TG-1234567890 --format json
+
+# Export as Markdown
+pilot replay export TG-1234567890 --format markdown
+
+# Custom output file
+pilot replay export TG-1234567890 --output report.html
+```
+
+### pilot replay delete
+
+Delete an execution recording.
+
+```bash
+pilot replay delete <recording-id> [flags]
+```
+
+Remove a recording from the database to free up storage space.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Skip confirmation prompt |
+
+#### Examples
+
+```bash
+# Delete with confirmation
+pilot replay delete TG-1234567890
+
+# Force delete without confirmation
+pilot replay delete TG-1234567890 --force
+```
+
+### pilot patterns
+
+Manage cross-project patterns.
+
+```bash
+pilot patterns <subcommand>
+```
+
+View, search, and manage learned patterns across projects.
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List discovered patterns |
+| `search` | Search patterns by keyword |
+| `stats` | Show pattern statistics |
+
+### pilot patterns list
+
+List discovered patterns from execution history.
+
+```bash
+pilot patterns list [flags]
+```
+
+Display patterns learned from successful and failed executions.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--limit` | Maximum number of patterns to show (default: 50) |
+| `--min-confidence` | Minimum confidence score (0.0-1.0, default: 0.5) |
+| `--type` | Pattern type filter (success, error, tool-usage) |
+| `--show-anti` | Include anti-patterns (things to avoid) |
+
+#### Examples
+
+```bash
+# List top patterns
+pilot patterns list
+
+# Show high-confidence patterns only
+pilot patterns list --min-confidence 0.8
+
+# Show anti-patterns
+pilot patterns list --show-anti
+
+# Limit results
+pilot patterns list --limit 20
+```
+
+### pilot patterns search
+
+Search patterns by keyword or description.
+
+```bash
+pilot patterns search <query>
+```
+
+Find patterns matching specific keywords or problem descriptions.
+
+#### Examples
+
+```bash
+# Search for authentication patterns
+pilot patterns search "authentication"
+
+# Search for error handling patterns
+pilot patterns search "error handling"
+
+# Search for specific technologies
+pilot patterns search "React hooks"
+```
+
+### pilot patterns stats
+
+Display pattern discovery statistics.
+
+```bash
+pilot patterns stats
+```
+
+Show overview of pattern discovery across projects including:
+- Total patterns discovered
+- Confidence distribution
+- Most common pattern types
+- Project coverage
+
+#### Examples
+
+```bash
+# Show pattern statistics
+pilot patterns stats
+
+# Example output:
+# Total patterns: 247
+# High confidence (>0.8): 89 patterns
+# Success patterns: 198
+# Anti-patterns: 49
+# Projects covered: 12
+```
