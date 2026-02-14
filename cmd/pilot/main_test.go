@@ -312,6 +312,70 @@ func TestParseAutopilotBranch(t *testing.T) {
 	}
 }
 
+// TestParseAutopilotPR tests PR number extraction from autopilot-meta comments (GH-1280).
+func TestParseAutopilotPR(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{
+			name: "standard metadata with branch and PR",
+			body: "Some body\n\n<!-- autopilot-meta branch:pilot/GH-10 pr:42 -->\n",
+			want: 42,
+		},
+		{
+			name: "PR only (no branch field)",
+			body: "<!-- autopilot-meta pr:99 -->",
+			want: 99,
+		},
+		{
+			name: "missing PR field",
+			body: "<!-- autopilot-meta branch:pilot/GH-10 -->",
+			want: 0,
+		},
+		{
+			name: "no metadata comment",
+			body: "just a normal issue body",
+			want: 0,
+		},
+		{
+			name: "empty body",
+			body: "",
+			want: 0,
+		},
+		{
+			name: "malformed - no closing tag",
+			body: "<!-- autopilot-meta branch:pilot/GH-10 pr:42",
+			want: 0,
+		},
+		{
+			name: "PR number at different position",
+			body: "<!-- autopilot-meta pr:123 branch:pilot/GH-5 -->",
+			want: 123,
+		},
+		{
+			name: "large PR number",
+			body: "<!-- autopilot-meta branch:pilot/GH-1 pr:999999 -->",
+			want: 999999,
+		},
+		{
+			name: "multiple metadata comments - first match wins",
+			body: "<!-- autopilot-meta pr:100 -->\n\n<!-- autopilot-meta pr:200 -->",
+			want: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseAutopilotPR(tt.body)
+			if got != tt.want {
+				t.Errorf("parseAutopilotPR() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 // =============================================================================
 // GH-635: wireProjectAccessChecker tests
 // =============================================================================
