@@ -121,6 +121,7 @@ func (cr *CheckResults) GetFailedGates() []*Result {
 // Config holds quality gates configuration
 type Config struct {
 	Enabled   bool          `yaml:"enabled" json:"enabled"`
+	Parallel  bool          `yaml:"parallel" json:"parallel"` // Run gates concurrently (default: true)
 	Gates     []*Gate       `yaml:"gates" json:"gates"`
 	OnFailure FailureConfig `yaml:"on_failure" json:"on_failure"`
 }
@@ -144,7 +145,8 @@ const (
 // DefaultConfig returns sensible default quality gates configuration
 func DefaultConfig() *Config {
 	return &Config{
-		Enabled: false, // Disabled by default
+		Enabled:  false, // Disabled by default
+		Parallel: true,  // Run gates concurrently by default
 		Gates: []*Gate{
 			{
 				Name:        "build",
@@ -224,7 +226,8 @@ func (c *Config) Validate() error {
 // The build command should be set via DetectBuildCommand() based on project type.
 func MinimalBuildGate() *Config {
 	return &Config{
-		Enabled: true,
+		Enabled:  true,
+		Parallel: true, // Run gates concurrently
 		Gates: []*Gate{
 			{
 				Name:        "build",

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alekspetrov/pilot/internal/logging"
@@ -60,20 +61,47 @@ func (r *Runner) RunAll(ctx context.Context, taskID string) (*CheckResults, erro
 	r.log.Info("Starting quality gate checks",
 		slog.String("task_id", taskID),
 		slog.Int("gate_count", len(r.config.Gates)),
+		slog.Bool("parallel", r.config.Parallel),
 	)
 
 	allPassed := true
 
-	for _, gate := range r.config.Gates {
-		result := r.runGate(ctx, gate)
-		results.Results = append(results.Results, result)
+	if r.config.Parallel {
+		// Parallel execution using goroutines
+		var mu sync.Mutex
+		var wg sync.WaitGroup
 
-		if result.Status == StatusFailed && gate.Required {
-			allPassed = false
-			r.log.Warn("Required quality gate failed",
-				slog.String("gate", gate.Name),
-				slog.String("error", result.Error),
-			)
+		for _, gate := range r.config.Gates {
+			wg.Add(1)
+			go func(g *Gate) {
+				defer wg.Done()
+				result := r.runGate(ctx, g)
+				mu.Lock()
+				results.Results = append(results.Results, result)
+				if result.Status == StatusFailed && g.Required {
+					allPassed = false
+					r.log.Warn("Required quality gate failed",
+						slog.String("gate", g.Name),
+						slog.String("error", result.Error),
+					)
+				}
+				mu.Unlock()
+			}(gate)
+		}
+		wg.Wait()
+	} else {
+		// Sequential execution (original behavior)
+		for _, gate := range r.config.Gates {
+			result := r.runGate(ctx, gate)
+			results.Results = append(results.Results, result)
+
+			if result.Status == StatusFailed && gate.Required {
+				allPassed = false
+				r.log.Warn("Required quality gate failed",
+					slog.String("gate", gate.Name),
+					slog.String("error", result.Error),
+				)
+			}
 		}
 	}
 

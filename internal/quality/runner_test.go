@@ -754,3 +754,202 @@ func TestShouldRetry_ActionWarn(t *testing.T) {
 		t.Error("expected ShouldRetry to be false for ActionWarn")
 	}
 }
+
+func TestRunner_RunAll_ParallelExecution(t *testing.T) {
+	// Each gate sleeps for 100ms - if sequential, total would be 300ms
+	// If parallel, total should be ~100ms (plus overhead)
+	config := &Config{
+		Enabled:  true,
+		Parallel: true,
+		Gates: []*Gate{
+			{
+				Name:     "slow1",
+				Type:     GateCustom,
+				Command:  "sleep 0.1 && echo 'gate1'",
+				Required: true,
+				Timeout:  5 * time.Second,
+			},
+			{
+				Name:     "slow2",
+				Type:     GateCustom,
+				Command:  "sleep 0.1 && echo 'gate2'",
+				Required: true,
+				Timeout:  5 * time.Second,
+			},
+			{
+				Name:     "slow3",
+				Type:     GateCustom,
+				Command:  "sleep 0.1 && echo 'gate3'",
+				Required: true,
+				Timeout:  5 * time.Second,
+			},
+		},
+	}
+
+	runner := NewRunner(config, "/tmp")
+	start := time.Now()
+	results, err := runner.RunAll(context.Background(), "parallel-test")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !results.AllPassed {
+		t.Error("expected AllPassed to be true")
+	}
+	if len(results.Results) != 3 {
+		t.Errorf("expected 3 results, got %d", len(results.Results))
+	}
+
+	// If parallel, should complete in ~100-200ms, not 300ms+
+	// Using 250ms as threshold to account for overhead
+	if elapsed > 250*time.Millisecond {
+		t.Errorf("parallel execution took too long: %v (expected < 250ms)", elapsed)
+	}
+}
+
+func TestRunner_RunAll_SequentialExecution(t *testing.T) {
+	// Each gate sleeps for 50ms - if sequential, total should be ~100ms+
+	config := &Config{
+		Enabled:  true,
+		Parallel: false, // Explicitly sequential
+		Gates: []*Gate{
+			{
+				Name:     "seq1",
+				Type:     GateCustom,
+				Command:  "sleep 0.05 && echo 'gate1'",
+				Required: true,
+				Timeout:  5 * time.Second,
+			},
+			{
+				Name:     "seq2",
+				Type:     GateCustom,
+				Command:  "sleep 0.05 && echo 'gate2'",
+				Required: true,
+				Timeout:  5 * time.Second,
+			},
+		},
+	}
+
+	runner := NewRunner(config, "/tmp")
+	start := time.Now()
+	results, err := runner.RunAll(context.Background(), "sequential-test")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !results.AllPassed {
+		t.Error("expected AllPassed to be true")
+	}
+	if len(results.Results) != 2 {
+		t.Errorf("expected 2 results, got %d", len(results.Results))
+	}
+
+	// Sequential should take at least 100ms (2 x 50ms)
+	if elapsed < 100*time.Millisecond {
+		t.Errorf("sequential execution was too fast: %v (expected >= 100ms)", elapsed)
+	}
+}
+
+func TestRunner_RunAll_ParallelWithMixedResults(t *testing.T) {
+	config := &Config{
+		Enabled:  true,
+		Parallel: true,
+		Gates: []*Gate{
+			{
+				Name:     "pass",
+				Type:     GateCustom,
+				Command:  "true",
+				Required: true,
+				Timeout:  5 * time.Second,
+			},
+			{
+				Name:       "fail-required",
+				Type:       GateCustom,
+				Command:    "exit 1",
+				Required:   true,
+				Timeout:    5 * time.Second,
+				MaxRetries: 0,
+			},
+			{
+				Name:       "fail-optional",
+				Type:       GateCustom,
+				Command:    "exit 1",
+				Required:   false, // Not required
+				Timeout:    5 * time.Second,
+				MaxRetries: 0,
+			},
+		},
+	}
+
+	runner := NewRunner(config, "/tmp")
+	results, err := runner.RunAll(context.Background(), "mixed-test")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if results.AllPassed {
+		t.Error("expected AllPassed to be false due to required gate failure")
+	}
+	if len(results.Results) != 3 {
+		t.Errorf("expected 3 results, got %d", len(results.Results))
+	}
+
+	// Verify we got results for all gates
+	gateResults := make(map[string]*Result)
+	for _, r := range results.Results {
+		gateResults[r.GateName] = r
+	}
+
+	if gateResults["pass"] == nil || gateResults["pass"].Status != StatusPassed {
+		t.Error("expected 'pass' gate to have passed")
+	}
+	if gateResults["fail-required"] == nil || gateResults["fail-required"].Status != StatusFailed {
+		t.Error("expected 'fail-required' gate to have failed")
+	}
+	if gateResults["fail-optional"] == nil || gateResults["fail-optional"].Status != StatusFailed {
+		t.Error("expected 'fail-optional' gate to have failed")
+	}
+}
+
+func TestRunner_RunAll_ParallelContextCancellation(t *testing.T) {
+	config := &Config{
+		Enabled:  true,
+		Parallel: true,
+		Gates: []*Gate{
+			{
+				Name:     "slow-cancel-1",
+				Type:     GateCustom,
+				Command:  "sleep 30",
+				Required: true,
+				Timeout:  60 * time.Second,
+			},
+			{
+				Name:     "slow-cancel-2",
+				Type:     GateCustom,
+				Command:  "sleep 30",
+				Required: true,
+				Timeout:  60 * time.Second,
+			},
+		},
+	}
+
+	runner := NewRunner(config, "/tmp")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	results, err := runner.RunAll(ctx, "cancel-test")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// All gates should have failed due to context cancellation
+	if results.AllPassed {
+		t.Error("expected AllPassed to be false after cancellation")
+	}
+	if len(results.Results) != 2 {
+		t.Errorf("expected 2 results, got %d", len(results.Results))
+	}
+}
