@@ -240,3 +240,375 @@ pilot logs GH-15
 # JSON output
 pilot logs --json
 ```
+
+---
+
+## Daemon Control
+
+### pilot stop
+
+Stop the Pilot daemon.
+
+```bash
+pilot stop
+```
+
+Signals the running Pilot daemon to shut down gracefully. For daemons started with `pilot start -d`, this command provides guidance on stopping the process.
+
+#### Usage Notes
+
+- Use `Ctrl+C` to stop a foreground Pilot process
+- Use `SIGTERM` to stop a background daemon: `kill $(pgrep pilot)`
+- For systemd/launchd managed services, use the appropriate service manager commands
+
+#### Examples
+
+```bash
+# Stop daemon (shows guidance)
+pilot stop
+
+# Alternative: stop via signal
+kill -TERM $(pgrep -f "pilot start")
+
+# Alternative: stop via pkill
+pkill -f "pilot start"
+```
+
+### pilot status
+
+Show Pilot status and running configuration.
+
+```bash
+pilot status [flags]
+```
+
+Displays current configuration state including gateway address, enabled adapters, and configured projects.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output as JSON for programmatic access |
+
+#### Output
+
+The command displays:
+- **Gateway**: HTTP endpoint address (host:port)
+- **Adapters**: Status of each adapter (Linear, Slack, Telegram, GitHub)
+- **Projects**: Configured project paths with Navigator detection
+
+#### Examples
+
+```bash
+# Show human-readable status
+pilot status
+
+# Output as JSON (for scripts)
+pilot status --json
+
+# Parse JSON with jq
+pilot status --json | jq '.adapters'
+```
+
+#### Sample Output
+
+```
+📊 Pilot Status
+───────────────────────────────────────
+Gateway: http://localhost:8080
+
+Adapters:
+  ✓ Telegram (enabled)
+  ○ Linear (disabled)
+  ○ Slack (disabled)
+  ✓ GitHub (enabled)
+
+Projects:
+  • pilot: /Users/dev/pilot [Navigator]
+  • webapp: /Users/dev/webapp
+```
+
+---
+
+## Setup & Configuration
+
+### pilot setup
+
+Interactive setup wizard for Pilot configuration.
+
+```bash
+pilot setup [flags]
+```
+
+Guides you through configuring Pilot step by step, including Telegram bot, projects, voice transcription, daily briefs, and alerts.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--skip-optional` | Skip optional features (voice, briefs, alerts) |
+| `--tunnel` | Set up Cloudflare Tunnel for webhooks |
+| `--no-sleep` | Disable Mac sleep for always-on operation (macOS only, requires sudo) |
+
+#### Setup Steps
+
+1. **Telegram Bot** - Configure bot token and chat ID
+2. **Projects** - Add project paths with automatic Navigator detection
+3. **Voice Transcription** (optional) - Configure OpenAI Whisper API
+4. **Daily Briefs** (optional) - Set up scheduled status reports
+5. **Alerts** (optional) - Enable failure notifications
+
+#### Examples
+
+```bash
+# Full interactive setup
+pilot setup
+
+# Quick setup (skip optional features)
+pilot setup --skip-optional
+
+# Set up Cloudflare Tunnel for webhooks
+pilot setup --tunnel
+
+# Disable Mac sleep for always-on server
+pilot setup --no-sleep
+```
+
+### pilot config
+
+Manage Pilot configuration.
+
+```bash
+pilot config <subcommand>
+```
+
+View, edit, and validate the Pilot configuration file.
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `show` | Display current configuration |
+| `edit` | Open config in editor |
+| `validate` | Validate configuration syntax |
+| `path` | Show config file path |
+
+### pilot config show
+
+Display current configuration.
+
+```bash
+pilot config show [flags]
+```
+
+Outputs the full configuration in YAML or JSON format.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output as JSON instead of YAML |
+
+#### Examples
+
+```bash
+# Show config as YAML
+pilot config show
+
+# Show config as JSON
+pilot config show --json
+
+# Pipe to tools
+pilot config show --json | jq '.projects'
+```
+
+### pilot config edit
+
+Open configuration in your default editor.
+
+```bash
+pilot config edit
+```
+
+Opens `~/.pilot/config.yaml` in your editor. Uses `$EDITOR` environment variable, falling back to vim, nano, or vi.
+
+After editing, the configuration is automatically validated.
+
+#### Editor Selection
+
+1. `$EDITOR` environment variable
+2. `$VISUAL` environment variable
+3. vim (if available)
+4. nano (if available)
+5. vi (if available)
+
+#### Examples
+
+```bash
+# Open in default editor
+pilot config edit
+
+# Use specific editor
+EDITOR=code pilot config edit
+EDITOR=nano pilot config edit
+```
+
+### pilot config validate
+
+Validate configuration syntax and structure.
+
+```bash
+pilot config validate [flags]
+```
+
+Checks YAML syntax and validates configuration structure. Reports warnings for common issues like missing tokens or non-existent project paths.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-q`, `--quiet` | Exit with code 1 on error, no output |
+
+#### Validation Checks
+
+- YAML syntax validity
+- Configuration structure
+- Enabled adapters have required tokens
+- Project paths exist on filesystem
+
+#### Examples
+
+```bash
+# Validate with full output
+pilot config validate
+
+# Silent validation for scripts
+if pilot config validate --quiet; then
+  echo "Config OK"
+else
+  echo "Config invalid"
+fi
+```
+
+#### Sample Output
+
+```
+Config: ~/.pilot/config.yaml
+
+Syntax:     OK
+Validation: OK
+
+Warnings:
+  - GitHub enabled but token not set
+  - Project path does not exist: /old/project
+```
+
+### pilot config path
+
+Show the configuration file path.
+
+```bash
+pilot config path
+```
+
+Outputs the absolute path to the configuration file. Useful for scripts and automation.
+
+#### Examples
+
+```bash
+# Show path
+pilot config path
+# Output: /Users/dev/.pilot/config.yaml
+
+# Use in scripts
+cat "$(pilot config path)"
+
+# Back up config
+cp "$(pilot config path)" config-backup.yaml
+```
+
+### pilot completion
+
+Generate shell completion scripts.
+
+```bash
+pilot completion <shell>
+```
+
+Generates autocompletion scripts for bash, zsh, fish, or PowerShell.
+
+#### Supported Shells
+
+| Shell | Description |
+|-------|-------------|
+| `bash` | Bash completion script |
+| `zsh` | Zsh completion script |
+| `fish` | Fish completion script |
+| `powershell` | PowerShell completion script |
+
+#### Installation
+
+**Bash:**
+```bash
+# Load for current session
+source <(pilot completion bash)
+
+# Install permanently (Linux)
+pilot completion bash > /etc/bash_completion.d/pilot
+
+# Install permanently (macOS with Homebrew)
+pilot completion bash > $(brew --prefix)/etc/bash_completion.d/pilot
+```
+
+**Zsh:**
+```bash
+# Enable completion (if not already enabled)
+echo "autoload -U compinit; compinit" >> ~/.zshrc
+
+# Install completion
+pilot completion zsh > "${fpath[1]}/_pilot"
+
+# Start new shell for changes to take effect
+```
+
+**Fish:**
+```bash
+# Load for current session
+pilot completion fish | source
+
+# Install permanently
+pilot completion fish > ~/.config/fish/completions/pilot.fish
+```
+
+**PowerShell:**
+```powershell
+# Load for current session
+pilot completion powershell | Out-String | Invoke-Expression
+
+# Install permanently (add to profile)
+pilot completion powershell > pilot.ps1
+# Then source from PowerShell profile
+```
+
+---
+
+## Information
+
+### pilot version
+
+Show Pilot version information.
+
+```bash
+pilot version
+```
+
+Displays the current Pilot version and build time.
+
+#### Examples
+
+```bash
+pilot version
+# Output:
+# Pilot v0.63.0
+# Built: 2024-01-15T10:30:00Z
+```
