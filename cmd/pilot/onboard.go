@@ -277,15 +277,7 @@ func getNotifyChannelName(cfg *config.Config) string {
 }
 
 // Stage stubs — will be implemented in subsequent issues
-
-func onboardProjectSetup(state *OnboardState) error {
-	printStageHeader("PROJECT SETUP", state.CurrentStage, state.StagesTotal)
-	fmt.Println()
-	fmt.Println("    " + onboardDimStyle.Render("Stage not yet implemented"))
-	fmt.Println()
-	printStageFooter()
-	return nil
-}
+// Note: onboardProjectSetup is implemented in onboard_project.go
 
 func onboardTicketSetup(state *OnboardState) error {
 	printStageHeader("TICKET SOURCE", state.CurrentStage, state.StagesTotal)
