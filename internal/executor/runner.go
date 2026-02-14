@@ -1111,7 +1111,7 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 
 	// Setup Claude Code hooks if enabled (GH-1266)
 	var hookRestoreFunc func() error
-	if r.config.Hooks != nil && r.config.Hooks.Enabled {
+	if r.config != nil && r.config.Hooks != nil && r.config.Hooks.Enabled {
 		log.Debug("Setting up Claude Code hooks", slog.String("task_id", task.ID))
 
 		// Create temporary directory for hook scripts
