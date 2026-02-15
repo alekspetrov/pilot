@@ -156,3 +156,80 @@ func TestNewIntentJudge(t *testing.T) {
 		t.Error("expected non-nil httpClient")
 	}
 }
+
+// GH-1321: Test dropped-feature detection for multi-file changes
+func TestIntentJudge_IncompleteMultiFileChanges(t *testing.T) {
+	// Issue says "add X to all backends", diff touches only one backend_*.go → FAIL
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req haikuRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil && len(req.Messages) > 0 {
+			content := req.Messages[0].Content
+			// Verify the system prompt includes check #4 for multi-file changes
+			system := req.System
+			if !strings.Contains(system, "Incomplete multi-file changes") {
+				t.Error("System prompt missing incomplete multi-file changes check")
+			}
+			// Simulate detection of incomplete multi-file change
+			if strings.Contains(content, "all backends") && strings.Contains(content, "backend_claudecode.go") && !strings.Contains(content, "backend_opencode.go") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, `{"content":[{"text":"VERDICT:FAIL\nThe issue mentions 'all backends' but only backend_claudecode.go was modified. backend_opencode.go and backend_qwencode.go are missing.\nCONFIDENCE:0.92"}]}`)
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"content":[{"text":"VERDICT:PASS\nAll files modified.\nCONFIDENCE:0.9"}]}`)
+	}))
+	defer server.Close()
+
+	judge := newIntentJudgeWithURL("fake-api-key", server.URL)
+	verdict, err := judge.Judge(context.Background(),
+		"Add rate limiting to all backends",
+		"Implement rate limiting in all backend implementations",
+		"diff --git a/internal/executor/backend_claudecode.go\n+func (b *ClaudeCodeBackend) RateLimit() {}")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.Passed {
+		t.Error("expected FAIL verdict for incomplete multi-file changes")
+	}
+	if !strings.Contains(verdict.Reason, "backend") {
+		t.Errorf("expected reason to mention backend, got: %s", verdict.Reason)
+	}
+}
+
+// GH-1321: Test that single-backend changes pass when issue only mentions one
+func TestIntentJudge_SingleBackendChangePass(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"content":[{"text":"VERDICT:PASS\nThe diff correctly modifies only backend_claudecode.go as requested.\nCONFIDENCE:0.95"}]}`)
+	}))
+	defer server.Close()
+
+	judge := newIntentJudgeWithURL("fake-api-key", server.URL)
+	verdict, err := judge.Judge(context.Background(),
+		"Add logging to Claude Code backend",
+		"Add debug logging to the Claude Code backend implementation",
+		"diff --git a/internal/executor/backend_claudecode.go\n+log.Debug(\"executing\")")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !verdict.Passed {
+		t.Error("expected PASS verdict for single-backend change when issue only mentions one")
+	}
+}
+
+// GH-1321: Verify system prompt contains all 4 check items
+func TestIntentJudgeSystemPromptChecks(t *testing.T) {
+	checks := []string{
+		"Scope creep",
+		"Missing requirements",
+		"Unrelated changes",
+		"Incomplete multi-file changes",
+	}
+
+	for _, check := range checks {
+		if !strings.Contains(intentJudgeSystemPrompt, check) {
+			t.Errorf("intentJudgeSystemPrompt missing check: %q", check)
+		}
+	}
+}
