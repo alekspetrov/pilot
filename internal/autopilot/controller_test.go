@@ -941,24 +941,15 @@ func TestController_CheckExternalMergeOrClose_OpenPR(t *testing.T) {
 }
 
 func TestController_CheckExternalMerge_APIError(t *testing.T) {
-	// Test that API errors don't remove PRs but allow processing to continue
-	ciCheckCalled := false
+	// Test that API errors don't remove PRs - they're kept for retry on next poll cycle.
+	// With the PR caching optimization (GH-1304), we skip processing if GetPR fails
+	// to avoid operating on stale data. The PR remains tracked for the next poll.
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/owner/repo/pulls/42":
-			// Return error
+			// Return error - simulates transient API failure
 			w.WriteHeader(http.StatusInternalServerError)
-		case "/repos/owner/repo/commits/abc1234567890/check-runs":
-			ciCheckCalled = true
-			resp := github.CheckRunsResponse{
-				TotalCount: 1,
-				CheckRuns: []github.CheckRun{
-					{Name: "build", Status: "completed", Conclusion: "success"},
-				},
-			}
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(resp)
 		default:
 			w.WriteHeader(http.StatusOK)
 		}
@@ -983,7 +974,7 @@ func TestController_CheckExternalMerge_APIError(t *testing.T) {
 	}
 	c.mu.Unlock()
 
-	// Process PRs - should fail to check state but continue processing
+	// Process PRs - should fail to fetch PR state, skip processing, but keep PR tracked
 	c.processAllPRs(context.Background())
 
 	// Verify PR is still tracked (error shouldn't remove it)
@@ -991,9 +982,10 @@ func TestController_CheckExternalMerge_APIError(t *testing.T) {
 		t.Error("PR should still be tracked after API error")
 	}
 
-	// Verify normal processing continued despite check failure
-	if !ciCheckCalled {
-		t.Error("CI check should have been called even after state check failed")
+	// Verify stage hasn't changed (processing was skipped due to API error)
+	prState, _ := c.GetPRState(42)
+	if prState.Stage != StageWaitingCI {
+		t.Errorf("PR stage should remain waiting_ci, got %s", prState.Stage)
 	}
 }
 
