@@ -2060,7 +2060,7 @@ func TestController_ConsecutiveAPIFailures(t *testing.T) {
 		if strings.Contains(r.URL.Path, "check-runs") {
 			// Return error for CI checks
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"message":"API Error"}`))
+			_, _ = w.Write([]byte(`{"message":"API Error"}`))
 			return
 		}
 		// Default PR response for GetPullRequest calls
@@ -2075,11 +2075,11 @@ func TestController_ConsecutiveAPIFailures(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(pr)
+			_ = json.NewEncoder(w).Encode(pr)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("{}"))
+		_, _ = w.Write([]byte("{}"))
 	}))
 	defer server.Close()
 
@@ -2139,7 +2139,7 @@ func TestController_ConsecutiveAPIFailures_Reset(t *testing.T) {
 			if apiCallCount <= 3 {
 				// Return error for first 3 CI checks
 				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte(`{"message":"API Error"}`))
+				_, _ = w.Write([]byte(`{"message":"API Error"}`))
 				return
 			}
 			// Success on 4th call - return successful CI
@@ -2154,7 +2154,7 @@ func TestController_ConsecutiveAPIFailures_Reset(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 			return
 		}
 		// Default PR response for GetPullRequest calls
@@ -2169,11 +2169,11 @@ func TestController_ConsecutiveAPIFailures_Reset(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(pr)
+			_ = json.NewEncoder(w).Encode(pr)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("{}"))
+		_, _ = w.Write([]byte("{}"))
 	}))
 	defer server.Close()
 
