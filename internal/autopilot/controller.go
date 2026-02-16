@@ -40,6 +40,12 @@ type ReleaseNotifier interface {
 	NotifyReleased(ctx context.Context, prState *PRState, releaseURL string) error
 }
 
+// TaskMonitor allows autopilot to update task display state.
+// Defined as interface to avoid import cycle with internal/executor.
+type TaskMonitor interface {
+	Complete(taskID, prURL string)
+}
+
 // Controller orchestrates the autopilot loop for PR processing.
 // It manages the state machine: PR created → CI check → merge → post-merge CI → feedback loop.
 type Controller struct {
@@ -51,6 +57,7 @@ type Controller struct {
 	feedbackLoop *FeedbackLoop
 	releaser     *Releaser
 	notifier     Notifier
+	monitor      TaskMonitor // Dashboard task state updater (nil-safe)
 	log          *slog.Logger
 
 	// State tracking
@@ -114,6 +121,12 @@ func (c *Controller) SetNotifier(n Notifier) {
 // If set, all state transitions are persisted to SQLite.
 func (c *Controller) SetStateStore(store *StateStore) {
 	c.stateStore = store
+}
+
+// SetMonitor sets the task monitor for updating dashboard task state.
+// When set, autopilot will call monitor.Complete() after successful PR merges.
+func (c *Controller) SetMonitor(m TaskMonitor) {
+	c.monitor = m
 }
 
 // persistPRState saves a PR state to the store if available.
@@ -619,6 +632,15 @@ func (c *Controller) handleMerging(ctx context.Context, prState *PRState) error 
 			c.log.Debug("pilot-failed label cleanup", "issue", prState.IssueNumber, "error", err)
 		}
 		c.log.Info("marked issue as pilot-done after merge", "issue", prState.IssueNumber, "pr", prState.PRNumber)
+
+		// GH-1336: Update dashboard monitor state to show task as completed.
+		// This syncs the monitor state when autopilot merges a PR that initially
+		// failed quality gates/CI but succeeded on retry.
+		if c.monitor != nil {
+			taskID := fmt.Sprintf("GH-%d", prState.IssueNumber)
+			c.monitor.Complete(taskID, prState.PRURL)
+			c.log.Debug("updated monitor state to completed", "task", taskID, "pr", prState.PRNumber)
+		}
 	}
 
 	// Notify merge success

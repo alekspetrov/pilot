@@ -2207,3 +2207,139 @@ func TestController_ConsecutiveAPIFailures_Reset(t *testing.T) {
 		t.Errorf("after success: Stage = %s, want %s", prState.Stage, StageCIPassed)
 	}
 }
+
+// mockMonitor implements TaskMonitor for testing
+type mockMonitor struct {
+	completedTasks map[string]string // taskID -> prURL
+}
+
+func newMockMonitor() *mockMonitor {
+	return &mockMonitor{completedTasks: make(map[string]string)}
+}
+
+func (m *mockMonitor) Complete(taskID, prURL string) {
+	m.completedTasks[taskID] = prURL
+}
+
+// TestController_MonitorCompleteOnMerge verifies that monitor.Complete() is called
+// when autopilot successfully merges a PR. This fixes GH-1336 where dashboard shows
+// "failed" for tasks that autopilot retried and successfully merged.
+func TestController_MonitorCompleteOnMerge(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/owner/repo/commits/abc1234/check-runs":
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: "completed", Conclusion: "success"},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/repos/owner/repo/pulls/42/merge":
+			w.WriteHeader(http.StatusOK)
+		case strings.HasPrefix(r.URL.Path, "/repos/owner/repo/issues/10/labels"):
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]github.Label{})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.AutoReview = false
+	cfg.RequiredChecks = []string{"build"}
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	// Set up mock monitor
+	monitor := newMockMonitor()
+	c.SetMonitor(monitor)
+
+	// Create PR with issue number (required for monitor.Complete to be called)
+	c.OnPRCreated(42, "https://github.com/owner/repo/pull/42", 10, "abc1234", "pilot/GH-10")
+
+	// Start PR at StageMerging to simulate autopilot retrying after initial failure
+	c.mu.Lock()
+	c.activePRs[42].Stage = StageMerging
+	c.mu.Unlock()
+
+	ctx := context.Background()
+
+	// Process merge - should call monitor.Complete()
+	err := c.ProcessPR(ctx, 42, nil)
+	if err != nil {
+		t.Fatalf("ProcessPR error: %v", err)
+	}
+
+	// Verify PR is now merged
+	pr, _ := c.GetPRState(42)
+	if pr.Stage != StageMerged {
+		t.Errorf("Stage = %s, want %s", pr.Stage, StageMerged)
+	}
+
+	// Verify monitor.Complete() was called with correct taskID
+	expectedTaskID := "GH-10"
+	if prURL, ok := monitor.completedTasks[expectedTaskID]; !ok {
+		t.Errorf("monitor.Complete() was not called for task %s", expectedTaskID)
+	} else if prURL != "https://github.com/owner/repo/pull/42" {
+		t.Errorf("monitor.Complete() called with prURL = %s, want %s", prURL, "https://github.com/owner/repo/pull/42")
+	}
+}
+
+// TestController_MonitorNilSafe verifies that merge works when monitor is nil
+func TestController_MonitorNilSafe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/owner/repo/commits/abc1234/check-runs":
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: "completed", Conclusion: "success"},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/repos/owner/repo/pulls/42/merge":
+			w.WriteHeader(http.StatusOK)
+		case strings.HasPrefix(r.URL.Path, "/repos/owner/repo/issues/10/labels"):
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]github.Label{})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.AutoReview = false
+	cfg.RequiredChecks = []string{"build"}
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+	// Deliberately NOT setting monitor - should be nil-safe
+
+	c.OnPRCreated(42, "https://github.com/owner/repo/pull/42", 10, "abc1234", "pilot/GH-10")
+
+	// Start at StageMerging
+	c.mu.Lock()
+	c.activePRs[42].Stage = StageMerging
+	c.mu.Unlock()
+
+	ctx := context.Background()
+
+	// Should not panic with nil monitor
+	err := c.ProcessPR(ctx, 42, nil)
+	if err != nil {
+		t.Fatalf("ProcessPR error: %v", err)
+	}
+
+	pr, _ := c.GetPRState(42)
+	if pr.Stage != StageMerged {
+		t.Errorf("Stage = %s, want %s", pr.Stage, StageMerged)
+	}
+}
