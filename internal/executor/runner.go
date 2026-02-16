@@ -2212,7 +2212,7 @@ The previous execution completed but made no code changes. This task requires ac
 		// Handle direct commit mode: push directly to main
 
 		// Pre-push lint gate (GH-1376)
-		if r.config.PrePushLint != nil && *r.config.PrePushLint {
+		if r.config != nil && r.config.PrePushLint != nil && *r.config.PrePushLint {
 			r.reportProgress(task.ID, "Linting", 95, "Running pre-push lint check...")
 			lintResult := git.autoFixLint(ctx)
 			if !lintResult.Clean && !lintResult.FixedAll {
@@ -2249,7 +2249,7 @@ The previous execution completed but made no code changes. This task requires ac
 
 
 			// Pre-push lint gate (GH-1376)
-			if r.config.PrePushLint != nil && *r.config.PrePushLint {
+			if r.config != nil && r.config.PrePushLint != nil && *r.config.PrePushLint {
 				r.reportProgress(task.ID, "Linting", 95, "Running pre-push lint check...")
 				lintResult := git.autoFixLint(ctx)
 				if !lintResult.Clean && !lintResult.FixedAll {
