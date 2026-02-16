@@ -620,8 +620,12 @@ func TestPollerWithProcessedStore(t *testing.T) {
 	store := NewMockProcessedStore()
 
 	// Pre-populate store
-	store.MarkAsanaTaskProcessed("task-1", "processed")
-	store.MarkAsanaTaskProcessed("task-2", "processed")
+	if err := store.MarkAsanaTaskProcessed("task-1", "processed"); err != nil {
+		t.Fatalf("failed to mark task-1 as processed: %v", err)
+	}
+	if err := store.MarkAsanaTaskProcessed("task-2", "processed"); err != nil {
+		t.Fatalf("failed to mark task-2 as processed: %v", err)
+	}
 
 	poller := NewPoller(client, config, 30*time.Second,
 		WithProcessedStore(store),
