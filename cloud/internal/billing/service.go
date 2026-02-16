@@ -11,7 +11,6 @@ import (
 	"github.com/stripe/stripe-go/v81/billingportal/session"
 	checkoutsession "github.com/stripe/stripe-go/v81/checkout/session"
 	"github.com/stripe/stripe-go/v81/customer"
-	"github.com/stripe/stripe-go/v81/invoice"
 	"github.com/stripe/stripe-go/v81/paymentmethod"
 	"github.com/stripe/stripe-go/v81/subscription"
 	"github.com/stripe/stripe-go/v81/webhook"
@@ -538,7 +537,7 @@ func (s *Service) ChangePlan(ctx context.Context, orgID uuid.UUID, newPlanID str
 				Price: stripe.String(priceID),
 			},
 		},
-		ProrationBehavior: stripe.String(string(stripe.SubscriptionProrationBehaviorCreateProrations)),
+		ProrationBehavior: stripe.String("create_prorations"),
 	}
 
 	_, err = subscription.Update(sub.StripeSubscriptionID, params)

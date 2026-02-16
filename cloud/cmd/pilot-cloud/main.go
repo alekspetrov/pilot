@@ -17,6 +17,7 @@ import (
 	"github.com/alekspetrov/pilot/cloud/internal/auth"
 	"github.com/alekspetrov/pilot/cloud/internal/billing"
 	"github.com/alekspetrov/pilot/cloud/internal/oauth"
+	"github.com/alekspetrov/pilot/cloud/internal/research"
 	"github.com/alekspetrov/pilot/cloud/internal/sandbox"
 	"github.com/alekspetrov/pilot/cloud/internal/tenants"
 )
@@ -58,6 +59,7 @@ func main() {
 	tenantStore := tenants.NewStore(pool)
 	oauthStore := oauth.NewStore(pool, redisClient)
 	billingStore := billing.NewStore(pool)
+	researchStore := research.NewStore(pool)
 	sandboxStore := sandbox.NewStore(pool)
 
 	// Initialize services
@@ -86,6 +88,8 @@ func main() {
 	}
 	billingService := billing.NewService(billingStore, config.StripeSecretKey, config.StripeWebhookSecret, config.BaseURL, stripePriceIDs)
 
+	researchService := research.NewService(researchStore)
+
 	executor := sandbox.NewExecutor(
 		sandboxStore,
 		sandbox.ContainerConfig{
@@ -105,7 +109,7 @@ func main() {
 	)
 
 	// Initialize API server
-	server := api.NewServer(tenantService, oauthService, billingService, executor, tokenService)
+	server := api.NewServer(tenantService, oauthService, billingService, researchService, executor, tokenService)
 
 	// Start HTTP server
 	httpServer := &http.Server{

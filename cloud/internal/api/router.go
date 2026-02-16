@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -13,17 +14,19 @@ import (
 	"github.com/alekspetrov/pilot/cloud/internal/auth"
 	"github.com/alekspetrov/pilot/cloud/internal/billing"
 	"github.com/alekspetrov/pilot/cloud/internal/oauth"
+	"github.com/alekspetrov/pilot/cloud/internal/research"
 	"github.com/alekspetrov/pilot/cloud/internal/sandbox"
 	"github.com/alekspetrov/pilot/cloud/internal/tenants"
 )
 
 // Server handles HTTP requests
 type Server struct {
-	tenantService  *tenants.Service
-	oauthService   *oauth.Service
-	billingService *billing.Service
-	executor       *sandbox.Executor
-	tokenService   *auth.TokenService
+	tenantService   *tenants.Service
+	oauthService    *oauth.Service
+	billingService  *billing.Service
+	researchService *research.Service
+	executor        *sandbox.Executor
+	tokenService    *auth.TokenService
 }
 
 // NewServer creates a new API server
@@ -31,15 +34,17 @@ func NewServer(
 	tenantService *tenants.Service,
 	oauthService *oauth.Service,
 	billingService *billing.Service,
+	researchService *research.Service,
 	executor *sandbox.Executor,
 	tokenService *auth.TokenService,
 ) *Server {
 	return &Server{
-		tenantService:  tenantService,
-		oauthService:   oauthService,
-		billingService: billingService,
-		executor:       executor,
-		tokenService:   tokenService,
+		tenantService:   tenantService,
+		oauthService:    oauthService,
+		billingService:  billingService,
+		researchService: researchService,
+		executor:        executor,
+		tokenService:    tokenService,
 	}
 }
 
@@ -136,6 +141,36 @@ func (s *Server) Router() http.Handler {
 				r.Post("/checkout", s.createCheckoutSession)
 				r.Get("/portal", s.createPortalSession)
 				r.Post("/cancel", s.cancelSubscription)
+			})
+
+			// Researches
+			r.Route("/researches", func(r chi.Router) {
+				r.Get("/", s.listResearches)
+				r.Post("/", s.createResearch)
+				r.Get("/{researchID}", s.getResearch)
+				r.Put("/{researchID}", s.updateResearch)
+				r.Delete("/{researchID}", s.deleteResearch)
+
+				// Own app
+				r.Put("/{researchID}/own-app", s.setOwnApp)
+
+				// Notes
+				r.Route("/{researchID}/notes", func(r chi.Router) {
+					r.Get("/", s.listNotes)
+					r.Post("/", s.createNote)
+					r.Get("/{noteID}", s.getNote)
+					r.Put("/{noteID}", s.updateNote)
+					r.Delete("/{noteID}", s.deleteNote)
+				})
+
+				// Competitors
+				r.Route("/{researchID}/competitors", func(r chi.Router) {
+					r.Get("/", s.listCompetitors)
+					r.Post("/", s.addCompetitor)
+					r.Get("/{competitorID}", s.getCompetitor)
+					r.Put("/{competitorID}", s.updateCompetitor)
+					r.Delete("/{competitorID}", s.deleteCompetitor)
+				})
 			})
 
 			// Audit logs
@@ -672,6 +707,372 @@ func (s *Server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, []interface{}{})
+}
+
+// Research handlers
+
+func (s *Server) listResearches(w http.ResponseWriter, r *http.Request) {
+	orgID := getOrgIDFromContext(r.Context())
+
+	limit := 50
+	offset := 0
+
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil {
+			limit = parsed
+		}
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil {
+			offset = parsed
+		}
+	}
+
+	researches, err := s.researchService.ListResearches(r.Context(), orgID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, researches)
+}
+
+func (s *Server) createResearch(w http.ResponseWriter, r *http.Request) {
+	orgID := getOrgIDFromContext(r.Context())
+	userID, _ := auth.GetUserID(r.Context())
+
+	var input research.CreateResearchInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	res, err := s.researchService.CreateResearch(r.Context(), orgID, userID, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, res)
+}
+
+func (s *Server) getResearch(w http.ResponseWriter, r *http.Request) {
+	researchIDStr := chi.URLParam(r, "researchID")
+	researchID, err := uuid.Parse(researchIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid research ID")
+		return
+	}
+
+	res, notes, competitors, err := s.researchService.GetResearchWithDetails(r.Context(), researchID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "research not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"research":    res,
+		"notes":       notes,
+		"competitors": competitors,
+	})
+}
+
+func (s *Server) updateResearch(w http.ResponseWriter, r *http.Request) {
+	researchIDStr := chi.URLParam(r, "researchID")
+	researchID, err := uuid.Parse(researchIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid research ID")
+		return
+	}
+
+	var input research.UpdateResearchInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	res, err := s.researchService.UpdateResearch(r.Context(), researchID, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) deleteResearch(w http.ResponseWriter, r *http.Request) {
+	researchIDStr := chi.URLParam(r, "researchID")
+	researchID, err := uuid.Parse(researchIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid research ID")
+		return
+	}
+
+	if err := s.researchService.DeleteResearch(r.Context(), researchID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) setOwnApp(w http.ResponseWriter, r *http.Request) {
+	researchIDStr := chi.URLParam(r, "researchID")
+	researchID, err := uuid.Parse(researchIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid research ID")
+		return
+	}
+
+	var input struct {
+		AppID       string   `json:"app_id"`
+		AppName     string   `json:"app_name"`
+		IconURL     string   `json:"icon_url"`
+		Screenshots []string `json:"screenshots"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	res, err := s.researchService.SetOwnApp(r.Context(), researchID, input.AppID, input.AppName, input.IconURL, input.Screenshots)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, res)
+}
+
+// Note handlers
+
+func (s *Server) listNotes(w http.ResponseWriter, r *http.Request) {
+	researchIDStr := chi.URLParam(r, "researchID")
+	researchID, err := uuid.Parse(researchIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid research ID")
+		return
+	}
+
+	category := r.URL.Query().Get("category")
+	var notes []*research.OwnAppNote
+
+	if category != "" {
+		notes, err = s.researchService.ListNotesByCategory(r.Context(), researchID, research.NoteCategory(category))
+	} else {
+		notes, err = s.researchService.ListNotes(r.Context(), researchID)
+	}
+
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, notes)
+}
+
+func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
+	researchIDStr := chi.URLParam(r, "researchID")
+	researchID, err := uuid.Parse(researchIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid research ID")
+		return
+	}
+
+	userID, _ := auth.GetUserID(r.Context())
+
+	var input research.CreateNoteInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	note, err := s.researchService.CreateNote(r.Context(), researchID, userID, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, note)
+}
+
+func (s *Server) getNote(w http.ResponseWriter, r *http.Request) {
+	noteIDStr := chi.URLParam(r, "noteID")
+	noteID, err := uuid.Parse(noteIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid note ID")
+		return
+	}
+
+	note, err := s.researchService.GetNote(r.Context(), noteID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "note not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, note)
+}
+
+func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
+	noteIDStr := chi.URLParam(r, "noteID")
+	noteID, err := uuid.Parse(noteIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid note ID")
+		return
+	}
+
+	var input research.UpdateNoteInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	note, err := s.researchService.UpdateNote(r.Context(), noteID, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, note)
+}
+
+func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
+	noteIDStr := chi.URLParam(r, "noteID")
+	noteID, err := uuid.Parse(noteIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid note ID")
+		return
+	}
+
+	if err := s.researchService.DeleteNote(r.Context(), noteID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// Competitor handlers
+
+func (s *Server) listCompetitors(w http.ResponseWriter, r *http.Request) {
+	researchIDStr := chi.URLParam(r, "researchID")
+	researchID, err := uuid.Parse(researchIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid research ID")
+		return
+	}
+
+	competitors, err := s.researchService.ListCompetitors(r.Context(), researchID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, competitors)
+}
+
+func (s *Server) addCompetitor(w http.ResponseWriter, r *http.Request) {
+	researchIDStr := chi.URLParam(r, "researchID")
+	researchID, err := uuid.Parse(researchIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid research ID")
+		return
+	}
+
+	var input research.AddCompetitorInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	competitor, err := s.researchService.AddCompetitor(r.Context(), researchID, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, competitor)
+}
+
+func (s *Server) getCompetitor(w http.ResponseWriter, r *http.Request) {
+	competitorIDStr := chi.URLParam(r, "competitorID")
+	competitorID, err := uuid.Parse(competitorIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid competitor ID")
+		return
+	}
+
+	competitor, err := s.researchService.GetCompetitor(r.Context(), competitorID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "competitor not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, competitor)
+}
+
+func (s *Server) updateCompetitor(w http.ResponseWriter, r *http.Request) {
+	competitorIDStr := chi.URLParam(r, "competitorID")
+	competitorID, err := uuid.Parse(competitorIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid competitor ID")
+		return
+	}
+
+	competitor, err := s.researchService.GetCompetitor(r.Context(), competitorID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "competitor not found")
+		return
+	}
+
+	var input struct {
+		Name        *string  `json:"name,omitempty"`
+		IconURL     *string  `json:"icon_url,omitempty"`
+		Screenshots []string `json:"screenshots,omitempty"`
+		Notes       []string `json:"notes,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if input.Name != nil {
+		competitor.Name = *input.Name
+	}
+	if input.IconURL != nil {
+		competitor.IconURL = *input.IconURL
+	}
+	if input.Screenshots != nil {
+		competitor.Screenshots = input.Screenshots
+	}
+	if input.Notes != nil {
+		competitor.Notes = input.Notes
+	}
+
+	if err := s.researchService.UpdateCompetitor(r.Context(), competitor); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, competitor)
+}
+
+func (s *Server) deleteCompetitor(w http.ResponseWriter, r *http.Request) {
+	competitorIDStr := chi.URLParam(r, "competitorID")
+	competitorID, err := uuid.Parse(competitorIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid competitor ID")
+		return
+	}
+
+	if err := s.researchService.DeleteCompetitor(r.Context(), competitorID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // Helper functions
