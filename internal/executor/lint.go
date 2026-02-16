@@ -56,10 +56,13 @@ func (g *GitOperations) autoFixLint(ctx context.Context) *LintResult {
 			verifyResult := g.runLintCheck(ctx)
 			if verifyResult.Clean {
 				// Stage and amend the last commit
-				g.stageAndAmendCommit(ctx, "[lint fix] Auto-fixed linting issues")
-				result.FixedAll = true
-				result.Clean = true
-				result.Issues = []string{}
+				if amendErr := g.stageAndAmendCommit(ctx, "[lint fix] Auto-fixed linting issues"); amendErr != nil {
+					result.Issues = []string{fmt.Sprintf("failed to amend commit with lint fixes: %v", amendErr)}
+				} else {
+					result.FixedAll = true
+					result.Clean = true
+					result.Issues = []string{}
+				}
 			} else {
 				result.Issues = verifyResult.Issues
 			}
