@@ -12,7 +12,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/alekspetrov/pilot/internal/adapters/asana"
+	"github.com/alekspetrov/pilot/internal/adapters/azuredevops"
 	"github.com/alekspetrov/pilot/internal/adapters/github"
+	"github.com/alekspetrov/pilot/internal/adapters/gitlab"
 	"github.com/alekspetrov/pilot/internal/adapters/jira"
 	"github.com/alekspetrov/pilot/internal/adapters/linear"
 	"github.com/alekspetrov/pilot/internal/alerts"
@@ -1265,4 +1267,528 @@ func formatTokenCountComment(tokens int64) string {
 		return fmt.Sprintf("%.1fK", float64(tokens)/1000)
 	}
 	return fmt.Sprintf("%d", tokens)
+}
+
+// handleGitLabIssueWithResult processes a GitLab issue picked up by the poller (GH-1360)
+func handleGitLabIssueWithResult(ctx context.Context, cfg *config.Config, client *gitlab.Client, issue *gitlab.Issue, projectPath string, dispatcher *executor.Dispatcher, runner *executor.Runner, monitor *executor.Monitor, program *tea.Program, alertsEngine *alerts.Engine, enforcer *budget.Enforcer) (*gitlab.IssueResult, error) {
+	taskID := fmt.Sprintf("GL-%d", issue.IID)
+
+	// Register task with monitor if in dashboard mode
+	if monitor != nil {
+		monitor.Register(taskID, issue.Title, issue.WebURL)
+	}
+	if program != nil {
+		program.Send(dashboard.AddLog(fmt.Sprintf("🦊 GitLab Issue #%d: %s", issue.IID, issue.Title))())
+	}
+
+	// Emit task started event (GH-337)
+	if alertsEngine != nil {
+		alertsEngine.ProcessEvent(alerts.Event{
+			Type:      alerts.EventTypeTaskStarted,
+			TaskID:    taskID,
+			TaskTitle: issue.Title,
+			Project:   projectPath,
+			Timestamp: time.Now(),
+		})
+	}
+
+	// GH-539: Pre-execution budget check
+	if enforcer != nil {
+		checkResult, budgetErr := enforcer.CheckBudget(ctx, "", "")
+		if budgetErr != nil {
+			logging.WithComponent("budget").Warn("budget check failed, allowing task (fail-open)",
+				slog.String("task_id", taskID),
+				slog.Any("error", budgetErr),
+			)
+		} else if !checkResult.Allowed {
+			logging.WithComponent("budget").Warn("task blocked by budget enforcement",
+				slog.String("task_id", taskID),
+				slog.String("reason", checkResult.Reason),
+			)
+			if alertsEngine != nil {
+				alertsEngine.ProcessEvent(alerts.Event{
+					Type:      alerts.EventTypeBudgetExceeded,
+					TaskID:    taskID,
+					TaskTitle: issue.Title,
+					Project:   projectPath,
+					Error:     checkResult.Reason,
+					Metadata: map[string]string{
+						"daily_left":   fmt.Sprintf("%.2f", checkResult.DailyLeft),
+						"monthly_left": fmt.Sprintf("%.2f", checkResult.MonthlyLeft),
+						"action":       string(checkResult.Action),
+					},
+					Timestamp: time.Now(),
+				})
+			}
+			budgetExceededErr := fmt.Errorf("budget enforcement: %s", checkResult.Reason)
+			return &gitlab.IssueResult{
+				Success: false,
+				Error:   budgetExceededErr,
+			}, budgetExceededErr
+		}
+	}
+
+	fmt.Printf("\n🦊 GitLab Issue #%d: %s\n", issue.IID, issue.Title)
+
+	taskDesc := fmt.Sprintf("GitLab Issue #%d: %s\n\n%s", issue.IID, issue.Title, issue.Description)
+	branchName := fmt.Sprintf("pilot/%s", taskID)
+
+	task := &executor.Task{
+		ID:          taskID,
+		Title:       issue.Title,
+		Description: taskDesc,
+		ProjectPath: projectPath,
+		Branch:      branchName,
+		CreatePR:    true,
+	}
+
+	var result *executor.ExecutionResult
+	var execErr error
+
+	if dispatcher != nil {
+		execID, qErr := dispatcher.QueueTask(ctx, task)
+		if qErr != nil {
+			execErr = fmt.Errorf("failed to queue task: %w", qErr)
+		} else {
+			if monitor != nil {
+				monitor.Queue(taskID)
+			}
+			fmt.Printf("   📋 Queued as execution %s\n", execID[:8])
+			exec, waitErr := dispatcher.WaitForExecution(ctx, execID, time.Second)
+			if waitErr != nil {
+				execErr = fmt.Errorf("failed waiting for execution: %w", waitErr)
+			} else if exec.Status == "failed" {
+				execErr = fmt.Errorf("execution failed: %s", exec.Error)
+			} else {
+				result = &executor.ExecutionResult{
+					TaskID:    task.ID,
+					Success:   exec.Status == "completed",
+					Output:    exec.Output,
+					Error:     exec.Error,
+					PRUrl:     exec.PRUrl,
+					CommitSHA: exec.CommitSHA,
+					Duration:  time.Duration(exec.DurationMs) * time.Millisecond,
+				}
+			}
+		}
+	} else {
+		result, execErr = runner.Execute(ctx, task)
+	}
+
+	// Update monitor with completion status
+	prURL := ""
+	if result != nil {
+		prURL = result.PRUrl
+	}
+	if monitor != nil {
+		if execErr != nil {
+			monitor.Fail(taskID, execErr.Error())
+		} else {
+			monitor.Complete(taskID, prURL)
+		}
+	}
+
+	// Emit task completed/failed event (GH-337)
+	if alertsEngine != nil {
+		if execErr != nil {
+			alertsEngine.ProcessEvent(alerts.Event{
+				Type:      alerts.EventTypeTaskFailed,
+				TaskID:    taskID,
+				TaskTitle: issue.Title,
+				Project:   projectPath,
+				Error:     execErr.Error(),
+				Timestamp: time.Now(),
+			})
+		} else if result != nil && result.Success {
+			metadata := map[string]string{}
+			if result.PRUrl != "" {
+				metadata["pr_url"] = result.PRUrl
+			}
+			if result.Duration > 0 {
+				metadata["duration"] = result.Duration.String()
+			}
+			alertsEngine.ProcessEvent(alerts.Event{
+				Type:      alerts.EventTypeTaskCompleted,
+				TaskID:    taskID,
+				TaskTitle: issue.Title,
+				Project:   projectPath,
+				Metadata:  metadata,
+				Timestamp: time.Now(),
+			})
+		} else if result != nil {
+			alertsEngine.ProcessEvent(alerts.Event{
+				Type:      alerts.EventTypeTaskFailed,
+				TaskID:    taskID,
+				TaskTitle: issue.Title,
+				Project:   projectPath,
+				Error:     result.Error,
+				Timestamp: time.Now(),
+			})
+		}
+	}
+
+	// Add completed task to dashboard history
+	if program != nil {
+		status := "success"
+		duration := ""
+		if execErr != nil {
+			status = "failed"
+		} else if result != nil {
+			duration = result.Duration.String()
+		}
+		program.Send(dashboard.AddCompletedTask(taskID, issue.Title, status, duration, "", false)())
+	}
+
+	// Build issue result
+	issueResult := &gitlab.IssueResult{
+		Success: execErr == nil && result != nil && result.Success,
+	}
+	if result != nil {
+		if result.PRUrl != "" {
+			issueResult.MRURL = result.PRUrl
+			if prNum, err := github.ExtractPRNumber(result.PRUrl); err == nil {
+				issueResult.MRNumber = prNum
+			}
+		}
+	}
+
+	// Add note to GitLab issue
+	if execErr != nil {
+		comment := fmt.Sprintf("❌ Pilot execution failed:\n\n```\n%s\n```", execErr.Error())
+		if _, err := client.AddIssueNote(ctx, issue.IID, comment); err != nil {
+			logging.WithComponent("gitlab").Warn("Failed to add note",
+				slog.Int("issue", issue.IID),
+				slog.Any("error", err),
+			)
+		}
+	} else if result != nil && result.Success {
+		// Validate deliverables before marking as done
+		if result.CommitSHA == "" && result.PRUrl == "" {
+			comment := fmt.Sprintf("⚠️ Pilot execution completed but no changes were made.\n\n**Duration:** %s\n**Branch:** `%s`\n\nNo commits or MR were created. The task may need clarification or manual intervention.",
+				result.Duration, branchName)
+			if _, err := client.AddIssueNote(ctx, issue.IID, comment); err != nil {
+				logging.WithComponent("gitlab").Warn("Failed to add note",
+					slog.Int("issue", issue.IID),
+					slog.Any("error", err),
+				)
+			}
+			issueResult.Success = false
+		} else {
+			comment := buildGitLabExecutionComment(result, branchName)
+			if _, err := client.AddIssueNote(ctx, issue.IID, comment); err != nil {
+				logging.WithComponent("gitlab").Warn("Failed to add note",
+					slog.Int("issue", issue.IID),
+					slog.Any("error", err),
+				)
+			}
+		}
+	} else if result != nil {
+		comment := buildGitLabFailureComment(result)
+		if _, err := client.AddIssueNote(ctx, issue.IID, comment); err != nil {
+			logging.WithComponent("gitlab").Warn("Failed to add note",
+				slog.Int("issue", issue.IID),
+				slog.Any("error", err),
+			)
+		}
+	}
+
+	return issueResult, execErr
+}
+
+// buildGitLabExecutionComment creates a comment for successful GitLab execution
+func buildGitLabExecutionComment(result *executor.ExecutionResult, branchName string) string {
+	var parts []string
+	parts = append(parts, "✅ Pilot execution completed successfully!")
+	parts = append(parts, "")
+
+	if result.PRUrl != "" {
+		parts = append(parts, fmt.Sprintf("**Merge Request:** %s", result.PRUrl))
+	}
+	if result.CommitSHA != "" {
+		parts = append(parts, fmt.Sprintf("**Commit:** `%s`", result.CommitSHA[:min(8, len(result.CommitSHA))]))
+	}
+	parts = append(parts, fmt.Sprintf("**Branch:** `%s`", branchName))
+	parts = append(parts, fmt.Sprintf("**Duration:** %s", result.Duration))
+
+	return strings.Join(parts, "\n")
+}
+
+// buildGitLabFailureComment creates a comment for failed GitLab execution
+func buildGitLabFailureComment(result *executor.ExecutionResult) string {
+	var parts []string
+	parts = append(parts, "❌ Pilot execution failed")
+	parts = append(parts, "")
+	if result.Error != "" {
+		parts = append(parts, fmt.Sprintf("**Error:** %s", result.Error))
+	}
+	if result.Duration > 0 {
+		parts = append(parts, fmt.Sprintf("**Duration:** %s", result.Duration))
+	}
+	return strings.Join(parts, "\n")
+}
+
+// handleAzureDevOpsWorkItemWithResult processes an Azure DevOps work item picked up by the poller (GH-1360)
+func handleAzureDevOpsWorkItemWithResult(ctx context.Context, cfg *config.Config, client *azuredevops.Client, item *azuredevops.WorkItem, projectPath string, dispatcher *executor.Dispatcher, runner *executor.Runner, monitor *executor.Monitor, program *tea.Program, alertsEngine *alerts.Engine, enforcer *budget.Enforcer) (*azuredevops.WorkItemResult, error) {
+	taskID := fmt.Sprintf("ADO-%d", item.ID)
+	title := item.GetTitle()
+
+	// Get work item URL
+	itemURL := fmt.Sprintf("%s/%s/%s/_workitems/edit/%d",
+		cfg.Adapters.AzureDevOps.BaseURL,
+		cfg.Adapters.AzureDevOps.Organization,
+		cfg.Adapters.AzureDevOps.Project,
+		item.ID)
+
+	// Register task with monitor if in dashboard mode
+	if monitor != nil {
+		monitor.Register(taskID, title, itemURL)
+	}
+	if program != nil {
+		program.Send(dashboard.AddLog(fmt.Sprintf("🔷 Azure DevOps Work Item #%d: %s", item.ID, title))())
+	}
+
+	// Emit task started event (GH-337)
+	if alertsEngine != nil {
+		alertsEngine.ProcessEvent(alerts.Event{
+			Type:      alerts.EventTypeTaskStarted,
+			TaskID:    taskID,
+			TaskTitle: title,
+			Project:   projectPath,
+			Timestamp: time.Now(),
+		})
+	}
+
+	// GH-539: Pre-execution budget check
+	if enforcer != nil {
+		checkResult, budgetErr := enforcer.CheckBudget(ctx, "", "")
+		if budgetErr != nil {
+			logging.WithComponent("budget").Warn("budget check failed, allowing task (fail-open)",
+				slog.String("task_id", taskID),
+				slog.Any("error", budgetErr),
+			)
+		} else if !checkResult.Allowed {
+			logging.WithComponent("budget").Warn("task blocked by budget enforcement",
+				slog.String("task_id", taskID),
+				slog.String("reason", checkResult.Reason),
+			)
+			if alertsEngine != nil {
+				alertsEngine.ProcessEvent(alerts.Event{
+					Type:      alerts.EventTypeBudgetExceeded,
+					TaskID:    taskID,
+					TaskTitle: title,
+					Project:   projectPath,
+					Error:     checkResult.Reason,
+					Metadata: map[string]string{
+						"daily_left":   fmt.Sprintf("%.2f", checkResult.DailyLeft),
+						"monthly_left": fmt.Sprintf("%.2f", checkResult.MonthlyLeft),
+						"action":       string(checkResult.Action),
+					},
+					Timestamp: time.Now(),
+				})
+			}
+			budgetExceededErr := fmt.Errorf("budget enforcement: %s", checkResult.Reason)
+			return &azuredevops.WorkItemResult{
+				Success: false,
+				Error:   budgetExceededErr,
+			}, budgetExceededErr
+		}
+	}
+
+	fmt.Printf("\n🔷 Azure DevOps Work Item #%d: %s\n", item.ID, title)
+
+	taskDesc := fmt.Sprintf("Azure DevOps Work Item #%d: %s\n\n%s", item.ID, title, item.GetDescription())
+	branchName := fmt.Sprintf("pilot/%s", taskID)
+
+	task := &executor.Task{
+		ID:          taskID,
+		Title:       title,
+		Description: taskDesc,
+		ProjectPath: projectPath,
+		Branch:      branchName,
+		CreatePR:    true,
+	}
+
+	var result *executor.ExecutionResult
+	var execErr error
+
+	if dispatcher != nil {
+		execID, qErr := dispatcher.QueueTask(ctx, task)
+		if qErr != nil {
+			execErr = fmt.Errorf("failed to queue task: %w", qErr)
+		} else {
+			if monitor != nil {
+				monitor.Queue(taskID)
+			}
+			fmt.Printf("   📋 Queued as execution %s\n", execID[:8])
+			exec, waitErr := dispatcher.WaitForExecution(ctx, execID, time.Second)
+			if waitErr != nil {
+				execErr = fmt.Errorf("failed waiting for execution: %w", waitErr)
+			} else if exec.Status == "failed" {
+				execErr = fmt.Errorf("execution failed: %s", exec.Error)
+			} else {
+				result = &executor.ExecutionResult{
+					TaskID:    task.ID,
+					Success:   exec.Status == "completed",
+					Output:    exec.Output,
+					Error:     exec.Error,
+					PRUrl:     exec.PRUrl,
+					CommitSHA: exec.CommitSHA,
+					Duration:  time.Duration(exec.DurationMs) * time.Millisecond,
+				}
+			}
+		}
+	} else {
+		result, execErr = runner.Execute(ctx, task)
+	}
+
+	// Update monitor with completion status
+	prURL := ""
+	if result != nil {
+		prURL = result.PRUrl
+	}
+	if monitor != nil {
+		if execErr != nil {
+			monitor.Fail(taskID, execErr.Error())
+		} else {
+			monitor.Complete(taskID, prURL)
+		}
+	}
+
+	// Emit task completed/failed event (GH-337)
+	if alertsEngine != nil {
+		if execErr != nil {
+			alertsEngine.ProcessEvent(alerts.Event{
+				Type:      alerts.EventTypeTaskFailed,
+				TaskID:    taskID,
+				TaskTitle: title,
+				Project:   projectPath,
+				Error:     execErr.Error(),
+				Timestamp: time.Now(),
+			})
+		} else if result != nil && result.Success {
+			metadata := map[string]string{}
+			if result.PRUrl != "" {
+				metadata["pr_url"] = result.PRUrl
+			}
+			if result.Duration > 0 {
+				metadata["duration"] = result.Duration.String()
+			}
+			alertsEngine.ProcessEvent(alerts.Event{
+				Type:      alerts.EventTypeTaskCompleted,
+				TaskID:    taskID,
+				TaskTitle: title,
+				Project:   projectPath,
+				Metadata:  metadata,
+				Timestamp: time.Now(),
+			})
+		} else if result != nil {
+			alertsEngine.ProcessEvent(alerts.Event{
+				Type:      alerts.EventTypeTaskFailed,
+				TaskID:    taskID,
+				TaskTitle: title,
+				Project:   projectPath,
+				Error:     result.Error,
+				Timestamp: time.Now(),
+			})
+		}
+	}
+
+	// Add completed task to dashboard history
+	if program != nil {
+		status := "success"
+		duration := ""
+		if execErr != nil {
+			status = "failed"
+		} else if result != nil {
+			duration = result.Duration.String()
+		}
+		program.Send(dashboard.AddCompletedTask(taskID, title, status, duration, "", false)())
+	}
+
+	// Build work item result
+	itemResult := &azuredevops.WorkItemResult{
+		Success: execErr == nil && result != nil && result.Success,
+	}
+	if result != nil {
+		if result.PRUrl != "" {
+			itemResult.PRURL = result.PRUrl
+			if prNum, err := github.ExtractPRNumber(result.PRUrl); err == nil {
+				itemResult.PRNumber = prNum
+			}
+		}
+	}
+
+	// Add comment to Azure DevOps work item
+	if execErr != nil {
+		comment := fmt.Sprintf("❌ Pilot execution failed:\n\n%s", execErr.Error())
+		if _, err := client.AddWorkItemComment(ctx, item.ID, comment); err != nil {
+			logging.WithComponent("azuredevops").Warn("Failed to add comment",
+				slog.Int("workitem", item.ID),
+				slog.Any("error", err),
+			)
+		}
+	} else if result != nil && result.Success {
+		// Validate deliverables before marking as done
+		if result.CommitSHA == "" && result.PRUrl == "" {
+			comment := fmt.Sprintf("⚠️ Pilot execution completed but no changes were made.\n\nDuration: %s\nBranch: %s\n\nNo commits or PR were created. The task may need clarification or manual intervention.",
+				result.Duration, branchName)
+			if _, err := client.AddWorkItemComment(ctx, item.ID, comment); err != nil {
+				logging.WithComponent("azuredevops").Warn("Failed to add comment",
+					slog.Int("workitem", item.ID),
+					slog.Any("error", err),
+				)
+			}
+			itemResult.Success = false
+		} else {
+			comment := buildAzureDevOpsExecutionComment(result, branchName)
+			if _, err := client.AddWorkItemComment(ctx, item.ID, comment); err != nil {
+				logging.WithComponent("azuredevops").Warn("Failed to add comment",
+					slog.Int("workitem", item.ID),
+					slog.Any("error", err),
+				)
+			}
+		}
+	} else if result != nil {
+		comment := buildAzureDevOpsFailureComment(result)
+		if _, err := client.AddWorkItemComment(ctx, item.ID, comment); err != nil {
+			logging.WithComponent("azuredevops").Warn("Failed to add comment",
+				slog.Int("workitem", item.ID),
+				slog.Any("error", err),
+			)
+		}
+	}
+
+	return itemResult, execErr
+}
+
+// buildAzureDevOpsExecutionComment creates a comment for successful Azure DevOps execution
+func buildAzureDevOpsExecutionComment(result *executor.ExecutionResult, branchName string) string {
+	var parts []string
+	parts = append(parts, "✅ Pilot execution completed successfully!")
+	parts = append(parts, "")
+
+	if result.PRUrl != "" {
+		parts = append(parts, fmt.Sprintf("Pull Request: %s", result.PRUrl))
+	}
+	if result.CommitSHA != "" {
+		parts = append(parts, fmt.Sprintf("Commit: %s", result.CommitSHA[:min(8, len(result.CommitSHA))]))
+	}
+	parts = append(parts, fmt.Sprintf("Branch: %s", branchName))
+	parts = append(parts, fmt.Sprintf("Duration: %s", result.Duration))
+
+	return strings.Join(parts, "\n")
+}
+
+// buildAzureDevOpsFailureComment creates a comment for failed Azure DevOps execution
+func buildAzureDevOpsFailureComment(result *executor.ExecutionResult) string {
+	var parts []string
+	parts = append(parts, "❌ Pilot execution failed")
+	parts = append(parts, "")
+	if result.Error != "" {
+		parts = append(parts, fmt.Sprintf("Error: %s", result.Error))
+	}
+	if result.Duration > 0 {
+		parts = append(parts, fmt.Sprintf("Duration: %s", result.Duration))
+	}
+	return strings.Join(parts, "\n")
 }

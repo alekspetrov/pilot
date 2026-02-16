@@ -19,7 +19,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/alekspetrov/pilot/internal/adapters/asana"
+	"github.com/alekspetrov/pilot/internal/adapters/azuredevops"
 	"github.com/alekspetrov/pilot/internal/adapters/github"
+	"github.com/alekspetrov/pilot/internal/adapters/gitlab"
 	"github.com/alekspetrov/pilot/internal/adapters/jira"
 	"github.com/alekspetrov/pilot/internal/adapters/linear"
 	"github.com/alekspetrov/pilot/internal/adapters/slack"
@@ -857,11 +859,25 @@ Examples:
 					cfg.Adapters.Jira.APIToken,
 					cfg.Adapters.Jira.Platform,
 				)
-				jiraPoller := jira.NewPoller(jiraClient, cfg.Adapters.Jira, interval,
+
+				// Build poller options
+				gwJiraPollerOpts := []jira.PollerOption{
 					jira.WithOnJiraIssue(func(issueCtx context.Context, issue *jira.Issue) (*jira.IssueResult, error) {
 						return handleJiraIssueWithResult(issueCtx, cfg, jiraClient, issue, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
 					}),
-				)
+				}
+
+				// GH-1360: Wire processed issue persistence to prevent re-dispatch after hot upgrade
+				if gwAutopilotStateStore != nil {
+					gwJiraPollerOpts = append(gwJiraPollerOpts, jira.WithProcessedStore(gwAutopilotStateStore))
+				}
+
+				// GH-1360: Pass max_concurrent config to poller
+				if cfg.Orchestrator != nil && cfg.Orchestrator.MaxConcurrent > 0 {
+					gwJiraPollerOpts = append(gwJiraPollerOpts, jira.WithMaxConcurrent(cfg.Orchestrator.MaxConcurrent))
+				}
+
+				jiraPoller := jira.NewPoller(jiraClient, cfg.Adapters.Jira, interval, gwJiraPollerOpts...)
 
 				logging.WithComponent("start").Info("Jira polling enabled in gateway mode",
 					slog.String("base_url", cfg.Adapters.Jira.BaseURL),
@@ -891,11 +907,25 @@ Examples:
 					cfg.Adapters.Asana.AccessToken,
 					cfg.Adapters.Asana.WorkspaceID,
 				)
-				asanaPoller := asana.NewPoller(asanaClient, cfg.Adapters.Asana, interval,
+
+				// Build poller options
+				gwAsanaPollerOpts := []asana.PollerOption{
 					asana.WithOnAsanaTask(func(taskCtx context.Context, task *asana.Task) (*asana.TaskResult, error) {
 						return handleAsanaTaskWithResult(taskCtx, cfg, asanaClient, task, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
 					}),
-				)
+				}
+
+				// GH-1360: Wire processed task persistence to prevent re-dispatch after hot upgrade
+				if gwAutopilotStateStore != nil {
+					gwAsanaPollerOpts = append(gwAsanaPollerOpts, asana.WithProcessedStore(gwAutopilotStateStore))
+				}
+
+				// GH-1360: Pass max_concurrent config to poller
+				if cfg.Orchestrator != nil && cfg.Orchestrator.MaxConcurrent > 0 {
+					gwAsanaPollerOpts = append(gwAsanaPollerOpts, asana.WithMaxConcurrent(cfg.Orchestrator.MaxConcurrent))
+				}
+
+				asanaPoller := asana.NewPoller(asanaClient, cfg.Adapters.Asana, interval, gwAsanaPollerOpts...)
 
 				logging.WithComponent("start").Info("Asana polling enabled in gateway mode",
 					slog.String("workspace", cfg.Adapters.Asana.WorkspaceID),
@@ -1617,6 +1647,13 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 	var ghPollers []*github.Poller
 	polledRepos := make(map[string]bool) // Track repos already polled to avoid duplicates
 
+	// GH-1360: Track all poller types for drain coordination during hot upgrade
+	var linearPollers []*linear.Poller
+	var jiraPollers []*jira.Poller
+	var asanaPollers []*asana.Poller
+	var gitlabPollers []*gitlab.Poller
+	var azuredevopsPollers []*azuredevops.Poller
+
 	if cfg.Adapters.GitHub != nil && cfg.Adapters.GitHub.Enabled &&
 		cfg.Adapters.GitHub.Polling != nil && cfg.Adapters.GitHub.Polling.Enabled {
 
@@ -1941,7 +1978,13 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 				linearPollerOpts = append(linearPollerOpts, linear.WithProcessedStore(autopilotStateStore))
 			}
 
+			// GH-1360: Pass max_concurrent config to poller
+			if cfg.Orchestrator != nil && cfg.Orchestrator.MaxConcurrent > 0 {
+				linearPollerOpts = append(linearPollerOpts, linear.WithMaxConcurrent(cfg.Orchestrator.MaxConcurrent))
+			}
+
 			linearPoller := linear.NewPoller(linearClient, ws, interval, linearPollerOpts...)
+			linearPollers = append(linearPollers, linearPoller) // GH-1360: Track for drain coordination
 
 			if !dashboardMode {
 				fmt.Printf("📊 Linear polling enabled: %s/%s (every %s)\n", ws.Name, ws.TeamID, interval)
@@ -1971,11 +2014,26 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 			cfg.Adapters.Asana.AccessToken,
 			cfg.Adapters.Asana.WorkspaceID,
 		)
-		asanaPoller := asana.NewPoller(asanaClient, cfg.Adapters.Asana, interval,
+
+		// Build poller options
+		asanaPollerOpts := []asana.PollerOption{
 			asana.WithOnAsanaTask(func(taskCtx context.Context, task *asana.Task) (*asana.TaskResult, error) {
 				return handleAsanaTaskWithResult(taskCtx, cfg, asanaClient, task, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
 			}),
-		)
+		}
+
+		// GH-1360: Wire processed task persistence to prevent re-dispatch after hot upgrade
+		if autopilotStateStore != nil {
+			asanaPollerOpts = append(asanaPollerOpts, asana.WithProcessedStore(autopilotStateStore))
+		}
+
+		// GH-1360: Pass max_concurrent config to poller
+		if cfg.Orchestrator != nil && cfg.Orchestrator.MaxConcurrent > 0 {
+			asanaPollerOpts = append(asanaPollerOpts, asana.WithMaxConcurrent(cfg.Orchestrator.MaxConcurrent))
+		}
+
+		asanaPoller := asana.NewPoller(asanaClient, cfg.Adapters.Asana, interval, asanaPollerOpts...)
+		asanaPollers = append(asanaPollers, asanaPoller) // GH-1360: Track for drain coordination
 
 		if !dashboardMode {
 			fmt.Printf("📦 Asana polling enabled: workspace %s (every %s)\n", cfg.Adapters.Asana.WorkspaceID, interval)
@@ -1987,6 +2045,153 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 				)
 			}
 		}(asanaPoller)
+	}
+
+	// Start Jira polling if enabled (GH-1360)
+	if cfg.Adapters.Jira != nil && cfg.Adapters.Jira.Enabled &&
+		cfg.Adapters.Jira.Polling != nil && cfg.Adapters.Jira.Polling.Enabled {
+
+		// Determine interval
+		interval := 30 * time.Second
+		if cfg.Adapters.Jira.Polling.Interval > 0 {
+			interval = cfg.Adapters.Jira.Polling.Interval
+		}
+
+		jiraClient := jira.NewClient(
+			cfg.Adapters.Jira.BaseURL,
+			cfg.Adapters.Jira.Username,
+			cfg.Adapters.Jira.APIToken,
+			cfg.Adapters.Jira.Platform,
+		)
+
+		// Build poller options
+		jiraPollerOpts := []jira.PollerOption{
+			jira.WithOnJiraIssue(func(issueCtx context.Context, issue *jira.Issue) (*jira.IssueResult, error) {
+				return handleJiraIssueWithResult(issueCtx, cfg, jiraClient, issue, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
+			}),
+		}
+
+		// GH-1360: Wire processed issue persistence to prevent re-dispatch after hot upgrade
+		if autopilotStateStore != nil {
+			jiraPollerOpts = append(jiraPollerOpts, jira.WithProcessedStore(autopilotStateStore))
+		}
+
+		// GH-1360: Pass max_concurrent config to poller
+		if cfg.Orchestrator != nil && cfg.Orchestrator.MaxConcurrent > 0 {
+			jiraPollerOpts = append(jiraPollerOpts, jira.WithMaxConcurrent(cfg.Orchestrator.MaxConcurrent))
+		}
+
+		jiraPoller := jira.NewPoller(jiraClient, cfg.Adapters.Jira, interval, jiraPollerOpts...)
+		jiraPollers = append(jiraPollers, jiraPoller) // GH-1360: Track for drain coordination
+
+		if !dashboardMode {
+			fmt.Printf("🎫 Jira polling enabled: %s/%s (every %s)\n", cfg.Adapters.Jira.BaseURL, cfg.Adapters.Jira.ProjectKey, interval)
+		}
+		go func(p *jira.Poller) {
+			if err := p.Start(ctx); err != nil {
+				logging.WithComponent("jira").Error("Jira poller failed",
+					slog.Any("error", err),
+				)
+			}
+		}(jiraPoller)
+	}
+
+	// Start GitLab polling if enabled (GH-1360)
+	if cfg.Adapters.GitLab != nil && cfg.Adapters.GitLab.Enabled &&
+		cfg.Adapters.GitLab.Polling != nil && cfg.Adapters.GitLab.Polling.Enabled {
+
+		// Determine interval
+		interval := 30 * time.Second
+		if cfg.Adapters.GitLab.Polling.Interval > 0 {
+			interval = cfg.Adapters.GitLab.Polling.Interval
+		}
+
+		gitlabClient := gitlab.NewClient(
+			cfg.Adapters.GitLab.Token,
+			cfg.Adapters.GitLab.BaseURL,
+		)
+
+		label := cfg.Adapters.GitLab.Polling.Label
+		if label == "" {
+			label = cfg.Adapters.GitLab.PilotLabel
+		}
+
+		// Build poller options
+		gitlabPollerOpts := []gitlab.PollerOption{
+			gitlab.WithOnIssueWithResult(func(issueCtx context.Context, issue *gitlab.Issue) (*gitlab.IssueResult, error) {
+				return handleGitLabIssueWithResult(issueCtx, cfg, gitlabClient, issue, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
+			}),
+		}
+
+		// GH-1360: Wire processed issue persistence to prevent re-dispatch after hot upgrade
+		if autopilotStateStore != nil {
+			gitlabPollerOpts = append(gitlabPollerOpts, gitlab.WithProcessedStore(autopilotStateStore))
+		}
+
+		// GH-1360: Pass max_concurrent config to poller
+		if cfg.Orchestrator != nil && cfg.Orchestrator.MaxConcurrent > 0 {
+			gitlabPollerOpts = append(gitlabPollerOpts, gitlab.WithMaxConcurrent(cfg.Orchestrator.MaxConcurrent))
+		}
+
+		gitlabPoller := gitlab.NewPoller(gitlabClient, label, interval, gitlabPollerOpts...)
+		gitlabPollers = append(gitlabPollers, gitlabPoller) // GH-1360: Track for drain coordination
+
+		if !dashboardMode {
+			fmt.Printf("🦊 GitLab polling enabled: %s (every %s)\n", cfg.Adapters.GitLab.Project, interval)
+		}
+		go gitlabPoller.Start(ctx)
+	}
+
+	// Start Azure DevOps polling if enabled (GH-1360)
+	if cfg.Adapters.AzureDevOps != nil && cfg.Adapters.AzureDevOps.Enabled &&
+		cfg.Adapters.AzureDevOps.Polling != nil && cfg.Adapters.AzureDevOps.Polling.Enabled {
+
+		// Determine interval
+		interval := 30 * time.Second
+		if cfg.Adapters.AzureDevOps.Polling.Interval > 0 {
+			interval = cfg.Adapters.AzureDevOps.Polling.Interval
+		}
+
+		azureClient := azuredevops.NewClient(
+			cfg.Adapters.AzureDevOps.PAT,
+			cfg.Adapters.AzureDevOps.Organization,
+			cfg.Adapters.AzureDevOps.Project,
+		)
+
+		tag := cfg.Adapters.AzureDevOps.PilotTag
+		if tag == "" {
+			tag = "pilot"
+		}
+
+		// Build poller options
+		azurePollerOpts := []azuredevops.PollerOption{
+			azuredevops.WithOnWorkItemWithResult(func(itemCtx context.Context, item *azuredevops.WorkItem) (*azuredevops.WorkItemResult, error) {
+				return handleAzureDevOpsWorkItemWithResult(itemCtx, cfg, azureClient, item, projectPath, dispatcher, runner, monitor, program, alertsEngine, enforcer)
+			}),
+		}
+
+		// GH-1360: Wire processed work item persistence to prevent re-dispatch after hot upgrade
+		if autopilotStateStore != nil {
+			azurePollerOpts = append(azurePollerOpts, azuredevops.WithProcessedStore(autopilotStateStore))
+		}
+
+		// GH-1360: Pass max_concurrent config to poller
+		if cfg.Orchestrator != nil && cfg.Orchestrator.MaxConcurrent > 0 {
+			azurePollerOpts = append(azurePollerOpts, azuredevops.WithMaxConcurrent(cfg.Orchestrator.MaxConcurrent))
+		}
+
+		// Add work item types filter if configured
+		if len(cfg.Adapters.AzureDevOps.WorkItemTypes) > 0 {
+			azurePollerOpts = append(azurePollerOpts, azuredevops.WithWorkItemTypes(cfg.Adapters.AzureDevOps.WorkItemTypes))
+		}
+
+		azurePoller := azuredevops.NewPoller(azureClient, tag, interval, azurePollerOpts...)
+		azuredevopsPollers = append(azuredevopsPollers, azurePoller) // GH-1360: Track for drain coordination
+
+		if !dashboardMode {
+			fmt.Printf("🔷 Azure DevOps polling enabled: %s/%s (every %s)\n", cfg.Adapters.AzureDevOps.Organization, cfg.Adapters.AzureDevOps.Project, interval)
+		}
+		go azurePoller.Start(ctx)
 	}
 
 	// Start Telegram polling if enabled
@@ -2113,9 +2318,24 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 						continue
 					}
 
-					// Drain pollers — stop accepting new issues before upgrade
+					// GH-1360: Drain all pollers — stop accepting new issues before upgrade
 					program.Send(dashboard.AddLog("⏳ Draining pollers — no new issues will be accepted...")())
 					for _, p := range ghPollers {
+						go p.Drain()
+					}
+					for _, p := range linearPollers {
+						go p.Drain()
+					}
+					for _, p := range jiraPollers {
+						go p.Drain()
+					}
+					for _, p := range asanaPollers {
+						go p.Drain()
+					}
+					for _, p := range gitlabPollers {
+						go p.Drain()
+					}
+					for _, p := range azuredevopsPollers {
 						go p.Drain()
 					}
 
