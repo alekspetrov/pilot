@@ -1254,12 +1254,13 @@ func TestPoller_RecoverOrphanedIssues(t *testing.T) {
 			}
 		case http.MethodDelete:
 			// Track label removal calls
-			if r.URL.Path == "/repos/owner/repo/issues/123/labels/pilot-in-progress" {
+			switch r.URL.Path {
+			case "/repos/owner/repo/issues/123/labels/pilot-in-progress":
 				mu.Lock()
 				removedLabels = append(removedLabels, 123)
 				mu.Unlock()
 				w.WriteHeader(http.StatusOK)
-			} else if r.URL.Path == "/repos/owner/repo/issues/456/labels/pilot-in-progress" {
+			case "/repos/owner/repo/issues/456/labels/pilot-in-progress":
 				mu.Lock()
 				removedLabels = append(removedLabels, 456)
 				mu.Unlock()
