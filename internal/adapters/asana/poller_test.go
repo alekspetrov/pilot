@@ -620,8 +620,8 @@ func TestPollerWithProcessedStore(t *testing.T) {
 	store := NewMockProcessedStore()
 
 	// Pre-populate store
-	store.MarkAsanaTaskProcessed("task-1", "processed")
-	store.MarkAsanaTaskProcessed("task-2", "processed")
+	_ = store.MarkAsanaTaskProcessed("task-1", "processed")
+	_ = store.MarkAsanaTaskProcessed("task-2", "processed")
 
 	poller := NewPoller(client, config, 30*time.Second,
 		WithProcessedStore(store),
