@@ -409,12 +409,13 @@ func extractSection(text, startMarker, endMarker string) string {
 	remaining := text[contentStart:]
 
 	// Find the end boundary - look for next section with same level
+	// Use newline + endMarker to ensure we match section headers at line start,
+	// not substrings within headers (e.g., "## " within "### ")
 	endIdx := len(remaining)
-	if endMarker != "" && len(remaining) > 1 {
-		// Search from after the newline to avoid matching current section
-		searchText := remaining[1:] // Skip first character to avoid self-match
-		if nextIdx := strings.Index(searchText, endMarker); nextIdx != -1 {
-			endIdx = nextIdx + 1 // Add 1 because we skipped first character
+	if endMarker != "" {
+		lineMarker := "\n" + endMarker
+		if nextIdx := strings.Index(remaining, lineMarker); nextIdx != -1 {
+			endIdx = nextIdx
 		}
 	}
 
