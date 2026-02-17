@@ -468,11 +468,12 @@ If the question is too broad, ask for clarification instead of exploring everyth
 	// Create a read-only task (no branch, no PR)
 	taskID := fmt.Sprintf("Q-%d", time.Now().Unix())
 	task := &executor.Task{
-		ID:          taskID,
-		Title:       "Question: " + truncateText(question, 40),
-		Description: prompt,
-		ProjectPath: h.getActiveProjectPath(channelID),
-		Verbose:     false,
+		ID:            taskID,
+		Title:         "Question: " + truncateText(question, 40),
+		Description:   prompt,
+		ProjectPath:   h.getActiveProjectPath(channelID),
+		Verbose:       false,
+		SourceAdapter: "slack", // GH-1433: explicitly mark Slack source
 	}
 
 	// Execute with timeout context
@@ -537,8 +538,9 @@ Provide findings in a structured format with:
 - Recommendations
 
 DO NOT make any code changes. This is a read-only research task.`, query),
-		ProjectPath: h.getActiveProjectPath(channelID),
-		CreatePR:    false,
+		ProjectPath:   h.getActiveProjectPath(channelID),
+		CreatePR:      false,
+		SourceAdapter: "slack", // GH-1433: explicitly mark Slack source
 	}
 
 	// Execute with timeout (3 minutes for research)
@@ -615,8 +617,9 @@ Explore the codebase and propose a detailed plan. Include:
 4. Potential risks or considerations
 
 DO NOT make any code changes. Only explore and plan.`, request),
-		ProjectPath: h.getActiveProjectPath(channelID),
-		CreatePR:    false,
+		ProjectPath:   h.getActiveProjectPath(channelID),
+		CreatePR:      false,
+		SourceAdapter: "slack", // GH-1433: explicitly mark Slack source
 	}
 
 	// Execute with timeout (2 minutes for planning)
@@ -712,8 +715,9 @@ Respond helpfully and conversationally. You can reference project knowledge but 
 Be concise - this is a chat conversation, not a report. Keep response under 500 words.
 
 User message: %s`, h.getActiveProjectPath(channelID), message),
-		ProjectPath: h.getActiveProjectPath(channelID),
-		CreatePR:    false,
+		ProjectPath:   h.getActiveProjectPath(channelID),
+		CreatePR:      false,
+		SourceAdapter: "slack", // GH-1433: explicitly mark Slack source
 	}
 
 	// Execute with short timeout (60 seconds for chat)
@@ -917,15 +921,16 @@ func (h *Handler) executeTask(ctx context.Context, channelID, threadTS, taskID, 
 	}
 
 	task := &executor.Task{
-		ID:          taskID,
-		Title:       truncateText(description, 50),
-		Description: description,
-		ProjectPath: h.getActiveProjectPath(channelID),
-		Verbose:     false,
-		Branch:      branch,
-		BaseBranch:  baseBranch,
-		CreatePR:    createPR,
-		MemberID:    h.resolveMemberID(channelID), // RBAC lookup
+		ID:            taskID,
+		Title:         truncateText(description, 50),
+		Description:   description,
+		ProjectPath:   h.getActiveProjectPath(channelID),
+		Verbose:       false,
+		Branch:        branch,
+		BaseBranch:    baseBranch,
+		CreatePR:      createPR,
+		MemberID:      h.resolveMemberID(channelID), // RBAC lookup
+		SourceAdapter: "slack",                      // GH-1433: explicitly mark Slack source
 	}
 
 	// Set up progress callback with throttling

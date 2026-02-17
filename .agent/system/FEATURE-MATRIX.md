@@ -35,6 +35,7 @@
 | Self-review alignment | ✅ | executor | - | - | Verify files in issue title were actually modified (v0.33.14) |
 | Nav-loop mode | ✅ | executor | - | - | Structured autonomous execution with NAVIGATOR_STATUS (v0.33.15) |
 | Navigator auto-init | ✅ | executor | - | `executor.navigator.auto_init` | Auto-creates .agent/ on first task execution (v0.33.16) |
+| Source adapter tracking | ✅ | executor | - | - | Task.SourceAdapter explicitly tracks originating adapter (v1.27.0) |
 | Preflight checks | ✅ | executor | - | - | Claude available, git clean, git repo validation (v0.48.0) |
 | Smart retry | ✅ | executor | - | - | Error-type-specific retry with exponential backoff (v0.51.0) |
 | Acceptance criteria | ✅ | executor | - | - | Extract from issue body, include in prompts (v0.51.0) |

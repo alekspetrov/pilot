@@ -343,10 +343,11 @@ func (p *Poller) startSequential(ctx context.Context) {
 				rlInfo, ok := executor.ParseRateLimitError(err.Error())
 				if ok && p.scheduler != nil {
 					task := &executor.Task{
-						ID:          fmt.Sprintf("GH-%d", issue.Number),
-						Title:       issue.Title,
-						Description: issue.Body,
-						ProjectPath: "", // Will be set by retry callback
+						ID:            fmt.Sprintf("GH-%d", issue.Number),
+						Title:         issue.Title,
+						Description:   issue.Body,
+						ProjectPath:   "", // Will be set by retry callback
+						SourceAdapter: "github", // GH-1433: explicitly mark GitHub source
 					}
 					p.scheduler.QueueTask(task, rlInfo)
 					p.logger.Info("Task queued for retry after rate limit",

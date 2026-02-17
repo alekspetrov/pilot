@@ -145,6 +145,9 @@ type Task struct {
 	// linked to the original PR, giving Claude full context of previous changes.
 	// Typically set for autopilot-fix issues to continue from the failed PR's session.
 	FromPR int
+	// SourceAdapter identifies the adapter that created this task (e.g., "github", "linear", "jira").
+	// Used for logging, metrics, and adapter-specific behavior (GH-1433).
+	SourceAdapter string
 }
 
 // QualityGateResult represents the result of a single quality gate check.

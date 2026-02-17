@@ -238,6 +238,7 @@ func handleGitHubIssueWithResult(ctx context.Context, cfg *config.Config, client
 		Branch:             branchName,
 		CreatePR:           true,
 		SourceRepo:         sourceRepo,
+		SourceAdapter:      "github",                                     // GH-1433: explicitly mark GitHub source
 		MemberID:           resolveGitHubMemberID(issue),                 // GH-634: RBAC lookup
 		Labels:             extractGitHubLabelNames(issue),               // GH-727: flow labels for complexity classifier
 		AcceptanceCriteria: github.ExtractAcceptanceCriteria(issue.Body), // GH-920: acceptance criteria in prompts
@@ -499,6 +500,7 @@ func handleLinearIssueWithResult(ctx context.Context, cfg *config.Config, client
 		ProjectPath:        projectPath,
 		Branch:             branchName,
 		CreatePR:           true,
+		SourceAdapter:      "linear",                                     // GH-1433: explicitly mark Linear source
 		AcceptanceCriteria: github.ExtractAcceptanceCriteria(issue.Description),
 	}
 
@@ -739,12 +741,13 @@ func handleJiraIssueWithResult(ctx context.Context, cfg *config.Config, client *
 	branchName := fmt.Sprintf("pilot/%s", taskID)
 
 	task := &executor.Task{
-		ID:          taskID,
-		Title:       issue.Fields.Summary,
-		Description: taskDesc,
-		ProjectPath: projectPath,
-		Branch:      branchName,
-		CreatePR:    true,
+		ID:            taskID,
+		Title:         issue.Fields.Summary,
+		Description:   taskDesc,
+		ProjectPath:   projectPath,
+		Branch:        branchName,
+		CreatePR:      true,
+		SourceAdapter: "jira", // GH-1433: explicitly mark Jira source
 	}
 
 	var result *executor.ExecutionResult
@@ -1024,12 +1027,13 @@ func handleAsanaTaskWithResult(ctx context.Context, cfg *config.Config, client *
 	branchName := fmt.Sprintf("pilot/%s", taskID)
 
 	execTask := &executor.Task{
-		ID:          taskID,
-		Title:       task.Name,
-		Description: taskDesc,
-		ProjectPath: projectPath,
-		Branch:      branchName,
-		CreatePR:    true,
+		ID:            taskID,
+		Title:         task.Name,
+		Description:   taskDesc,
+		ProjectPath:   projectPath,
+		Branch:        branchName,
+		CreatePR:      true,
+		SourceAdapter: "asana", // GH-1433: explicitly mark Asana source
 	}
 
 	var result *executor.ExecutionResult
