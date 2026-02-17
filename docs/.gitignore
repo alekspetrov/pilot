@@ -12,3 +12,6 @@ out/
 .idea
 .vscode/*
 !.vscode/extentions.json
+
+# pagefind search index
+public/_pagefind/

@@ -10,11 +10,16 @@
     "incremental": true,
     "esModuleInterop": true,
     "module": "esnext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "preserve"
+    "jsx": "preserve",
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "**/*.mdx"],
+  "include": [".next/types/**/*.ts", "**/*.ts", "**/*.tsx", "**/*.mdx"],
   "exclude": ["node_modules"]
 }
