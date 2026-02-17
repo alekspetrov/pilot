@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1303,4 +1305,8 @@ func (c *testableCreateIssueClient) getLabelByName(ctx context.Context, teamKey,
 func (c *testableCreateIssueClient) createLabel(ctx context.Context, teamKey, labelName, color string) (string, error) {
 	// For testing, just return a fake label ID
 	return "label-" + labelName, nil
+}
+
+func TestCloseIssue(t *testing.T) {
+	t.Skip("CloseIssue integration test - requires live Linear API or more complex mocking")
 }

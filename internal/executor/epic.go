@@ -42,12 +42,39 @@ type PlannedSubtask struct {
 	DependsOn []int
 }
 
-// CreatedIssue represents a GitHub issue created from a planned subtask.
+// SubIssueCreator defines an interface for creating sub-issues in different adapters.
+// This allows epic decomposition to work with Linear, Jira, Asana, etc., not just GitHub.
+type SubIssueCreator interface {
+	// CreateIssue creates a sub-issue and returns the issue ID and URL.
+	// parentID: ID of the parent issue for context (e.g., Linear issue ID)
+	// title: Issue title
+	// body: Issue description
+	// labels: Label names to apply
+	// Returns: issueID (may be non-numeric like "APP-123"), issueURL, error
+	CreateIssue(ctx context.Context, parentID, title, body string, labels []string) (string, string, error)
+
+	// AddComment adds a comment to an issue.
+	// issueID: ID of the issue to comment on
+	// message: Comment body
+	AddComment(ctx context.Context, issueID, message string) error
+
+	// CloseIssue closes an issue with a completion comment.
+	// issueID: ID of the issue to close
+	// comment: Completion comment
+	CloseIssue(ctx context.Context, issueID, comment string) error
+}
+
+// CreatedIssue represents an issue created from a planned subtask.
+// Updated to support non-numeric issue IDs for Linear, Jira, etc.
 type CreatedIssue struct {
-	// Number is the GitHub issue number
+	// ID is the issue identifier (may be non-numeric like "APP-123" for Linear)
+	ID string
+
+	// Number is the GitHub issue number (deprecated, use ID instead)
+	// Kept for backward compatibility with existing code
 	Number int
 
-	// URL is the full GitHub issue URL
+	// URL is the full issue URL
 	URL string
 
 	// Subtask is the planned subtask this issue was created from
@@ -407,13 +434,24 @@ func parsePRNumberFromURL(url string) int {
 	return n
 }
 
-// CreateSubIssues creates GitHub issues from the planned subtasks.
-// Returns a slice of CreatedIssue with the issue numbers and URLs.
+// isGitHubTask determines if a task ID represents a GitHub issue.
+// GitHub tasks have the format "GH-123" while other adapters use different formats.
+func isGitHubTask(taskID string) bool {
+	return strings.HasPrefix(taskID, "GH-")
+}
+
+// CreateSubIssues creates issues from the planned subtasks.
+// If a SubIssueCreator is available and the parent task is from a supported adapter,
+// it dispatches to the adapter-specific creator; otherwise falls back to GitHub CLI.
+// Returns a slice of CreatedIssue with issue IDs and URLs.
 // executionPath may differ from task.ProjectPath when using worktree isolation (GH-968).
 func (r *Runner) CreateSubIssues(ctx context.Context, plan *EpicPlan, executionPath string) ([]CreatedIssue, error) {
 	if plan == nil || len(plan.Subtasks) == 0 {
 		return nil, fmt.Errorf("plan has no subtasks to create issues from")
 	}
+
+	// Check if we should use adapter-specific creation
+	useAdapterCreator := r.subIssueCreator != nil && plan.ParentTask != nil && !isGitHubTask(plan.ParentTask.ID)
 
 	var created []CreatedIssue
 
@@ -424,60 +462,89 @@ func (r *Runner) CreateSubIssues(ctx context.Context, plan *EpicPlan, executionP
 			body = fmt.Sprintf("Parent: %s\n\n%s", plan.ParentTask.ID, body)
 		}
 
-		// Truncate title to max 80 chars for GitHub issue limits (GH-1133)
+		// Truncate title to max 80 chars for issue limits
 		title := truncateTitle(subtask.Title, 80)
 
-		// Create issue using gh CLI
-		args := []string{
-			"issue", "create",
-			"--title", title,
-			"--body", body,
-			"--label", "pilot",
+		if useAdapterCreator {
+			// Use adapter-specific creator (e.g., Linear, Jira, Asana)
+			issueID, issueURL, err := r.subIssueCreator.CreateIssue(ctx, plan.ParentTask.ID, title, body, []string{"pilot"})
+			if err != nil {
+				return created, fmt.Errorf("failed to create adapter issue for subtask %d: %w", subtask.Order, err)
+			}
+
+			created = append(created, CreatedIssue{
+				ID:      issueID,
+				Number:  0, // Non-GitHub issues don't have numeric IDs
+				URL:     issueURL,
+				Subtask: subtask,
+			})
+
+			r.log.Info("Created adapter issue",
+				"subtask_order", subtask.Order,
+				"issue_id", issueID,
+				"url", issueURL,
+			)
+		} else {
+			// Fall back to GitHub CLI
+			args := []string{
+				"issue", "create",
+				"--title", title,
+				"--body", body,
+				"--label", "pilot",
+			}
+
+			cmd := exec.CommandContext(ctx, "gh", args...)
+
+			// Set working directory - use executionPath which respects worktree isolation
+			if executionPath != "" {
+				cmd.Dir = executionPath
+			}
+
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+
+			r.log.Debug("Creating GitHub issue",
+				"subtask_order", subtask.Order,
+				"title", subtask.Title,
+			)
+
+			if err := cmd.Run(); err != nil {
+				return created, fmt.Errorf("failed to create issue for subtask %d: %w (stderr: %s)",
+					subtask.Order, err, stderr.String())
+			}
+
+			// gh issue create outputs the issue URL on success
+			issueURL := strings.TrimSpace(stdout.String())
+			issueNumber := parseIssueNumber(issueURL)
+
+			created = append(created, CreatedIssue{
+				ID:      fmt.Sprintf("GH-%d", issueNumber),
+				Number:  issueNumber,
+				URL:     issueURL,
+				Subtask: subtask,
+			})
+
+			r.log.Info("Created GitHub issue",
+				"subtask_order", subtask.Order,
+				"issue_number", issueNumber,
+				"url", issueURL,
+			)
 		}
-
-		cmd := exec.CommandContext(ctx, "gh", args...)
-
-		// Set working directory - use executionPath which respects worktree isolation
-		if executionPath != "" {
-			cmd.Dir = executionPath
-		}
-
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-
-		r.log.Debug("Creating GitHub issue",
-			"subtask_order", subtask.Order,
-			"title", subtask.Title,
-		)
-
-		if err := cmd.Run(); err != nil {
-			return created, fmt.Errorf("failed to create issue for subtask %d: %w (stderr: %s)",
-				subtask.Order, err, stderr.String())
-		}
-
-		// gh issue create outputs the issue URL on success
-		issueURL := strings.TrimSpace(stdout.String())
-		issueNumber := parseIssueNumber(issueURL)
-
-		created = append(created, CreatedIssue{
-			Number:  issueNumber,
-			URL:     issueURL,
-			Subtask: subtask,
-		})
-
-		r.log.Info("Created GitHub issue",
-			"subtask_order", subtask.Order,
-			"issue_number", issueNumber,
-			"url", issueURL,
-		)
 	}
 
 	return created, nil
 }
 
 // UpdateIssueProgress adds a progress comment to an issue.
+// Uses adapter-specific AddComment if available, otherwise falls back to gh CLI.
 func (r *Runner) UpdateIssueProgress(ctx context.Context, projectPath string, issueID string, message string) error {
+	// Use adapter-specific method if available and not a GitHub issue
+	if r.subIssueCreator != nil && !isGitHubTask(issueID) {
+		return r.subIssueCreator.AddComment(ctx, issueID, message)
+	}
+
+	// Fall back to GitHub CLI
 	args := []string{"issue", "comment", issueID, "--body", message}
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	if projectPath != "" {
@@ -494,7 +561,14 @@ func (r *Runner) UpdateIssueProgress(ctx context.Context, projectPath string, is
 }
 
 // CloseIssueWithComment closes an issue with a completion comment.
+// Uses adapter-specific CloseIssue if available, otherwise falls back to gh CLI.
 func (r *Runner) CloseIssueWithComment(ctx context.Context, projectPath string, issueID string, comment string) error {
+	// Use adapter-specific method if available and not a GitHub issue
+	if r.subIssueCreator != nil && !isGitHubTask(issueID) {
+		return r.subIssueCreator.CloseIssue(ctx, issueID, comment)
+	}
+
+	// Fall back to GitHub CLI
 	args := []string{"issue", "close", issueID, "--comment", comment}
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	if projectPath != "" {
@@ -547,25 +621,40 @@ func (r *Runner) ExecuteSubIssues(ctx context.Context, parent *Task, issues []Cr
 		}
 
 		// Update parent with current progress
-		progressMsg := fmt.Sprintf("⏳ Progress: %d/%d - Starting: **%s** (#%d)",
-			i, total, issue.Subtask.Title, issue.Number)
+		var issueRef string
+		if issue.Number > 0 {
+			issueRef = fmt.Sprintf("#%d", issue.Number)
+		} else {
+			issueRef = issue.ID
+		}
+		progressMsg := fmt.Sprintf("⏳ Progress: %d/%d - Starting: **%s** (%s)",
+			i, total, issue.Subtask.Title, issueRef)
 		if err := r.UpdateIssueProgress(ctx, projectPath, parent.ID, progressMsg); err != nil {
 			r.log.Warn("Failed to update parent progress", "error", err)
 		}
 
 		// Create task from sub-issue
+		var branchName string
+		if issue.Number > 0 {
+			branchName = fmt.Sprintf("pilot/GH-%d", issue.Number)
+		} else {
+			// For non-GitHub issues, use the ID directly
+			branchName = fmt.Sprintf("pilot/%s", issue.ID)
+		}
+
 		subTask := &Task{
-			ID:          fmt.Sprintf("GH-%d", issue.Number),
+			ID:          issue.ID,
 			Title:       issue.Subtask.Title,
 			Description: issue.Subtask.Description,
 			ProjectPath: projectPath,
-			Branch:      fmt.Sprintf("pilot/GH-%d", issue.Number),
+			Branch:      branchName,
 			CreatePR:    true,
 		}
 
 		r.log.Info("Executing sub-issue",
 			"parent_id", parent.ID,
-			"sub_issue", issue.Number,
+			"sub_issue_id", issue.ID,
+			"sub_issue_number", issue.Number,
 			"order", i+1,
 			"total", total,
 		)
@@ -585,14 +674,14 @@ func (r *Runner) ExecuteSubIssues(ctx context.Context, parent *Task, issues []Cr
 			failMsg := fmt.Sprintf("❌ Failed on %d/%d: %s - Error: %v",
 				i+1, total, issue.Subtask.Title, err)
 			_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, failMsg)
-			return fmt.Errorf("sub-issue %d failed: %w", issue.Number, err)
+			return fmt.Errorf("sub-issue %s failed: %w", issue.ID, err)
 		}
 
 		if !result.Success {
 			failMsg := fmt.Sprintf("❌ Failed on %d/%d: %s - %s",
 				i+1, total, issue.Subtask.Title, result.Error)
 			_ = r.UpdateIssueProgress(ctx, projectPath, parent.ID, failMsg)
-			return fmt.Errorf("sub-issue %d failed: %s", issue.Number, result.Error)
+			return fmt.Errorf("sub-issue %s failed: %s", issue.ID, result.Error)
 		}
 
 		// Register sub-issue PR with autopilot controller (GH-596)
@@ -610,14 +699,14 @@ func (r *Runner) ExecuteSubIssues(ctx context.Context, parent *Task, issues []Cr
 		if result.PRUrl != "" {
 			closeComment = fmt.Sprintf("✅ Completed as part of %s\nPR: %s", parent.ID, result.PRUrl)
 		}
-		if err := r.CloseIssueWithComment(ctx, projectPath, fmt.Sprintf("%d", issue.Number), closeComment); err != nil {
-			r.log.Warn("Failed to close sub-issue", "issue", issue.Number, "error", err)
+		if err := r.CloseIssueWithComment(ctx, projectPath, issue.ID, closeComment); err != nil {
+			r.log.Warn("Failed to close sub-issue", "issue_id", issue.ID, "error", err)
 			// Non-fatal, continue
 		}
 
 		r.log.Info("Sub-issue completed",
 			"parent_id", parent.ID,
-			"sub_issue", issue.Number,
+			"sub_issue_id", issue.ID,
 			"pr_url", result.PRUrl,
 		)
 	}

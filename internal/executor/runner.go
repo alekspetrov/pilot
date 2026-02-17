@@ -277,6 +277,7 @@ type Runner struct {
 	profileManager        *memory.ProfileManager                                          // Optional profile manager for user preferences (GH-994)
 	driftDetector         *DriftDetector                                                  // Optional drift detector for collaboration drift (GH-997)
 	monitor               *Monitor                                                        // Optional monitor for state transitions (queued→running)
+	subIssueCreator       SubIssueCreator                                                 // Optional adapter-specific sub-issue creator for epic decomposition (GH-1432)
 	taskProgress          map[string]int                                                  // Per-task progress high-water mark (monotonic enforcement)
 	taskProgressMu        sync.RWMutex                                                    // Protects taskProgress
 	// GH-1077: AGENTS.md caching
@@ -579,6 +580,12 @@ func (r *Runner) SetDriftDetector(dd *DriftDetector) {
 // enabling accurate queued→running transitions in the dashboard.
 func (r *Runner) SetMonitor(m *Monitor) {
 	r.monitor = m
+}
+
+// SetSubIssueCreator sets the adapter-specific sub-issue creator for epic decomposition.
+// When set, CreateSubIssues will use the adapter's CreateIssue method instead of gh CLI.
+func (r *Runner) SetSubIssueCreator(creator SubIssueCreator) {
+	r.subIssueCreator = creator
 }
 
 // getRecordingsPath returns the recordings path, using default if not set

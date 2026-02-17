@@ -614,3 +614,33 @@ func (c *Client) GetTeamDoneStateID(ctx context.Context, teamKey string) (string
 
 	return stateID, nil
 }
+
+// CloseIssue closes an issue by transitioning it to the team's "Done" state and adding a comment.
+// This satisfies the SubIssueCreator interface for epic decomposition.
+func (c *Client) CloseIssue(ctx context.Context, issueID, comment string) error {
+	// First, get the issue to determine the team
+	issue, err := c.GetIssue(ctx, issueID)
+	if err != nil {
+		return fmt.Errorf("failed to get issue %s: %w", issueID, err)
+	}
+
+	// Get the team's "Done" state ID
+	doneStateID, err := c.GetTeamDoneStateID(ctx, issue.Team.Key)
+	if err != nil {
+		return fmt.Errorf("failed to get done state for team %s: %w", issue.Team.Key, err)
+	}
+
+	// Add the comment first
+	if comment != "" {
+		if err := c.AddComment(ctx, issueID, comment); err != nil {
+			return fmt.Errorf("failed to add comment to issue %s: %w", issueID, err)
+		}
+	}
+
+	// Transition to done state
+	if err := c.UpdateIssueState(ctx, issueID, doneStateID); err != nil {
+		return fmt.Errorf("failed to close issue %s: %w", issueID, err)
+	}
+
+	return nil
+}

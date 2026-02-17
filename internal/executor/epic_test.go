@@ -1017,3 +1017,280 @@ func TestParseIssueNumber(t *testing.T) {
 		})
 	}
 }
+
+// MockSubIssueCreator is a test implementation of SubIssueCreator
+type MockSubIssueCreator struct {
+	CreatedIssues []struct {
+		ParentID string
+		Title    string
+		Body     string
+		Labels   []string
+		ID       string
+		URL      string
+	}
+	Comments []struct {
+		IssueID string
+		Message string
+	}
+	ClosedIssues []struct {
+		IssueID string
+		Comment string
+	}
+}
+
+func (m *MockSubIssueCreator) CreateIssue(ctx context.Context, parentID, title, body string, labels []string) (string, string, error) {
+	issueID := fmt.Sprintf("MOCK-%d", len(m.CreatedIssues)+1)
+	issueURL := fmt.Sprintf("https://example.com/issues/%s", issueID)
+
+	m.CreatedIssues = append(m.CreatedIssues, struct {
+		ParentID string
+		Title    string
+		Body     string
+		Labels   []string
+		ID       string
+		URL      string
+	}{
+		ParentID: parentID,
+		Title:    title,
+		Body:     body,
+		Labels:   labels,
+		ID:       issueID,
+		URL:      issueURL,
+	})
+
+	return issueID, issueURL, nil
+}
+
+func (m *MockSubIssueCreator) AddComment(ctx context.Context, issueID, message string) error {
+	m.Comments = append(m.Comments, struct {
+		IssueID string
+		Message string
+	}{
+		IssueID: issueID,
+		Message: message,
+	})
+	return nil
+}
+
+func (m *MockSubIssueCreator) CloseIssue(ctx context.Context, issueID, comment string) error {
+	m.ClosedIssues = append(m.ClosedIssues, struct {
+		IssueID string
+		Comment string
+	}{
+		IssueID: issueID,
+		Comment: comment,
+	})
+	return nil
+}
+
+func TestCreateSubIssuesWithAdapterDispatch(t *testing.T) {
+	tests := []struct {
+		name             string
+		parentTaskID     string
+		useSubIssueCreator bool
+		expectedGitHub   bool
+	}{
+		{
+			name:             "GitHub task uses gh CLI",
+			parentTaskID:     "GH-123",
+			useSubIssueCreator: true,
+			expectedGitHub:   true,
+		},
+		{
+			name:             "Linear task uses adapter creator",
+			parentTaskID:     "APP-456",
+			useSubIssueCreator: true,
+			expectedGitHub:   false,
+		},
+		{
+			name:             "No adapter creator falls back to gh CLI",
+			parentTaskID:     "APP-789",
+			useSubIssueCreator: false,
+			expectedGitHub:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Skip tests that require git/gh CLI in CI environments
+			if os.Getenv("CI") != "" && tt.expectedGitHub {
+				t.Skip("Skipping git/gh CLI test in CI environment")
+			}
+
+			runner := NewRunner()
+			mockCreator := &MockSubIssueCreator{}
+
+			if tt.useSubIssueCreator {
+				runner.SetSubIssueCreator(mockCreator)
+			}
+
+			plan := &EpicPlan{
+				ParentTask: &Task{
+					ID:    tt.parentTaskID,
+					Title: "Parent Task",
+				},
+				Subtasks: []PlannedSubtask{
+					{Title: "Subtask 1", Description: "First subtask", Order: 1},
+					{Title: "Subtask 2", Description: "Second subtask", Order: 2},
+				},
+			}
+
+			ctx := context.Background()
+			issues, err := runner.CreateSubIssues(ctx, plan, "")
+
+			if tt.expectedGitHub {
+				// For GitHub tasks or no adapter, expect gh CLI usage
+				// Check that adapter wasn't used
+				if len(mockCreator.CreatedIssues) > 0 {
+					t.Error("Expected no adapter issues to be created for GitHub task")
+				}
+				// If gh CLI worked, check the issue format
+				if err == nil && len(issues) > 0 {
+					for _, issue := range issues {
+						if !strings.HasPrefix(issue.ID, "GH-") {
+							t.Errorf("GitHub issue ID should start with 'GH-', got %s", issue.ID)
+						}
+						if issue.Number == 0 {
+							t.Error("GitHub issue should have non-zero Number")
+						}
+					}
+				}
+			} else {
+				// For non-GitHub tasks with adapter, expect success
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+
+				if len(issues) != 2 {
+					t.Errorf("Expected 2 issues, got %d", len(issues))
+				}
+
+				if len(mockCreator.CreatedIssues) != 2 {
+					t.Errorf("Expected 2 adapter issues created, got %d", len(mockCreator.CreatedIssues))
+				}
+
+				// Check first issue
+				if len(mockCreator.CreatedIssues) > 0 {
+					created := mockCreator.CreatedIssues[0]
+					if created.ParentID != tt.parentTaskID {
+						t.Errorf("ParentID = %s, want %s", created.ParentID, tt.parentTaskID)
+					}
+					if created.Title != "Subtask 1" {
+						t.Errorf("Title = %s, want Subtask 1", created.Title)
+					}
+					if !strings.Contains(created.Body, "Parent: "+tt.parentTaskID) {
+						t.Errorf("Body should contain parent reference")
+					}
+					if !containsString(created.Labels, "pilot") {
+						t.Errorf("Labels should contain 'pilot'")
+					}
+				}
+
+				// Check returned issues have correct ID format
+				if len(issues) > 0 {
+					issue := issues[0]
+					if issue.ID == "" {
+						t.Error("Issue ID should not be empty")
+					}
+					if issue.Number != 0 {
+						t.Error("Non-GitHub issue should have Number = 0")
+					}
+					if !strings.HasPrefix(issue.ID, "MOCK-") {
+						t.Errorf("Issue ID = %s, want MOCK- prefix", issue.ID)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestIsGitHubTask(t *testing.T) {
+	tests := []struct {
+		taskID   string
+		expected bool
+	}{
+		{"GH-123", true},
+		{"GH-456789", true},
+		{"APP-123", false},
+		{"LINEAR-456", false},
+		{"JIRA-789", false},
+		{"", false},
+		{"123", false},
+		{"gh-123", false}, // case sensitive
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.taskID, func(t *testing.T) {
+			result := isGitHubTask(tt.taskID)
+			if result != tt.expected {
+				t.Errorf("isGitHubTask(%q) = %v, want %v", tt.taskID, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestUpdateIssueProgressWithAdapter(t *testing.T) {
+	runner := NewRunner()
+	mockCreator := &MockSubIssueCreator{}
+	runner.SetSubIssueCreator(mockCreator)
+
+	ctx := context.Background()
+
+	// Test non-GitHub issue uses adapter
+	err := runner.UpdateIssueProgress(ctx, "", "APP-123", "Test message")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if len(mockCreator.Comments) != 1 {
+		t.Errorf("Expected 1 comment, got %d", len(mockCreator.Comments))
+	}
+
+	if len(mockCreator.Comments) > 0 {
+		comment := mockCreator.Comments[0]
+		if comment.IssueID != "APP-123" {
+			t.Errorf("IssueID = %s, want APP-123", comment.IssueID)
+		}
+		if comment.Message != "Test message" {
+			t.Errorf("Message = %s, want 'Test message'", comment.Message)
+		}
+	}
+}
+
+func TestCloseIssueWithCommentAdapter(t *testing.T) {
+	runner := NewRunner()
+	mockCreator := &MockSubIssueCreator{}
+	runner.SetSubIssueCreator(mockCreator)
+
+	ctx := context.Background()
+
+	// Test non-GitHub issue uses adapter
+	err := runner.CloseIssueWithComment(ctx, "", "APP-456", "Completion comment")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if len(mockCreator.ClosedIssues) != 1 {
+		t.Errorf("Expected 1 closed issue, got %d", len(mockCreator.ClosedIssues))
+	}
+
+	if len(mockCreator.ClosedIssues) > 0 {
+		closed := mockCreator.ClosedIssues[0]
+		if closed.IssueID != "APP-456" {
+			t.Errorf("IssueID = %s, want APP-456", closed.IssueID)
+		}
+		if closed.Comment != "Completion comment" {
+			t.Errorf("Comment = %s, want 'Completion comment'", closed.Comment)
+		}
+	}
+}
+
+// containsString checks if a slice contains a string
+func containsString(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
