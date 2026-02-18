@@ -355,6 +355,9 @@ type Model struct {
 	upgradeError    string
 	upgradeCh       chan<- struct{} // Channel to trigger upgrade (write-only)
 
+	// Banner visibility toggle (GH-1520)
+	showBanner bool
+
 	// Git graph panel (GH-1506)
 	gitGraphMode   GitGraphMode
 	gitGraphState  *GitGraphState
@@ -403,6 +406,7 @@ func NewModel(version string) Model {
 		costPerMToken:  3.0,
 		autopilotPanel: NewAutopilotPanel(nil), // Disabled by default
 		version:        version,
+		showBanner:     true,
 	}
 }
 
@@ -417,6 +421,7 @@ func NewModelWithStore(version string, store *memory.Store) Model {
 		costPerMToken:  3.0,
 		autopilotPanel: NewAutopilotPanel(nil),
 		version:        version,
+		showBanner:     true,
 		store:          store,
 	}
 	m.hydrateFromStore()
@@ -588,6 +593,7 @@ func NewModelWithOptions(version string, store *memory.Store, controller *autopi
 		costPerMToken:  3.0,
 		autopilotPanel: NewAutopilotPanel(controller),
 		version:        version,
+		showBanner:     true,
 		store:          store,
 		upgradeCh:      upgradeCh,
 	}
@@ -623,6 +629,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+		case "b":
+			m.showBanner = !m.showBanner
+			return m, tea.ClearScreen
 		case "l":
 			m.showLogs = !m.showLogs
 			return m, tea.ClearScreen // GH-1249: Logs toggle changes height
@@ -860,11 +869,13 @@ func (m Model) renderDashboard() string {
 	var b strings.Builder
 
 	// Header with ASCII logo
-	b.WriteString("\n")
-	logo := strings.TrimPrefix(banner.Logo, "\n")
-	b.WriteString(titleStyle.Render(logo))
-	b.WriteString(titleStyle.Render(fmt.Sprintf("   Pilot %s", m.version)))
-	b.WriteString("\n")
+	if m.showBanner {
+		b.WriteString("\n")
+		logo := strings.TrimPrefix(banner.Logo, "\n")
+		b.WriteString(titleStyle.Render(logo))
+		b.WriteString(titleStyle.Render(fmt.Sprintf("   Pilot %s", m.version)))
+		b.WriteString("\n")
+	}
 
 	// Update notification (if available)
 	if m.updateInfo != nil {
@@ -896,9 +907,9 @@ func (m Model) renderDashboard() string {
 
 	// Help footer
 	if m.gitGraphMode != GitGraphHidden {
-		b.WriteString(helpStyle.Render("q: quit  l: logs  g: cycle graph  tab: focus  j/k: scroll  enter: open"))
+		b.WriteString(helpStyle.Render("q: quit  b: banner  l: logs  g: cycle graph  tab: focus  j/k: scroll  enter: open"))
 	} else {
-		b.WriteString(helpStyle.Render("q: quit  l: logs  g: git graph  j/k: select  enter: open"))
+		b.WriteString(helpStyle.Render("q: quit  b: banner  l: logs  g: git graph  j/k: select  enter: open"))
 	}
 
 	return b.String()
