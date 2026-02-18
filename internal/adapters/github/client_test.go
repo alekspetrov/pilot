@@ -18,6 +18,7 @@ func TestNewClient(t *testing.T) {
 	client := NewClient(testutil.FakeGitHubToken)
 	if client == nil {
 		t.Fatal("NewClient returned nil")
+		return // staticcheck SA5011
 	}
 	if client.token != testutil.FakeGitHubToken {
 		t.Errorf("client.token = %s, want %s", client.token, testutil.FakeGitHubToken)
@@ -1231,6 +1232,7 @@ func TestDefaultConfig(t *testing.T) {
 
 	if cfg.Polling == nil {
 		t.Fatal("default Polling config is nil")
+		return // staticcheck SA5011
 	}
 
 	if cfg.Polling.Enabled != false {
