@@ -14,9 +14,6 @@ func TestNewWebhookHandler(t *testing.T) {
 	client := NewClient(testutil.FakeAsanaAccessToken, testutil.FakeAsanaWorkspaceID)
 	handler := NewWebhookHandler(client, testutil.FakeAsanaWebhookSecret, "pilot")
 
-	if handler == nil {
-		t.Fatal("NewWebhookHandler returned nil")
-	}
 	if handler.pilotTag != "pilot" {
 		t.Errorf("handler.pilotTag = %s, want pilot", handler.pilotTag)
 	}
