@@ -84,6 +84,6 @@ docs/.git
 
 # Desktop app build artifacts
 desktop/frontend/node_modules/
-desktop/frontend/dist/
-desktop/build/bin/
+desktop/frontend/dist/*
 !desktop/frontend/dist/.gitkeep
+desktop/build/bin/
