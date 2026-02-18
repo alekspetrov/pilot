@@ -180,7 +180,7 @@ func parseGitGraphLine(raw, sep string) GitGraphLine {
 	// The SHA starts right after graph chars + optional space.
 	// Walk backward from sepIdx to find where non-graph chars start.
 	graphPart := ""
-	dataPart := raw
+	var dataPart string
 
 	// Walk backward from the first separator to find where the SHA (7 hex chars) begins.
 	// Everything before the SHA is graph drawing characters.
@@ -475,9 +475,7 @@ func colorizeGraphChars(s string) string {
 
 	var b strings.Builder
 	colIdx := 0
-	runes := []rune(s)
-
-	for _, r := range runes {
+	for _, r := range s {
 		switch r {
 		case '*':
 			// Commit node: steel blue
