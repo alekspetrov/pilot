@@ -55,13 +55,13 @@ func TestGenerateClaudeSettings(t *testing.T) {
 				"hooks": map[string][]HookMatcherEntry{
 					"Stop": {
 						{
-							Matcher: HookMatcher{},
+							Matcher: "", // Stop hooks: matcher field must be absent (omitempty)
 							Hooks:   []HookCommand{{Type: "command", Command: "/test/scripts/pilot-stop-gate.sh"}},
 						},
 					},
 					"PreToolUse": {
 						{
-							Matcher: HookMatcher{Tools: []string{"Bash"}},
+							Matcher: "Bash",
 							Hooks:   []HookCommand{{Type: "command", Command: "/test/scripts/pilot-bash-guard.sh"}},
 						},
 					},
@@ -78,23 +78,23 @@ func TestGenerateClaudeSettings(t *testing.T) {
 				"hooks": map[string][]HookMatcherEntry{
 					"Stop": {
 						{
-							Matcher: HookMatcher{},
+							Matcher: "",
 							Hooks:   []HookCommand{{Type: "command", Command: "/test/scripts/pilot-stop-gate.sh"}},
 						},
 					},
 					"PreToolUse": {
 						{
-							Matcher: HookMatcher{Tools: []string{"Bash"}},
+							Matcher: "Bash",
 							Hooks:   []HookCommand{{Type: "command", Command: "/test/scripts/pilot-bash-guard.sh"}},
 						},
 					},
 					"PostToolUse": {
 						{
-							Matcher: HookMatcher{Tools: []string{"Edit"}},
+							Matcher: "Edit",
 							Hooks:   []HookCommand{{Type: "command", Command: "/test/scripts/pilot-lint.sh"}},
 						},
 						{
-							Matcher: HookMatcher{Tools: []string{"Write"}},
+							Matcher: "Write",
 							Hooks:   []HookCommand{{Type: "command", Command: "/test/scripts/pilot-lint.sh"}},
 						},
 					},
@@ -149,6 +149,9 @@ func TestGenerateClaudeSettings(t *testing.T) {
 					}
 					for i, expected := range expectedEntries {
 						actual := actualEntries[i]
+						if actual.Matcher != expected.Matcher {
+							t.Errorf("Hook type %s entry %d: expected matcher %q, got %q", key, i, expected.Matcher, actual.Matcher)
+						}
 						if len(actual.Hooks) != len(expected.Hooks) {
 							t.Errorf("Hook type %s entry %d: expected %d hooks, got %d", key, i, len(expected.Hooks), len(actual.Hooks))
 							continue
@@ -174,7 +177,7 @@ func TestWriteClaudeSettings(t *testing.T) {
 		"hooks": map[string][]HookMatcherEntry{
 			"Stop": {
 				{
-					Matcher: HookMatcher{},
+					Matcher: "", // Stop hooks: empty string → omitempty → field absent in JSON
 					Hooks:   []HookCommand{{Type: "command", Command: "/test/script.sh"}},
 				},
 			},
@@ -210,6 +213,10 @@ func TestWriteClaudeSettings(t *testing.T) {
 		t.Fatalf("Expected 1 Stop entry, got %d", len(stopEntries))
 	}
 	stopEntry := stopEntries[0].(map[string]interface{})
+	// Stop hook must NOT have a "matcher" field in JSON output
+	if _, hasMatcher := stopEntry["matcher"]; hasMatcher {
+		t.Error("Stop hook entry must not have 'matcher' field in JSON (omitempty on empty string)")
+	}
 	stopHooks := stopEntry["hooks"].([]interface{})
 	if len(stopHooks) != 1 {
 		t.Fatalf("Expected 1 hook command, got %d", len(stopHooks))
@@ -241,7 +248,7 @@ func TestMergeWithExisting(t *testing.T) {
 				"hooks": map[string][]HookMatcherEntry{
 					"Stop": {
 						{
-							Matcher: HookMatcher{},
+							Matcher: "",
 							Hooks:   []HookCommand{{Type: "command", Command: "/test/stop.sh"}},
 						},
 					},
@@ -281,7 +288,7 @@ func TestMergeWithExisting(t *testing.T) {
 				"hooks": map[string][]HookMatcherEntry{
 					"Stop": {
 						{
-							Matcher: HookMatcher{},
+							Matcher: "",
 							Hooks:   []HookCommand{{Type: "command", Command: "/test/stop.sh"}},
 						},
 					},
@@ -339,7 +346,7 @@ func TestMergeWithExisting(t *testing.T) {
 				"hooks": map[string][]HookMatcherEntry{
 					"Stop": {
 						{
-							Matcher: HookMatcher{},
+							Matcher: "",
 							Hooks:   []HookCommand{{Type: "command", Command: "/test/stop.sh"}},
 						},
 					},
@@ -420,6 +427,141 @@ func TestMergeWithExisting(t *testing.T) {
 				tt.validateResult(t, settingsPath, restoreFunc)
 			}
 		})
+	}
+}
+
+// TestMergeDeduplication verifies that merging the same pilot hooks twice
+// does not produce duplicate entries.
+func TestMergeDeduplication(t *testing.T) {
+	tempDir := t.TempDir()
+	settingsPath := filepath.Join(tempDir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	pilotSettings := map[string]interface{}{
+		"hooks": map[string][]HookMatcherEntry{
+			"PreToolUse": {
+				{
+					Matcher: "Bash",
+					Hooks:   []HookCommand{{Type: "command", Command: "/tmp/pilot-hooks-abc123/pilot-bash-guard.sh"}},
+				},
+			},
+		},
+	}
+
+	// First merge
+	restore1, err := MergeWithExisting(settingsPath, pilotSettings)
+	if err != nil {
+		t.Fatalf("first merge: %v", err)
+	}
+	defer func() { _ = restore1() }()
+
+	// Second merge with the same script name (different temp dir simulates a new start)
+	pilotSettings2 := map[string]interface{}{
+		"hooks": map[string][]HookMatcherEntry{
+			"PreToolUse": {
+				{
+					Matcher: "Bash",
+					Hooks:   []HookCommand{{Type: "command", Command: "/tmp/pilot-hooks-xyz789/pilot-bash-guard.sh"}},
+				},
+			},
+		},
+	}
+	restore2, err := MergeWithExisting(settingsPath, pilotSettings2)
+	if err != nil {
+		t.Fatalf("second merge: %v", err)
+	}
+	defer func() { _ = restore2() }()
+
+	// Read and parse result
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	hooks := parsed["hooks"].(map[string]interface{})
+	preArr := hooks["PreToolUse"].([]interface{})
+	if len(preArr) != 1 {
+		t.Errorf("deduplication: expected 1 PreToolUse entry after two identical merges, got %d", len(preArr))
+	}
+}
+
+// TestCleanStalePilotHooks verifies that stale pilot hook entries (pointing to
+// non-existent scripts) are removed from existing settings before merging.
+func TestCleanStalePilotHooks(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create a real script to simulate one live hook
+	liveScript := filepath.Join(tempDir, "pilot-hooks-live123", "pilot-bash-guard.sh")
+	if err := os.MkdirAll(filepath.Dir(liveScript), 0755); err != nil {
+		t.Fatalf("setup live script dir: %v", err)
+	}
+	if err := os.WriteFile(liveScript, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("setup live script: %v", err)
+	}
+
+	// Stale script — dir does not exist (simulates crashed session)
+	staleScript := "/tmp/pilot-hooks-dead456/pilot-bash-guard.sh"
+
+	hooks := map[string]interface{}{
+		"PreToolUse": []interface{}{
+			map[string]interface{}{
+				"matcher": "Bash",
+				"hooks": []interface{}{
+					map[string]interface{}{"type": "command", "command": staleScript},
+				},
+			},
+			map[string]interface{}{
+				"matcher": "Bash",
+				"hooks": []interface{}{
+					map[string]interface{}{"type": "command", "command": liveScript},
+				},
+			},
+			// Non-pilot hook — must always be preserved
+			map[string]interface{}{
+				"matcher": "Bash",
+				"hooks": []interface{}{
+					map[string]interface{}{"type": "command", "command": "/usr/local/bin/custom-guard.sh"},
+				},
+			},
+		},
+	}
+
+	cleaned := cleanStalePilotHooks(hooks)
+	preArr, ok := cleaned["PreToolUse"].([]interface{})
+	if !ok {
+		t.Fatal("expected PreToolUse array in cleaned hooks")
+	}
+
+	// stale pilot entry removed, live pilot entry kept, non-pilot entry kept
+	if len(preArr) != 2 {
+		t.Errorf("expected 2 entries after stale cleanup (live pilot + non-pilot), got %d", len(preArr))
+	}
+}
+
+// TestIsPilotHookPath verifies path detection logic.
+func TestIsPilotHookPath(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"/tmp/pilot-hooks-abc123/pilot-bash-guard.sh", true},
+		{"/var/folders/pilot-hooks-xyz/pilot-stop-gate.sh", true},
+		{"/tmp/pilot-hooks-abc123/other-script.sh", false},   // base doesn't start with pilot-
+		{"/tmp/other-dir-abc123/pilot-bash-guard.sh", false}, // dir doesn't start with pilot-hooks-
+		{"/usr/local/bin/custom-guard.sh", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		got := isPilotHookPath(tt.path)
+		if got != tt.expected {
+			t.Errorf("isPilotHookPath(%q) = %v, want %v", tt.path, got, tt.expected)
+		}
 	}
 }
 
@@ -574,15 +716,14 @@ func TestGenerateClaudeSettingsJSONFormat(t *testing.T) {
 
 	hooks := parsed["hooks"].(map[string]interface{})
 
-	// Verify Stop hook has array format with empty matcher
+	// Verify Stop hook: no "matcher" field in JSON (omitempty on empty string)
 	stopArr := hooks["Stop"].([]interface{})
 	if len(stopArr) != 1 {
 		t.Errorf("Stop: expected 1 entry, got %d", len(stopArr))
 	}
 	stopEntry := stopArr[0].(map[string]interface{})
-	stopMatcher := stopEntry["matcher"].(map[string]interface{})
-	if len(stopMatcher) != 0 {
-		t.Errorf("Stop matcher: expected empty, got %v", stopMatcher)
+	if _, hasMatcher := stopEntry["matcher"]; hasMatcher {
+		t.Errorf("Stop hook: must not have 'matcher' field, got %v", stopEntry["matcher"])
 	}
 	stopHooks := stopEntry["hooks"].([]interface{})
 	stopCmd := stopHooks[0].(map[string]interface{})
@@ -590,16 +731,18 @@ func TestGenerateClaudeSettingsJSONFormat(t *testing.T) {
 		t.Errorf("Stop hook type: expected 'command', got %v", stopCmd["type"])
 	}
 
-	// Verify PreToolUse hook has matcher.tools
+	// Verify PreToolUse hook has regex string matcher "Bash" (Claude Code 2.1.44+ format)
 	preArr := hooks["PreToolUse"].([]interface{})
 	if len(preArr) != 1 {
 		t.Errorf("PreToolUse: expected 1 entry, got %d", len(preArr))
 	}
 	preEntry := preArr[0].(map[string]interface{})
-	preMatcher := preEntry["matcher"].(map[string]interface{})
-	preTools := preMatcher["tools"].([]interface{})
-	if len(preTools) != 1 || preTools[0] != "Bash" {
-		t.Errorf("PreToolUse matcher.tools: expected [Bash], got %v", preTools)
+	preMatcher, ok := preEntry["matcher"].(string)
+	if !ok {
+		t.Fatalf("PreToolUse matcher: expected string, got %T (%v)", preEntry["matcher"], preEntry["matcher"])
+	}
+	if preMatcher != "Bash" {
+		t.Errorf("PreToolUse matcher: expected \"Bash\", got %q", preMatcher)
 	}
 
 	// Verify PostToolUse hook has two matcher entries
@@ -608,19 +751,23 @@ func TestGenerateClaudeSettingsJSONFormat(t *testing.T) {
 		t.Errorf("PostToolUse: expected 2 entries, got %d", len(postArr))
 	}
 
-	// First entry should match Edit
+	// First entry should have matcher "Edit"
 	postEntry0 := postArr[0].(map[string]interface{})
-	postMatcher0 := postEntry0["matcher"].(map[string]interface{})
-	postTools0 := postMatcher0["tools"].([]interface{})
-	if len(postTools0) != 1 || postTools0[0] != "Edit" {
-		t.Errorf("PostToolUse[0] matcher.tools: expected [Edit], got %v", postTools0)
+	postMatcher0, ok := postEntry0["matcher"].(string)
+	if !ok {
+		t.Fatalf("PostToolUse[0] matcher: expected string, got %T", postEntry0["matcher"])
+	}
+	if postMatcher0 != "Edit" {
+		t.Errorf("PostToolUse[0] matcher: expected \"Edit\", got %q", postMatcher0)
 	}
 
-	// Second entry should match Write
+	// Second entry should have matcher "Write"
 	postEntry1 := postArr[1].(map[string]interface{})
-	postMatcher1 := postEntry1["matcher"].(map[string]interface{})
-	postTools1 := postMatcher1["tools"].([]interface{})
-	if len(postTools1) != 1 || postTools1[0] != "Write" {
-		t.Errorf("PostToolUse[1] matcher.tools: expected [Write], got %v", postTools1)
+	postMatcher1, ok := postEntry1["matcher"].(string)
+	if !ok {
+		t.Fatalf("PostToolUse[1] matcher: expected string, got %T", postEntry1["matcher"])
+	}
+	if postMatcher1 != "Write" {
+		t.Errorf("PostToolUse[1] matcher: expected \"Write\", got %q", postMatcher1)
 	}
 }
