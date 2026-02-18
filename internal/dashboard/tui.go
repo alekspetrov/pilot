@@ -406,6 +406,20 @@ func NewModel(version string) Model {
 	}
 }
 
+// NewModelWithProjectPath creates a dashboard model with a git project path for git graph commands.
+func NewModelWithProjectPath(version string, projectPath string) Model {
+	return Model{
+		tasks:          []TaskDisplay{},
+		logs:           []string{},
+		showLogs:       true,
+		completedTasks: []CompletedTask{},
+		costPerMToken:  3.0,
+		autopilotPanel: NewAutopilotPanel(nil),
+		version:        version,
+		projectPath:    projectPath,
+	}
+}
+
 // NewModelWithStore creates a dashboard model with SQLite persistence.
 // Hydrates token usage and task history from the store on startup.
 func NewModelWithStore(version string, store *memory.Store) Model {
@@ -579,7 +593,7 @@ func (m *Model) loadMetricsHistory() {
 }
 
 // NewModelWithOptions creates a dashboard model with all options including upgrade support.
-func NewModelWithOptions(version string, store *memory.Store, controller *autopilot.Controller, upgradeCh chan<- struct{}) Model {
+func NewModelWithOptions(version string, store *memory.Store, controller *autopilot.Controller, upgradeCh chan<- struct{}, projectPath string) Model {
 	m := Model{
 		tasks:          []TaskDisplay{},
 		logs:           []string{},
@@ -590,6 +604,7 @@ func NewModelWithOptions(version string, store *memory.Store, controller *autopi
 		version:        version,
 		store:          store,
 		upgradeCh:      upgradeCh,
+		projectPath:    projectPath,
 	}
 	m.hydrateFromStore()
 	return m

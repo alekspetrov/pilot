@@ -2106,13 +2106,13 @@ func checkForUpdates() {
 }
 
 // runDashboardMode runs the TUI dashboard with live task updates
-func runDashboardMode(p *pilot.Pilot, cfg *config.Config) error {
+func runDashboardMode(p *pilot.Pilot, cfg *config.Config, projectPath string) error {
 	// Suppress slog output to prevent corrupting TUI display (GH-164)
 	logging.Suppress()
 	p.SuppressProgressLogs(true)
 
 	// Create TUI program
-	model := dashboard.NewModel(version)
+	model := dashboard.NewModelWithProjectPath(version, projectPath)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	// Set up event bridge: poll task states and send to dashboard

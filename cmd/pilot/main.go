@@ -521,7 +521,7 @@ Examples:
 					if gwAutopilotController != nil {
 						gwAutopilotController.SetMonitor(gwMonitor)
 					}
-					model := dashboard.NewModelWithOptions(version, gwStore, gwAutopilotController, nil)
+					model := dashboard.NewModelWithOptions(version, gwStore, gwAutopilotController, nil, projectPath)
 					gwProgram = tea.NewProgram(model,
 						tea.WithAltScreen(),
 						tea.WithInput(os.Stdin),
@@ -1023,7 +1023,7 @@ Examples:
 
 			if dashboardMode {
 				// Run TUI dashboard mode
-				return runDashboardMode(p, cfg)
+				return runDashboardMode(p, cfg, projectPath)
 			}
 
 			// Show startup banner (headless mode)
@@ -1369,7 +1369,7 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 			ctrl.SetMonitor(monitor)
 		}
 		upgradeRequestCh = make(chan struct{}, 1)
-		model := dashboard.NewModelWithOptions(version, store, autopilotController, upgradeRequestCh)
+		model := dashboard.NewModelWithOptions(version, store, autopilotController, upgradeRequestCh, projectPath)
 		program = tea.NewProgram(model,
 			tea.WithAltScreen(),
 			tea.WithInput(os.Stdin),
