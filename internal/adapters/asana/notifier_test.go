@@ -18,7 +18,7 @@ func TestNewNotifier(t *testing.T) {
 	if notifier == nil {
 		t.Fatal("NewNotifier returned nil")
 	}
-	if notifier.pilotTag != "pilot" {
+	if notifier.pilotTag != "pilot" { //nolint:staticcheck // guarded by t.Fatal above
 		t.Errorf("notifier.pilotTag = %s, want pilot", notifier.pilotTag)
 	}
 }

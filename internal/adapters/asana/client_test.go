@@ -15,7 +15,7 @@ func TestNewClient(t *testing.T) {
 	if client == nil {
 		t.Fatal("NewClient returned nil")
 	}
-	if client.baseURL != BaseURL {
+	if client.baseURL != BaseURL { //nolint:staticcheck // guarded by t.Fatal above
 		t.Errorf("client.baseURL = %s, want %s", client.baseURL, BaseURL)
 	}
 	if client.workspaceID != testutil.FakeAsanaWorkspaceID {
@@ -347,7 +347,7 @@ func TestFindTagByName(t *testing.T) {
 	if tag == nil {
 		t.Fatal("expected to find tag")
 	}
-	if tag.GID != "1" {
+	if tag.GID != "1" { //nolint:staticcheck // guarded by t.Fatal above
 		t.Errorf("tag.GID = %s, want 1", tag.GID)
 	}
 }
