@@ -1,4 +1,4 @@
-.PHONY: build run test test-e2e clean install lint fmt deps dev install-hooks check-secrets gate check-integration auto-fix test-short test-integration test-chaos package release docker-build docker-push
+.PHONY: build run test test-e2e clean install lint fmt deps dev install-hooks check-secrets gate check-integration auto-fix test-short test-integration test-chaos package release docker-build docker-push desktop-dev desktop-build desktop
 
 # Variables
 BINARY_NAME=pilot
@@ -8,6 +8,15 @@ LDFLAGS=-ldflags "-X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)"
 
 # Default target
 all: build
+
+# Desktop app (macOS, requires wails CLI and CGO)
+desktop-dev:
+	cd desktop && wails dev
+
+desktop-build:
+	cd desktop && wails build -platform darwin/universal
+
+desktop: desktop-build
 
 # Build the binary
 build:
