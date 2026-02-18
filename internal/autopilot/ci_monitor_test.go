@@ -1053,8 +1053,8 @@ func TestCIMonitor_GetFailedCheckLogs(t *testing.T) {
 	testLogs := "--- FAIL: TestFoo\nExpected 1, got 2"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/owner/repo/commits/abc1234/check-runs":
+		switch r.URL.Path {
+		case "/repos/owner/repo/commits/abc1234/check-runs":
 			resp := github.CheckRunsResponse{
 				TotalCount: 3,
 				CheckRuns: []github.CheckRun{
@@ -1065,10 +1065,10 @@ func TestCIMonitor_GetFailedCheckLogs(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(resp)
-		case r.URL.Path == "/repos/owner/repo/actions/jobs/101/logs":
+		case "/repos/owner/repo/actions/jobs/101/logs":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(lintLogs))
-		case r.URL.Path == "/repos/owner/repo/actions/jobs/103/logs":
+		case "/repos/owner/repo/actions/jobs/103/logs":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(testLogs))
 		default:
@@ -1098,8 +1098,8 @@ func TestCIMonitor_GetFailedCheckLogs(t *testing.T) {
 
 func TestCIMonitor_GetFailedCheckLogs_Truncation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/owner/repo/commits/abc1234/check-runs":
+		switch r.URL.Path {
+		case "/repos/owner/repo/commits/abc1234/check-runs":
 			resp := github.CheckRunsResponse{
 				TotalCount: 1,
 				CheckRuns: []github.CheckRun{
@@ -1108,7 +1108,7 @@ func TestCIMonitor_GetFailedCheckLogs_Truncation(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(resp)
-		case r.URL.Path == "/repos/owner/repo/actions/jobs/201/logs":
+		case "/repos/owner/repo/actions/jobs/201/logs":
 			// Return logs longer than maxLen
 			w.WriteHeader(http.StatusOK)
 			longLog := make([]byte, 5000)
@@ -1135,8 +1135,8 @@ func TestCIMonitor_GetFailedCheckLogs_Truncation(t *testing.T) {
 
 func TestCIMonitor_GetFailedCheckLogs_LogFetchFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/owner/repo/commits/abc1234/check-runs":
+		switch r.URL.Path {
+		case "/repos/owner/repo/commits/abc1234/check-runs":
 			resp := github.CheckRunsResponse{
 				TotalCount: 1,
 				CheckRuns: []github.CheckRun{
@@ -1145,7 +1145,7 @@ func TestCIMonitor_GetFailedCheckLogs_LogFetchFails(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(resp)
-		case r.URL.Path == "/repos/owner/repo/actions/jobs/301/logs":
+		case "/repos/owner/repo/actions/jobs/301/logs":
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"message":"Not Found"}`))
 		default:
