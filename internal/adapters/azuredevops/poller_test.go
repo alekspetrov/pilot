@@ -168,6 +168,7 @@ func TestPollerFindOldestUnprocessedWorkItem(t *testing.T) {
 
 	if wi == nil {
 		t.Fatal("expected to find a work item")
+		return
 	}
 
 	// Should find ID 1 (oldest that's not in progress)

@@ -18,6 +18,7 @@ func TestNewClient(t *testing.T) {
 	client := NewClient(testutil.FakeGitHubToken)
 	if client == nil {
 		t.Fatal("NewClient returned nil")
+		return
 	}
 	if client.token != testutil.FakeGitHubToken {
 		t.Errorf("client.token = %s, want %s", client.token, testutil.FakeGitHubToken)
