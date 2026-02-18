@@ -16,8 +16,7 @@ func TestNewWebhookHandler(t *testing.T) {
 
 	if handler == nil {
 		t.Fatal("NewWebhookHandler returned nil")
-	}
-	if handler.pilotTag != "pilot" {
+	} else if handler.pilotTag != "pilot" {
 		t.Errorf("handler.pilotTag = %s, want pilot", handler.pilotTag)
 	}
 }
