@@ -12,9 +12,6 @@ import (
 
 func TestNewClient(t *testing.T) {
 	client := NewClient(testutil.FakeAsanaAccessToken, testutil.FakeAsanaWorkspaceID)
-	if client == nil {
-		t.Fatal("NewClient returned nil")
-	}
 	if client.baseURL != BaseURL {
 		t.Errorf("client.baseURL = %s, want %s", client.baseURL, BaseURL)
 	}
@@ -343,9 +340,6 @@ func TestFindTagByName(t *testing.T) {
 	tag, err := client.FindTagByName(context.Background(), "PILOT")
 	if err != nil {
 		t.Fatalf("FindTagByName failed: %v", err)
-	}
-	if tag == nil {
-		t.Fatal("expected to find tag")
 	}
 	if tag.GID != "1" {
 		t.Errorf("tag.GID = %s, want 1", tag.GID)
