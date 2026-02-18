@@ -135,6 +135,7 @@
 | Hot upgrade key | ✅ | dashboard | `u` key | - | In-place upgrade from dashboard |
 | SQLite persistence | ✅ | dashboard | - | - | Metrics survive restarts (v0.21.2) |
 | Queue state panel | ✅ | dashboard | - | - | 5-state: done/running/queued/pending/failed with shimmer (v0.63.0) |
+| Git graph panel | ✅ | dashboard | `g` key | - | Toggleable side-by-side git log graph, 3 modes (Hidden/Full/Small), auto-refresh 15s, scroll, branch colors (v1.41.0) |
 
 ## Replay & Debug
 

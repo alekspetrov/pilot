@@ -888,3 +888,386 @@ func TestAddCompletedTask_HistoryCapAt5(t *testing.T) {
 		t.Errorf("last task ParentID = %q, want %q", last.ParentID, "GH-0")
 	}
 }
+
+// --- Git Graph Tests ---
+
+func TestParseGitGraphOutput_Empty(t *testing.T) {
+	lines := parseGitGraphOutput("", "\x00")
+	if len(lines) != 0 {
+		t.Errorf("expected 0 lines for empty input, got %d", len(lines))
+	}
+}
+
+func TestParseGitGraphOutput_ConnectorOnly(t *testing.T) {
+	// Pure graph connector line (no commit data — no separator present)
+	raw := "| \\"
+	lines := parseGitGraphOutput(raw, "\x00")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	if lines[0].IsCommit {
+		t.Error("connector line should not be a commit")
+	}
+	if lines[0].SHA != "" {
+		t.Errorf("SHA should be empty for connector, got %q", lines[0].SHA)
+	}
+}
+
+func TestParseGitGraphOutput_CommitLine(t *testing.T) {
+	const sep = "\x00"
+	// Simulate a commit line as git log --graph would produce:
+	// "* abc1234<sep>HEAD -> refs/heads/main<sep>feat: add thing<sep>Alice<sep>2026-02-18"
+	raw := "* abc1234" + sep + "HEAD -> refs/heads/main" + sep + "feat: add thing" + sep + "Alice" + sep + "2026-02-18"
+
+	lines := parseGitGraphOutput(raw, sep)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	line := lines[0]
+	if !line.IsCommit {
+		t.Error("expected IsCommit = true")
+	}
+	if line.SHA != "abc1234" {
+		t.Errorf("SHA = %q, want %q", line.SHA, "abc1234")
+	}
+	if line.Message != "feat: add thing" {
+		t.Errorf("Message = %q, want %q", line.Message, "feat: add thing")
+	}
+	if line.Author != "Alice" {
+		t.Errorf("Author = %q, want %q", line.Author, "Alice")
+	}
+	if line.Date != "2026-02-18" {
+		t.Errorf("Date = %q, want %q", line.Date, "2026-02-18")
+	}
+}
+
+func TestParseGitGraphOutput_MultiLine(t *testing.T) {
+	const sep = "\x00"
+	raw := "* abc1234" + sep + "" + sep + "first commit" + sep + "Bob" + sep + "2026-01-01" + "\n" +
+		"| \\\n" +
+		"* def5678" + sep + "refs/tags/v1.0" + sep + "second commit" + sep + "Alice" + sep + "2026-01-02"
+
+	lines := parseGitGraphOutput(raw, sep)
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d", len(lines))
+	}
+	// First: commit
+	if !lines[0].IsCommit {
+		t.Error("line 0 should be a commit")
+	}
+	if lines[0].SHA != "abc1234" {
+		t.Errorf("line 0 SHA = %q, want abc1234", lines[0].SHA)
+	}
+	// Second: connector
+	if lines[1].IsCommit {
+		t.Error("line 1 should be a connector (not a commit)")
+	}
+	// Third: commit
+	if !lines[2].IsCommit {
+		t.Error("line 2 should be a commit")
+	}
+	if lines[2].SHA != "def5678" {
+		t.Errorf("line 2 SHA = %q, want def5678", lines[2].SHA)
+	}
+	if lines[2].Decoration != "refs/tags/v1.0" {
+		t.Errorf("line 2 Decoration = %q, want refs/tags/v1.0", lines[2].Decoration)
+	}
+}
+
+func TestGitGraphMode_Cycling(t *testing.T) {
+	m := NewModel("test")
+	if m.gitGraphMode != GitGraphHidden {
+		t.Errorf("initial mode = %d, want GitGraphHidden (%d)", m.gitGraphMode, GitGraphHidden)
+	}
+
+	// Simulate pressing "g" three times — should cycle Hidden → Full → Small → Hidden
+	for i, want := range []GitGraphMode{GitGraphFull, GitGraphSmall, GitGraphHidden} {
+		m.gitGraphMode = (m.gitGraphMode + 1) % 3
+		if m.gitGraphMode != want {
+			t.Errorf("after press %d: mode = %d, want %d", i+1, m.gitGraphMode, want)
+		}
+	}
+}
+
+func TestGitGraphFocus_Toggle(t *testing.T) {
+	m := NewModel("test")
+	m.gitGraphMode = GitGraphFull
+
+	if m.gitGraphFocus {
+		t.Error("initial focus should be false (dashboard)")
+	}
+
+	// Simulate tab key
+	m.gitGraphFocus = !m.gitGraphFocus
+	if !m.gitGraphFocus {
+		t.Error("after tab: focus should be on graph")
+	}
+
+	m.gitGraphFocus = !m.gitGraphFocus
+	if m.gitGraphFocus {
+		t.Error("after second tab: focus should return to dashboard")
+	}
+}
+
+func TestRenderGitGraph_Hidden(t *testing.T) {
+	m := NewModel("test")
+	m.width = 200
+	m.height = 50
+	m.gitGraphMode = GitGraphHidden
+
+	result := m.renderGitGraph()
+	if result != "" {
+		t.Errorf("renderGitGraph() in Hidden mode should return empty string, got %q", result)
+	}
+}
+
+func TestRenderGitGraph_NarrowTerminal(t *testing.T) {
+	m := NewModel("test")
+	m.width = 80 // Below minTerminalWidthForGraph (100)
+	m.height = 50
+	m.gitGraphMode = GitGraphFull
+
+	result := m.renderGitGraph()
+	if result != "" {
+		t.Errorf("renderGitGraph() on narrow terminal should return empty string, got %q", result)
+	}
+}
+
+func TestRenderGitGraph_NoState(t *testing.T) {
+	m := NewModel("test")
+	m.width = 160
+	m.height = 50
+	m.gitGraphMode = GitGraphFull
+	m.gitGraphState = nil
+
+	result := m.renderGitGraph()
+	if result == "" {
+		t.Error("renderGitGraph() with nil state should return loading message, not empty")
+	}
+	plain := stripANSI(result)
+	if !strings.Contains(plain, "Loading") {
+		t.Errorf("nil state should show Loading message, got:\n%s", plain)
+	}
+}
+
+func TestRenderGitGraph_WithErrorState(t *testing.T) {
+	m := NewModel("test")
+	m.width = 160
+	m.height = 50
+	m.gitGraphMode = GitGraphFull
+	m.gitGraphState = &GitGraphState{Error: "git: not a repository"}
+
+	result := m.renderGitGraph()
+	if result == "" {
+		t.Error("renderGitGraph() with error state should return content")
+	}
+	plain := stripANSI(result)
+	if !strings.Contains(plain, "git: not a repository") {
+		t.Errorf("error state should show error message, got:\n%s", plain)
+	}
+}
+
+func TestRenderGitGraph_WithLines(t *testing.T) {
+	m := NewModel("test")
+	m.width = 160
+	m.height = 50
+	m.gitGraphMode = GitGraphFull
+	m.gitGraphState = &GitGraphState{
+		Lines: []GitGraphLine{
+			{
+				Graph:    "* ",
+				SHA:      "abc1234",
+				Message:  "feat: add git graph",
+				Author:   "Alice",
+				Date:     "2026-02-18",
+				IsCommit: true,
+			},
+			{
+				Graph:    "| ",
+				IsCommit: false,
+			},
+		},
+		TotalCount:  2,
+		LastRefresh: time.Now(),
+	}
+
+	result := m.renderGitGraph()
+	if result == "" {
+		t.Error("renderGitGraph() with lines should return non-empty content")
+	}
+	plain := stripANSI(result)
+
+	if !strings.Contains(plain, "GIT GRAPH") {
+		t.Error("result should contain panel title GIT GRAPH")
+	}
+	if !strings.Contains(plain, "abc1234") {
+		t.Error("result should contain commit SHA abc1234")
+	}
+	if !strings.Contains(plain, "feat: add git graph") {
+		t.Error("result should contain commit message")
+	}
+}
+
+func TestRenderGitGraph_SmallMode(t *testing.T) {
+	m := NewModel("test")
+	m.width = 160
+	m.height = 50
+	m.gitGraphMode = GitGraphSmall
+	m.gitGraphState = &GitGraphState{
+		Lines: []GitGraphLine{
+			{
+				Graph:    "* ",
+				SHA:      "abc1234",
+				Message:  "feat: add git graph",
+				Author:   "Alice",
+				Date:     "2026-02-18",
+				IsCommit: true,
+			},
+		},
+		TotalCount:  1,
+		LastRefresh: time.Now(),
+	}
+
+	result := m.renderGitGraph()
+	plain := stripANSI(result)
+
+	if !strings.Contains(plain, "feat: add git graph") {
+		t.Error("small mode should show commit message")
+	}
+	// Small mode should NOT show author/SHA/date columns
+	// (they are part of message-only rendering — no separate columns)
+	if strings.Contains(plain, "Alice") {
+		t.Error("small mode should not show author")
+	}
+}
+
+func TestFormatDecoration_HeadBranch(t *testing.T) {
+	dec := formatDecoration("HEAD -> refs/heads/main")
+	plain := stripANSI(dec)
+	if !strings.Contains(plain, "HEAD") {
+		t.Errorf("expected HEAD in decoration, got %q", plain)
+	}
+	if !strings.Contains(plain, "main") {
+		t.Errorf("expected branch name in decoration, got %q", plain)
+	}
+}
+
+func TestFormatDecoration_Tag(t *testing.T) {
+	dec := formatDecoration("refs/tags/v1.40.0")
+	plain := stripANSI(dec)
+	if !strings.Contains(plain, "v1.40.0") {
+		t.Errorf("expected tag name in decoration, got %q", plain)
+	}
+}
+
+func TestFormatDecoration_Remote(t *testing.T) {
+	dec := formatDecoration("refs/remotes/origin/main")
+	plain := stripANSI(dec)
+	if !strings.Contains(plain, "origin/main") {
+		t.Errorf("expected remote ref in decoration, got %q", plain)
+	}
+}
+
+func TestFormatDecoration_Multiple(t *testing.T) {
+	dec := formatDecoration("HEAD -> refs/heads/main, refs/remotes/origin/main, refs/tags/v1.0")
+	plain := stripANSI(dec)
+	if !strings.Contains(plain, "main") {
+		t.Errorf("expected main branch in decoration, got %q", plain)
+	}
+	if !strings.Contains(plain, "v1.0") {
+		t.Errorf("expected tag v1.0 in decoration, got %q", plain)
+	}
+}
+
+func TestFormatDecoration_Empty(t *testing.T) {
+	dec := formatDecoration("")
+	if dec != "" {
+		t.Errorf("empty decoration should return empty string, got %q", dec)
+	}
+}
+
+func TestColorizeGraphChars_Star(t *testing.T) {
+	result := colorizeGraphChars("* ")
+	if result == "" {
+		t.Error("colorized '*' should not be empty")
+	}
+	// Should contain the star character somewhere (possibly ANSI-wrapped)
+	if !strings.Contains(result, "*") {
+		t.Error("colorized result should contain '*'")
+	}
+}
+
+func TestGitGraphScrollIndicator(t *testing.T) {
+	m := NewModel("test")
+	m.width = 160
+	m.height = 50
+	m.gitGraphMode = GitGraphFull
+	m.gitGraphScroll = 0
+
+	lines := make([]GitGraphLine, 100)
+	for i := range lines {
+		lines[i] = GitGraphLine{
+			Graph:    "* ",
+			SHA:      fmt.Sprintf("%07d", i),
+			Message:  fmt.Sprintf("commit %d", i),
+			IsCommit: true,
+		}
+	}
+	m.gitGraphState = &GitGraphState{
+		Lines:      lines,
+		TotalCount: 100,
+	}
+
+	result := m.renderGitGraph()
+	plain := stripANSI(result)
+
+	// Should show scroll indicator with "of 100"
+	if !strings.Contains(plain, "of 100") {
+		t.Errorf("scroll indicator should show total count, got:\n%s", plain)
+	}
+}
+
+func TestGitGraphRefreshMsg_UpdatesState(t *testing.T) {
+	m := NewModel("test")
+	m.gitGraphMode = GitGraphFull
+
+	newState := &GitGraphState{
+		Lines:      []GitGraphLine{{Graph: "* ", SHA: "abc1234", IsCommit: true}},
+		TotalCount: 1,
+	}
+
+	updated, _ := m.Update(gitRefreshMsg{state: newState, err: nil})
+	model := updated.(Model)
+
+	if model.gitGraphState == nil {
+		t.Fatal("gitGraphState should be updated after gitRefreshMsg")
+	}
+	if model.gitGraphState.TotalCount != 1 {
+		t.Errorf("TotalCount = %d, want 1", model.gitGraphState.TotalCount)
+	}
+}
+
+func TestHelpText_UpdatesWithGraphMode(t *testing.T) {
+	m := NewModel("test")
+	m.width = 160
+	m.height = 50
+
+	// Hidden mode — help should mention "g: git graph"
+	m.gitGraphMode = GitGraphHidden
+	dashboard := m.renderDashboard()
+	plain := stripANSI(dashboard)
+	if !strings.Contains(plain, "g: git graph") {
+		t.Error("hidden mode help should mention 'g: git graph'")
+	}
+
+	// Visible mode — help should mention "tab: focus"
+	m.gitGraphMode = GitGraphFull
+	dashboard = m.renderDashboard()
+	plain = stripANSI(dashboard)
+	if !strings.Contains(plain, "tab: focus") {
+		t.Error("visible mode help should mention 'tab: focus'")
+	}
+	if !strings.Contains(plain, "g: cycle graph") {
+		t.Error("visible mode help should mention 'g: cycle graph'")
+	}
+}
