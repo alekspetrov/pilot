@@ -372,6 +372,31 @@ func TestDecomposer_NoDecomposeLabel(t *testing.T) {
 	}
 }
 
+func TestDetectComplexity_NoDecomposePreventsEpic(t *testing.T) {
+	task := &Task{
+		Title:       "[epic] Large refactor across all adapters",
+		Description: "Phase 1: Refactor GitHub adapter\nPhase 2: Refactor GitLab adapter\nPhase 3: Refactor Linear adapter\nPhase 4: Refactor Jira adapter\nPhase 5: Refactor Slack adapter",
+		Labels:      []string{"pilot", "no-decompose"},
+	}
+
+	// Without no-decompose, this would be Epic (has [epic] tag)
+	result := DetectComplexity(task)
+	if result != ComplexityComplex {
+		t.Errorf("expected ComplexityComplex with no-decompose label, got %s", result)
+	}
+
+	// Without the label, same task should be Epic
+	taskNoLabel := &Task{
+		Title:       task.Title,
+		Description: task.Description,
+		Labels:      []string{"pilot"},
+	}
+	result2 := DetectComplexity(taskNoLabel)
+	if result2 != ComplexityEpic {
+		t.Errorf("expected ComplexityEpic without no-decompose label, got %s", result2)
+	}
+}
+
 func TestDecomposer_WithLLMClassifier(t *testing.T) {
 	// LLM says MEDIUM → should NOT decompose (threshold is complex)
 	config := &DecomposeConfig{
