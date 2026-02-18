@@ -166,12 +166,10 @@ func TestPollerFindOldestUnprocessedWorkItem(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// Should find ID 1 (oldest that's not in progress)
 	if wi == nil {
 		t.Fatal("expected to find a work item")
-	}
-
-	// Should find ID 1 (oldest that's not in progress)
-	if wi.ID != 1 {
+	} else if wi.ID != 1 {
 		t.Errorf("expected oldest unprocessed work item ID 1, got %d", wi.ID)
 	}
 }

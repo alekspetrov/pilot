@@ -16,9 +16,6 @@ import (
 
 func TestNewClient(t *testing.T) {
 	client := NewClient(testutil.FakeGitHubToken)
-	if client == nil {
-		t.Fatal("NewClient returned nil")
-	}
 	if client.token != testutil.FakeGitHubToken {
 		t.Errorf("client.token = %s, want %s", client.token, testutil.FakeGitHubToken)
 	}
@@ -30,9 +27,6 @@ func TestNewClient(t *testing.T) {
 func TestNewClientWithBaseURL(t *testing.T) {
 	customURL := "https://custom.api.example.com"
 	client := NewClientWithBaseURL(testutil.FakeGitHubToken, customURL)
-	if client == nil {
-		t.Fatal("NewClientWithBaseURL returned nil")
-	}
 	if client.token != testutil.FakeGitHubToken {
 		t.Errorf("client.token = %s, want %s", client.token, testutil.FakeGitHubToken)
 	}
