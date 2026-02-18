@@ -3,13 +3,13 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"os/exec"
 )
 
 // GitGraphMode represents the 3 toggle states.
@@ -182,12 +182,9 @@ func parseGitGraphLine(raw, sep string) GitGraphLine {
 	graphPart := ""
 	dataPart := raw
 
-	// The graph chars appear at the start; the format data follows.
-	// Find the boundary: last graph char before the first separator.
-	// Strategy: everything before the first \x00 that isn't a hex digit or space is graph.
-	firstFieldEnd := sepIdx
-	// Walk backward to find where the SHA (7 hex chars) begins
-	shaStart := firstFieldEnd
+	// Walk backward from the first separator to find where the SHA (7 hex chars) begins.
+	// Everything before the SHA is graph drawing characters.
+	shaStart := sepIdx
 	for shaStart > 0 && isHexChar(raw[shaStart-1]) {
 		shaStart--
 	}
