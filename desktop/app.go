@@ -181,6 +181,24 @@ func (a *App) GetHistory(limit int) []HistoryEntry {
 	return entries
 }
 
+// GetAutopilotStatus returns autopilot state from the most recent metrics snapshot.
+// When the daemon is not running, returns an empty status with Enabled=false.
+func (a *App) GetAutopilotStatus() AutopilotStatus {
+	if a.store == nil {
+		return AutopilotStatus{}
+	}
+	rows, err := a.store.GetRecentAutopilotMetrics(1)
+	if err != nil || len(rows) == 0 {
+		return AutopilotStatus{}
+	}
+	r := rows[0]
+	return AutopilotStatus{
+		Enabled:      r.ActivePRs > 0 || r.PRsMerged > 0,
+		FailureCount: r.PRsFailed,
+		ActivePRs:    []ActivePR{}, // Live PR list requires running daemon via gateway API
+	}
+}
+
 // GetServerStatus checks whether the pilot daemon gateway is reachable.
 // It attempts a lightweight HTTP check against the configured gateway URL.
 func (a *App) GetServerStatus() ServerStatus {
