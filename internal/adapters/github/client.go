@@ -593,6 +593,42 @@ func (c *Client) DeleteBranch(ctx context.Context, owner, repo, branch string) e
 	}, DefaultRetryOptions())
 }
 
+// GetJobLogs downloads logs for a GitHub Actions job.
+// GitHub API: GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs
+// Returns the raw log text. The API responds with 302 redirect to log download URL.
+func (c *Client) GetJobLogs(ctx context.Context, owner, repo string, jobID int64) (string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", owner, repo, jobID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	// Read up to 64KB to avoid memory issues with large logs
+	limited := io.LimitReader(resp.Body, 64*1024)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return "", fmt.Errorf("failed to read log body: %w", err)
+	}
+
+	return string(body), nil
+}
+
 // ListPullRequestReviews lists all reviews for a pull request
 func (c *Client) ListPullRequestReviews(ctx context.Context, owner, repo string, number int) ([]*PullRequestReview, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo, number)

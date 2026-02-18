@@ -916,3 +916,55 @@ func TestFailureTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestFeedbackLoop_IssueBody_LogsInDetailsBlock(t *testing.T) {
+	capturedBody := ""
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/owner/repo/issues" && r.Method == "POST" {
+			var input github.IssueInput
+			_ = json.NewDecoder(r.Body).Decode(&input)
+			capturedBody = input.Body
+
+			resp := github.Issue{Number: 200}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	fl := NewFeedbackLoop(ghClient, "owner", "repo", cfg)
+
+	prState := &PRState{
+		PRNumber: 42,
+		HeadSHA:  "abc1234def5678",
+	}
+
+	ciLogs := "SA5011: possible nil pointer dereference\nFAIL"
+
+	_, err := fl.CreateFailureIssue(
+		context.Background(),
+		prState,
+		FailureCIPreMerge,
+		[]string{"lint"},
+		ciLogs,
+	)
+	if err != nil {
+		t.Fatalf("CreateFailureIssue() error = %v", err)
+	}
+
+	// Verify logs are wrapped in <details> block
+	if !strings.Contains(capturedBody, "<details><summary>CI Error Logs</summary>") {
+		t.Error("body should contain <details> block for CI logs")
+	}
+	if !strings.Contains(capturedBody, "</details>") {
+		t.Error("body should contain closing </details> tag")
+	}
+	if !strings.Contains(capturedBody, ciLogs) {
+		t.Error("body should contain the actual CI logs")
+	}
+}

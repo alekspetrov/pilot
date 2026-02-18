@@ -117,17 +117,22 @@ func (f *FeedbackLoop) generateBody(prState *PRState, failureType FailureType, f
 		sb.WriteString("\n")
 	}
 
-	// Error logs section (truncated if too long)
+	// Error logs section (truncated, collapsible)
 	if logs != "" {
-		sb.WriteString("## Error Logs\n\n")
-		sb.WriteString("```\n")
-		if len(logs) > 2000 {
-			sb.WriteString(logs[:2000])
-			sb.WriteString("\n... (truncated)")
-		} else {
-			sb.WriteString(logs)
+		truncated := logs
+		wasTruncated := false
+		if len(truncated) > 2000 {
+			truncated = truncated[:2000]
+			wasTruncated = true
 		}
-		sb.WriteString("\n```\n\n")
+		sb.WriteString("## Error Logs\n\n")
+		sb.WriteString("<details><summary>CI Error Logs</summary>\n\n")
+		sb.WriteString("```\n")
+		sb.WriteString(truncated)
+		if wasTruncated {
+			sb.WriteString("\n... (truncated)")
+		}
+		sb.WriteString("\n```\n</details>\n\n")
 	}
 
 	// Task instructions for Pilot

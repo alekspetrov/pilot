@@ -2206,3 +2206,48 @@ func TestIsUnprocessableError(t *testing.T) {
 		})
 	}
 }
+
+func TestGetJobLogs(t *testing.T) {
+	logContent := "2024-01-01T00:00:00Z lint: SA5011 possible nil pointer\n2024-01-01T00:00:01Z FAIL"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/repos/owner/repo/actions/jobs/12345/logs" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer "+testutil.FakeGitHubToken {
+			t.Error("missing authorization header")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(logContent))
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	logs, err := client.GetJobLogs(context.Background(), "owner", "repo", 12345)
+	if err != nil {
+		t.Fatalf("GetJobLogs() error = %v", err)
+	}
+	if logs != logContent {
+		t.Errorf("GetJobLogs() = %q, want %q", logs, logContent)
+	}
+}
+
+func TestGetJobLogs_APIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	_, err := client.GetJobLogs(context.Background(), "owner", "repo", 99999)
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("error should mention 404: %v", err)
+	}
+}

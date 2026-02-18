@@ -532,7 +532,11 @@ func (c *Controller) handleCIFailed(ctx context.Context, prState *PRState) error
 		}
 	}
 
-	issueNum, err := c.feedbackLoop.CreateFailureIssue(ctx, prState, FailureCIPreMerge, failedChecks, "")
+	// GH-1567: Fetch actual CI error logs so fix issues contain actionable context.
+	// Without logs, Pilot must rediscover errors itself, causing oscillation between error subsets.
+	ciLogs := c.ciMonitor.GetFailedCheckLogs(ctx, prState.HeadSHA, 4000)
+
+	issueNum, err := c.feedbackLoop.CreateFailureIssue(ctx, prState, FailureCIPreMerge, failedChecks, ciLogs)
 	if err != nil {
 		return fmt.Errorf("failed to create fix issue: %w", err)
 	}
@@ -712,7 +716,9 @@ func (c *Controller) handlePostMergeCI(ctx context.Context, prState *PRState) er
 	if status == CIFailure {
 		c.log.Warn("post-merge CI failed", "pr", prState.PRNumber)
 		failedChecks, _ := c.ciMonitor.GetFailedChecks(ctx, mainSHA)
-		issueNum, err := c.feedbackLoop.CreateFailureIssue(ctx, prState, FailureCIPostMerge, failedChecks, "")
+		// GH-1567: Include CI error logs in post-merge fix issues too
+		ciLogs := c.ciMonitor.GetFailedCheckLogs(ctx, mainSHA, 4000)
+		issueNum, err := c.feedbackLoop.CreateFailureIssue(ctx, prState, FailureCIPostMerge, failedChecks, ciLogs)
 		if err != nil {
 			c.log.Error("failed to create post-merge fix issue", "error", err)
 		} else {

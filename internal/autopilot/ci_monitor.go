@@ -386,6 +386,46 @@ func (m *CIMonitor) GetFailedChecks(ctx context.Context, sha string) ([]string, 
 	return failed, nil
 }
 
+// GetFailedCheckLogs fetches logs for all failed check runs and returns them
+// combined as a single string. Each check's logs are prefixed with its name.
+// Logs are truncated to maxLen total characters.
+// If log fetching fails for a check, it is skipped gracefully.
+func (m *CIMonitor) GetFailedCheckLogs(ctx context.Context, sha string, maxLen int) string {
+	checkRuns, err := m.ghClient.ListCheckRuns(ctx, m.owner, m.repo, sha)
+	if err != nil {
+		m.log.Warn("failed to list check runs for log fetching", "sha", sha, "error", err)
+		return ""
+	}
+
+	var combined string
+	for _, run := range checkRuns.CheckRuns {
+		if run.Conclusion != github.ConclusionFailure {
+			continue
+		}
+
+		logs, err := m.ghClient.GetJobLogs(ctx, m.owner, m.repo, run.ID)
+		if err != nil {
+			m.log.Warn("failed to fetch logs for check run",
+				"check", run.Name, "id", run.ID, "error", err)
+			continue
+		}
+
+		if logs == "" {
+			continue
+		}
+
+		section := fmt.Sprintf("=== %s ===\n%s\n", run.Name, logs)
+		combined += section
+
+		if len(combined) >= maxLen {
+			combined = combined[:maxLen]
+			break
+		}
+	}
+
+	return combined
+}
+
 // GetCheckStatus returns the current status of a specific check by name.
 func (m *CIMonitor) GetCheckStatus(ctx context.Context, sha, checkName string) (CIStatus, error) {
 	checkRuns, err := m.ghClient.ListCheckRuns(ctx, m.owner, m.repo, sha)
