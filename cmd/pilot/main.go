@@ -1000,6 +1000,12 @@ Examples:
 				p.Gateway().SetAutopilotProvider(&autopilotProviderAdapter{controller: gwAutopilotController})
 			}
 
+			// GH-1601: Wire task monitor to gateway so /api/v1/tasks returns live task data
+			p.Gateway().SetTaskMonitor(&taskStatesProviderAdapter{getStates: p.GetTaskStates})
+			if gwStore != nil {
+				p.Gateway().SetExecutionStore(&executionStoreAdapter{store: gwStore})
+			}
+
 			if err := p.Start(); err != nil {
 				return fmt.Errorf("failed to start Pilot: %w", err)
 			}

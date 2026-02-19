@@ -704,61 +704,246 @@ func TestHandleStatusTableDriven(t *testing.T) {
 	}
 }
 
-func TestHandleTasksTableDriven(t *testing.T) {
-	config := &Config{Host: "127.0.0.1", Port: 9090}
-	server := NewServer(config)
+// mockTaskMonitor is a test double for TaskMonitor.
+type mockTaskMonitor struct {
+	tasks []*TaskState
+}
 
-	tests := []struct {
-		name           string
-		method         string
-		expectedStatus int
-	}{
-		{
-			name:           "GET request returns empty tasks",
-			method:         http.MethodGet,
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "POST request",
-			method:         http.MethodPost,
-			expectedStatus: http.StatusOK,
-		},
+func (m *mockTaskMonitor) GetAllTasks() []*TaskState { return m.tasks }
+
+// mockExecutionStore is a test double for ExecutionStore.
+type mockExecutionStore struct {
+	records []*ExecutionRecord
+	err     error
+}
+
+func (m *mockExecutionStore) GetRecentExecutionRecords(limit int) ([]*ExecutionRecord, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if limit < len(m.records) {
+		return m.records[:limit], nil
+	}
+	return m.records, nil
+}
+
+func TestHandleTasksNoProviders(t *testing.T) {
+	server := NewServer(&Config{Host: "127.0.0.1", Port: 9090})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	w := httptest.NewRecorder()
+
+	server.handleTasks(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, "/api/v1/tasks", nil)
-			w := httptest.NewRecorder()
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
 
-			server.handleTasks(w, req)
+	tasks, ok := response["tasks"].([]interface{})
+	if !ok {
+		t.Fatal("Expected tasks to be an array")
+	}
+	if len(tasks) != 0 {
+		t.Errorf("Expected empty tasks array, got %d items", len(tasks))
+	}
+}
 
-			if w.Code != tt.expectedStatus {
-				t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
-			}
+func TestHandleTasksWithMonitor(t *testing.T) {
+	server := NewServer(&Config{Host: "127.0.0.1", Port: 9090})
+	server.SetTaskMonitor(&mockTaskMonitor{
+		tasks: []*TaskState{
+			{
+				ID:       "task-1",
+				Title:    "Add feature X",
+				Status:   "running",
+				Phase:    "IMPL",
+				Progress: 45,
+				PRUrl:    "",
+				IssueURL: "https://github.com/test/repo/issues/1",
+				Message:  "Writing code",
+			},
+			{
+				ID:       "task-2",
+				Title:    "Fix bug Y",
+				Status:   "completed",
+				Phase:    "COMPLETE",
+				Progress: 100,
+				PRUrl:    "https://github.com/test/repo/pull/42",
+				IssueURL: "https://github.com/test/repo/issues/2",
+				Message:  "Done",
+			},
+		},
+	})
 
-			if w.Header().Get("Content-Type") != "application/json" {
-				t.Error("Expected Content-Type application/json")
-			}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	w := httptest.NewRecorder()
 
-			var response map[string]interface{}
-			if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
-				t.Fatalf("Failed to decode response: %v", err)
-			}
+	server.handleTasks(w, req)
 
-			tasks, ok := response["tasks"]
-			if !ok {
-				t.Error("Response should include 'tasks' field")
-			}
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+	if w.Header().Get("Content-Type") != "application/json" {
+		t.Error("Expected Content-Type application/json")
+	}
 
-			taskArray, ok := tasks.([]interface{})
-			if !ok {
-				t.Error("Tasks should be an array")
-			}
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
 
-			if len(taskArray) != 0 {
-				t.Errorf("Expected empty tasks array, got %d items", len(taskArray))
-			}
-		})
+	tasks, ok := response["tasks"].([]interface{})
+	if !ok {
+		t.Fatal("Expected tasks to be an array")
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("Expected 2 tasks, got %d", len(tasks))
+	}
+
+	task0 := tasks[0].(map[string]interface{})
+	if task0["id"] != "task-1" {
+		t.Errorf("Expected task id=task-1, got %v", task0["id"])
+	}
+	if task0["title"] != "Add feature X" {
+		t.Errorf("Expected title='Add feature X', got %v", task0["title"])
+	}
+	if task0["status"] != "running" {
+		t.Errorf("Expected status=running, got %v", task0["status"])
+	}
+	if task0["phase"] != "IMPL" {
+		t.Errorf("Expected phase=IMPL, got %v", task0["phase"])
+	}
+	if task0["progress"] != float64(45) {
+		t.Errorf("Expected progress=45, got %v", task0["progress"])
+	}
+	if task0["issueUrl"] != "https://github.com/test/repo/issues/1" {
+		t.Errorf("Expected issueUrl set, got %v", task0["issueUrl"])
+	}
+
+	task1 := tasks[1].(map[string]interface{})
+	if task1["id"] != "task-2" {
+		t.Errorf("Expected task id=task-2, got %v", task1["id"])
+	}
+	if task1["prUrl"] != "https://github.com/test/repo/pull/42" {
+		t.Errorf("Expected prUrl set, got %v", task1["prUrl"])
+	}
+}
+
+func TestHandleTasksFallbackToStore(t *testing.T) {
+	server := NewServer(&Config{Host: "127.0.0.1", Port: 9090})
+	// Monitor with no tasks — should fall back to store
+	server.SetTaskMonitor(&mockTaskMonitor{tasks: nil})
+	server.SetExecutionStore(&mockExecutionStore{
+		records: []*ExecutionRecord{
+			{
+				TaskID:    "exec-1",
+				TaskTitle: "Previous task",
+				Status:    "completed",
+				PRUrl:     "https://github.com/test/repo/pull/10",
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	w := httptest.NewRecorder()
+
+	server.handleTasks(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	tasks := response["tasks"].([]interface{})
+	if len(tasks) != 1 {
+		t.Fatalf("Expected 1 fallback task, got %d", len(tasks))
+	}
+
+	task := tasks[0].(map[string]interface{})
+	if task["id"] != "exec-1" {
+		t.Errorf("Expected id=exec-1, got %v", task["id"])
+	}
+	if task["title"] != "Previous task" {
+		t.Errorf("Expected title='Previous task', got %v", task["title"])
+	}
+	if task["status"] != "completed" {
+		t.Errorf("Expected status=completed, got %v", task["status"])
+	}
+	if task["prUrl"] != "https://github.com/test/repo/pull/10" {
+		t.Errorf("Expected prUrl set, got %v", task["prUrl"])
+	}
+}
+
+func TestHandleTasksNoFallbackWhenMonitorHasTasks(t *testing.T) {
+	server := NewServer(&Config{Host: "127.0.0.1", Port: 9090})
+	server.SetTaskMonitor(&mockTaskMonitor{
+		tasks: []*TaskState{
+			{ID: "live-1", Title: "Active task", Status: "running"},
+		},
+	})
+	server.SetExecutionStore(&mockExecutionStore{
+		records: []*ExecutionRecord{
+			{TaskID: "old-1", TaskTitle: "Old task", Status: "completed"},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	w := httptest.NewRecorder()
+
+	server.handleTasks(w, req)
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	tasks := response["tasks"].([]interface{})
+	if len(tasks) != 1 {
+		t.Fatalf("Expected 1 task (live only), got %d", len(tasks))
+	}
+
+	task := tasks[0].(map[string]interface{})
+	if task["id"] != "live-1" {
+		t.Errorf("Expected live task, got %v", task["id"])
+	}
+}
+
+func TestSetTaskMonitor(t *testing.T) {
+	server := NewServer(&Config{Host: "127.0.0.1", Port: 9090})
+
+	if server.taskMonitor != nil {
+		t.Error("Expected nil task monitor initially")
+	}
+
+	monitor := &mockTaskMonitor{}
+	server.SetTaskMonitor(monitor)
+
+	if server.taskMonitor == nil {
+		t.Error("Expected task monitor to be set")
+	}
+}
+
+func TestSetExecutionStore(t *testing.T) {
+	server := NewServer(&Config{Host: "127.0.0.1", Port: 9090})
+
+	if server.executionStore != nil {
+		t.Error("Expected nil execution store initially")
+	}
+
+	store := &mockExecutionStore{}
+	server.SetExecutionStore(store)
+
+	if server.executionStore == nil {
+		t.Error("Expected execution store to be set")
 	}
 }
 
