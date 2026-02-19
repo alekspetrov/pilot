@@ -71,6 +71,7 @@ type Controller struct {
 	autoMerger   *AutoMerger
 	feedbackLoop *FeedbackLoop
 	releaser     *Releaser
+	deployer     *Deployer
 	notifier     Notifier
 	monitor      TaskMonitor // GH-1336: sync dashboard state on merge
 	log          *slog.Logger
@@ -121,6 +122,12 @@ func NewController(cfg *Config, ghClient *github.Client, approvalMgr *approval.M
 	// Initialize releaser if release config exists
 	if cfg.Release != nil && cfg.Release.Enabled {
 		c.releaser = NewReleaser(ghClient, owner, repo, cfg.Release)
+	}
+
+	// Initialize deployer for post-merge actions (always available, noop if action is "none")
+	c.deployer = NewDeployer(ghClient, owner, repo, c.log)
+	if c.releaser != nil {
+		c.deployer.SetReleaser(c.releaser)
 	}
 
 	return c
@@ -734,7 +741,9 @@ func (c *Controller) handleMerged(ctx context.Context, prState *PRState) error {
 		"should_release", c.shouldTriggerRelease(),
 	)
 
-	if c.config.ResolvedEnv().SkipPostMergeCI {
+	envCfg := c.config.ResolvedEnv()
+
+	if envCfg.SkipPostMergeCI {
 		// Fast path: skip post-merge CI, check if we should release immediately
 		if c.shouldTriggerRelease() && !c.config.Release.RequireCI {
 			c.log.Info("skipping post-merge CI: proceeding to release",
@@ -743,6 +752,13 @@ func (c *Controller) handleMerged(ctx context.Context, prState *PRState) error {
 			prState.Stage = StageReleasing
 			return nil
 		}
+
+		// Execute post-merge deployer (webhook, branch-push, tag)
+		if err := c.deployer.Execute(ctx, c.config.EnvironmentName(), envCfg, prState); err != nil {
+			c.log.Error("post-merge deploy action failed", "pr", prState.PRNumber, "error", err)
+			// Non-fatal: log and continue to remove PR
+		}
+
 		c.log.Info("skipping post-merge CI: PR complete", "pr", prState.PRNumber)
 		c.removePR(prState.PRNumber)
 		return nil
@@ -792,6 +808,13 @@ func (c *Controller) handlePostMergeCI(ctx context.Context, prState *PRState) er
 	if c.shouldTriggerRelease() {
 		prState.Stage = StageReleasing
 		return nil
+	}
+
+	// Execute post-merge deployer (webhook, branch-push, tag)
+	envCfg := c.config.ResolvedEnv()
+	if err := c.deployer.Execute(ctx, c.config.EnvironmentName(), envCfg, prState); err != nil {
+		c.log.Error("post-merge deploy action failed", "pr", prState.PRNumber, "error", err)
+		// Non-fatal: log and continue to remove PR
 	}
 
 	c.log.Info("post-merge CI passed", "pr", prState.PRNumber)
