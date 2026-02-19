@@ -71,6 +71,7 @@ type Controller struct {
 	autoMerger   *AutoMerger
 	feedbackLoop *FeedbackLoop
 	releaser     *Releaser
+	deployer     *Deployer
 	notifier     Notifier
 	monitor      TaskMonitor // GH-1336: sync dashboard state on merge
 	log          *slog.Logger
@@ -117,6 +118,7 @@ func NewController(cfg *Config, ghClient *github.Client, approvalMgr *approval.M
 	c.ciMonitor = NewCIMonitor(ghClient, owner, repo, cfg)
 	c.autoMerger = NewAutoMerger(ghClient, approvalMgr, c.ciMonitor, owner, repo, cfg)
 	c.feedbackLoop = NewFeedbackLoop(ghClient, owner, repo, cfg)
+	c.deployer = NewDeployer(ghClient, owner, repo, c.log)
 
 	// Initialize releaser if release config exists
 	if cfg.Release != nil && cfg.Release.Enabled {
@@ -745,7 +747,16 @@ func (c *Controller) handleMerged(ctx context.Context, prState *PRState) error {
 		"should_release", c.shouldTriggerRelease(),
 	)
 
-	if c.config.ResolvedEnv().SkipPostMergeCI {
+	envCfg := c.config.ResolvedEnv()
+
+	// Run post-merge deployer action (webhook, branch-push)
+	if c.deployer != nil {
+		if err := c.deployer.Execute(ctx, envCfg, prState); err != nil {
+			c.log.Error("post-merge deploy action failed", "pr", prState.PRNumber, "error", err)
+		}
+	}
+
+	if envCfg.SkipPostMergeCI {
 		// Fast path: skip post-merge CI, check if we should release immediately
 		if c.shouldTriggerRelease() && !c.config.Release.RequireCI {
 			c.log.Info("skipping post-merge CI: proceeding to release",

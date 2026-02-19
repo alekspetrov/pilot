@@ -547,6 +547,31 @@ func (c *Client) GetPRCommits(ctx context.Context, owner, repo string, prNumber 
 	return result, nil
 }
 
+// UpdateRef creates or updates a branch ref to point at the given SHA.
+// Tries PATCH first (update existing ref); on 422 (ref doesn't exist) falls back to POST (create).
+func (c *Client) UpdateRef(ctx context.Context, owner, repo, branch, sha string) error {
+	ref := "refs/heads/" + branch
+
+	// Try update first (PATCH)
+	patchPath := fmt.Sprintf("/repos/%s/%s/git/%s", owner, repo, ref)
+	patchBody := map[string]interface{}{
+		"sha":   sha,
+		"force": true,
+	}
+	err := c.doRequest(ctx, http.MethodPatch, patchPath, patchBody, nil)
+	if err == nil {
+		return nil
+	}
+
+	// If ref doesn't exist, create it (POST)
+	postPath := fmt.Sprintf("/repos/%s/%s/git/refs", owner, repo)
+	postBody := map[string]string{
+		"ref": ref,
+		"sha": sha,
+	}
+	return c.doRequest(ctx, http.MethodPost, postPath, postBody, nil)
+}
+
 // CompareCommits compares two commits and returns commits between them
 func (c *Client) CompareCommits(ctx context.Context, owner, repo, base, head string) ([]*Commit, error) {
 	path := fmt.Sprintf("/repos/%s/%s/compare/%s...%s", owner, repo, base, head)
