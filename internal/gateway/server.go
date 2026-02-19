@@ -55,6 +55,38 @@ type AutopilotProvider interface {
 	IsAutoReleaseEnabled() bool
 }
 
+// TaskState holds task data exposed to the gateway API.
+// Decoupled from executor.TaskState to avoid import cycles.
+type TaskState struct {
+	ID       string
+	Title    string
+	Status   string
+	Phase    string
+	Progress int
+	PRUrl    string
+	IssueURL string
+	Message  string
+}
+
+// TaskMonitor provides real-time task state for the /api/v1/tasks endpoint.
+type TaskMonitor interface {
+	GetAllTasks() []*TaskState
+}
+
+// ExecutionRecord holds historical execution data for the /api/v1/tasks fallback.
+// Decoupled from memory.Execution to avoid import cycles.
+type ExecutionRecord struct {
+	TaskID    string
+	TaskTitle string
+	Status    string
+	PRUrl     string
+}
+
+// ExecutionStore provides historical execution data when no live tasks are available.
+type ExecutionStore interface {
+	GetRecentExecutionRecords(limit int) ([]*ExecutionRecord, error)
+}
+
 // Server is the main gateway server handling WebSocket and HTTP connections.
 // It provides a control plane for managing Pilot via WebSocket, receives webhooks
 // from external services (Linear, GitHub, Jira, Asana), and exposes REST APIs for status
@@ -74,6 +106,8 @@ type Server struct {
 	liveness            *livenessState
 	prometheusExporter  *PrometheusExporter
 	autopilotProvider   AutopilotProvider
+	taskMonitor         TaskMonitor
+	executionStore      ExecutionStore
 }
 
 // Config holds gateway server configuration including network binding options.
@@ -263,6 +297,22 @@ func (s *Server) SetAutopilotProvider(p AutopilotProvider) {
 	s.autopilotProvider = p
 }
 
+// SetTaskMonitor sets the task monitor for the /api/v1/tasks endpoint.
+// Must be called before Start().
+func (s *Server) SetTaskMonitor(m TaskMonitor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.taskMonitor = m
+}
+
+// SetExecutionStore sets the execution store for the /api/v1/tasks fallback.
+// Must be called before Start().
+func (s *Server) SetExecutionStore(store ExecutionStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.executionStore = store
+}
+
 // Shutdown gracefully shuts down the server with a 30-second timeout.
 // It waits for active connections to complete before returning.
 func (s *Server) Shutdown() error {
@@ -436,13 +486,60 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleTasks returns current tasks
+// handleTasks returns current tasks from the live monitor, falling back to recent executions.
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	// Return placeholder for now - tasks would come from executor/memory integration
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"tasks": []interface{}{},
-	})
+
+	s.mu.RLock()
+	monitor := s.taskMonitor
+	store := s.executionStore
+	s.mu.RUnlock()
+
+	type taskResponse struct {
+		ID       string `json:"id"`
+		Title    string `json:"title"`
+		Status   string `json:"status"`
+		Phase    string `json:"phase,omitempty"`
+		Progress int    `json:"progress,omitempty"`
+		PRUrl    string `json:"prUrl,omitempty"`
+		IssueURL string `json:"issueUrl,omitempty"`
+		Message  string `json:"message,omitempty"`
+	}
+
+	tasks := make([]taskResponse, 0)
+
+	// Live tasks from in-memory monitor (real-time progress)
+	if monitor != nil {
+		for _, t := range monitor.GetAllTasks() {
+			tasks = append(tasks, taskResponse{
+				ID:       t.ID,
+				Title:    t.Title,
+				Status:   t.Status,
+				Phase:    t.Phase,
+				Progress: t.Progress,
+				PRUrl:    t.PRUrl,
+				IssueURL: t.IssueURL,
+				Message:  t.Message,
+			})
+		}
+	}
+
+	// If no live tasks, fall back to recent executions from store
+	if len(tasks) == 0 && store != nil {
+		recent, err := store.GetRecentExecutionRecords(10)
+		if err == nil {
+			for _, e := range recent {
+				tasks = append(tasks, taskResponse{
+					ID:     e.TaskID,
+					Title:  e.TaskTitle,
+					Status: e.Status,
+					PRUrl:  e.PRUrl,
+				})
+			}
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"tasks": tasks})
 }
 
 // handleAutopilot returns current autopilot state including active PRs.

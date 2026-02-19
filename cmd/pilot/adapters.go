@@ -18,6 +18,7 @@ import (
 	"github.com/alekspetrov/pilot/internal/executor"
 	"github.com/alekspetrov/pilot/internal/gateway"
 	"github.com/alekspetrov/pilot/internal/logging"
+	"github.com/alekspetrov/pilot/internal/memory"
 	"github.com/alekspetrov/pilot/internal/quality"
 	"github.com/alekspetrov/pilot/internal/teams"
 )
@@ -301,6 +302,71 @@ func (a *autopilotProviderAdapter) GetFailureCount() int {
 func (a *autopilotProviderAdapter) IsAutoReleaseEnabled() bool {
 	cfg := a.controller.Config()
 	return cfg.Release != nil && cfg.Release.Enabled
+}
+
+// taskMonitorAdapter wraps executor.Monitor to satisfy gateway.TaskMonitor.
+// GH-1601: Bridges task monitor to gateway API for /api/v1/tasks endpoint.
+type taskMonitorAdapter struct {
+	monitor *executor.Monitor
+}
+
+func (a *taskMonitorAdapter) GetAllTasks() []*gateway.TaskState {
+	return convertExecutorStates(a.monitor.GetAll())
+}
+
+// taskStatesProviderAdapter wraps a function that returns []*executor.TaskState.
+// GH-1601: Used in gateway mode where Pilot.GetTaskStates() provides task data.
+type taskStatesProviderAdapter struct {
+	getStates func() []*executor.TaskState
+}
+
+func (a *taskStatesProviderAdapter) GetAllTasks() []*gateway.TaskState {
+	return convertExecutorStates(a.getStates())
+}
+
+func convertExecutorStates(states []*executor.TaskState) []*gateway.TaskState {
+	result := make([]*gateway.TaskState, 0, len(states))
+	for _, s := range states {
+		result = append(result, &gateway.TaskState{
+			ID:       s.ID,
+			Title:    s.Title,
+			Status:   string(s.Status),
+			Phase:    s.Phase,
+			Progress: s.Progress,
+			PRUrl:    s.PRUrl,
+			IssueURL: s.IssueURL,
+			Message:  s.Message,
+		})
+	}
+	return result
+}
+
+// executionStoreAdapter wraps memory.Store to satisfy gateway.ExecutionStore.
+// GH-1601: Provides fallback historical data for /api/v1/tasks endpoint.
+type executionStoreAdapter struct {
+	store executionStoreSource
+}
+
+// executionStoreSource is the subset of memory.Store needed for the adapter.
+type executionStoreSource interface {
+	GetRecentExecutions(limit int) ([]*memory.Execution, error)
+}
+
+func (a *executionStoreAdapter) GetRecentExecutionRecords(limit int) ([]*gateway.ExecutionRecord, error) {
+	execs, err := a.store.GetRecentExecutions(limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*gateway.ExecutionRecord, 0, len(execs))
+	for _, e := range execs {
+		result = append(result, &gateway.ExecutionRecord{
+			TaskID:    e.TaskID,
+			TaskTitle: e.TaskTitle,
+			Status:    e.Status,
+			PRUrl:     e.PRUrl,
+		})
+	}
+	return result, nil
 }
 
 // resolveOwnerRepo determines the GitHub owner and repo from config or git remote.
