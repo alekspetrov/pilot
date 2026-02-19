@@ -2676,7 +2676,7 @@ func TestRunner_SetLogStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	runner.SetLogStore(store)
 	if runner.logStore != store {
@@ -2698,7 +2698,7 @@ func TestRunner_saveLogEntry_WritesEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	runner := NewRunner()
 	runner.SetLogStore(store)
@@ -2749,7 +2749,7 @@ func TestRunner_saveLogEntry_ErrorLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	runner := NewRunner()
 	runner.SetLogStore(store)
