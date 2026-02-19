@@ -68,7 +68,7 @@ func TestDashboardWebSocket_InitialLogs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WebSocket dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Read initial batch
 	_, msg, err := conn.ReadMessage()
@@ -108,7 +108,7 @@ func TestDashboardWebSocket_StreamEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WebSocket dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Read empty initial batch
 	_, msg, err := conn.ReadMessage()
@@ -134,7 +134,7 @@ func TestDashboardWebSocket_StreamEntry(t *testing.T) {
 	})
 
 	// Read streamed entry
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, msg, err = conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("ReadMessage for streamed entry failed: %v", err)
@@ -185,7 +185,7 @@ func TestDashboardWebSocket_ClientDisconnect(t *testing.T) {
 	}
 
 	// Read initial batch
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, _, _ = conn.ReadMessage()
 
 	// Verify subscriber was added
@@ -194,7 +194,7 @@ func TestDashboardWebSocket_ClientDisconnect(t *testing.T) {
 	}
 
 	// Close client connection
-	conn.Close()
+	_ = conn.Close()
 
 	// Give server time to clean up
 	time.Sleep(100 * time.Millisecond)
