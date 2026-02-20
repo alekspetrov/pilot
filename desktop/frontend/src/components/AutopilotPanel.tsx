@@ -52,8 +52,8 @@ function DotRow({ label, value, valueColor = 'text-lightgray' }: { label: string
   return (
     <div className="flex items-baseline gap-0 text-[10px]">
       <span className="text-midgray shrink-0">{label}</span>
-      <span className="flex-1 text-slate overflow-hidden whitespace-nowrap">
-        {' '}{'·'.repeat(20)}
+      <span className="flex-1 text-slate overflow-hidden whitespace-nowrap mx-0.5">
+        {'·'.repeat(80)}
       </span>
       <span className={`shrink-0 ${valueColor}`}>{value}</span>
     </div>

@@ -24,32 +24,25 @@ function App() {
       {/* Metrics row */}
       <MetricsCards metrics={metrics} />
 
-      {/* Two-column layout: dashboard panels (left) + git graph (right) */}
+      {/* Two-column layout: left stack + right git graph */}
       <div className="flex-1 flex gap-1.5 px-2 pb-2 min-h-0 overflow-hidden">
-        {/* Left column: existing dashboard panels */}
+        {/* Left column: vertical stack matching TUI layout */}
         <div className="flex-[2] flex flex-col gap-1.5 min-w-0 min-h-0">
-          {/* Middle row: Queue (2/3) + History (1/3) */}
-          <div className="flex-1 flex gap-1.5 min-h-0">
-            <div className="flex-[2] min-w-0 min-h-0 flex flex-col">
-              <QueuePanel tasks={queueTasks} />
-            </div>
-            <div className="flex-1 min-w-0 min-h-0 flex flex-col">
-              <HistoryPanel entries={history} />
-            </div>
+          <div className="flex-[3] min-w-0 min-h-0 flex flex-col">
+            <QueuePanel tasks={queueTasks} />
           </div>
-
-          {/* Bottom row: Autopilot (1/3) + Logs (2/3) */}
-          <div className="shrink-0 flex gap-1.5" style={{ height: '30%', minHeight: '120px', maxHeight: '180px' }}>
-            <div className="flex-1 min-w-0 min-h-0 flex flex-col">
-              <AutopilotPanel status={autopilot} />
-            </div>
-            <div className="flex-[2] min-w-0 min-h-0 flex flex-col">
-              <LogsPanel entries={logs} />
-            </div>
+          <div className="flex-[2] min-w-0 min-h-0 flex flex-col">
+            <AutopilotPanel status={autopilot} />
+          </div>
+          <div className="flex-[3] min-w-0 min-h-0 flex flex-col">
+            <HistoryPanel entries={history} />
+          </div>
+          <div className="flex-[2] min-w-0 min-h-0 flex flex-col">
+            <LogsPanel entries={logs} />
           </div>
         </div>
 
-        {/* Right column: Git Graph */}
+        {/* Right column: full-height Git Graph */}
         <div className="flex-[3] min-w-0 min-h-0 flex flex-col">
           <GitGraphPanel data={gitGraph} />
         </div>

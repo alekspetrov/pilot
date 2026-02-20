@@ -4,12 +4,6 @@ import type { LogEntry } from '../types'
 
 export type { LogEntry }
 
-const LEVEL_COLORS: Record<string, string> = {
-  info: 'text-midgray',
-  warn: 'text-amber',
-  error: 'text-rose',
-}
-
 interface LogsPanelProps {
   entries: LogEntry[]
 }
@@ -30,11 +24,11 @@ export function LogsPanel({ entries }: LogsPanelProps) {
           <div className="text-gray text-[10px]">no log entries</div>
         ) : (
           entries.map((e, i) => (
-            <div key={i} className="flex gap-2 text-[10px] leading-tight py-px">
-              <span className="text-gray shrink-0">{e.ts}</span>
-              <span className={LEVEL_COLORS[e.level ?? 'info'] ?? 'text-midgray'}>
-                {e.message}
-              </span>
+            <div key={i} className="flex gap-0 text-[10px] leading-tight py-px">
+              {e.component && (
+                <span className="text-steel shrink-0">[{e.component}]&nbsp;</span>
+              )}
+              <span className="text-lightgray truncate">{e.message}</span>
             </div>
           ))
         )}

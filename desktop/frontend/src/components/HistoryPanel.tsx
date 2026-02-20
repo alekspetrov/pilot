@@ -22,7 +22,7 @@ interface HistoryRowProps {
 }
 
 function HistoryRow({ entry, isSubIssue = false }: HistoryRowProps) {
-  const icon = entry.status === 'completed' ? '✓' : '✗'
+  const icon = entry.status === 'completed' ? '+' : 'x'
   const iconColor = entry.status === 'completed' ? 'text-sage' : 'text-rose'
   const indent = isSubIssue ? 'pl-3' : ''
 
@@ -37,9 +37,9 @@ function HistoryRow({ entry, isSubIssue = false }: HistoryRowProps) {
       onClick={handleClick}
     >
       <span className={`text-[10px] ${iconColor} shrink-0`}>{icon}</span>
-      <span className="text-steel text-[10px] shrink-0 w-12">{entry.issueID}</span>
+      <span className="text-steel text-[10px] font-bold shrink-0 w-12">{entry.issueID}</span>
       <span className="text-lightgray text-[10px] flex-1 min-w-0 truncate">{entry.title}</span>
-      <span className="text-gray text-[10px] shrink-0">{timeAgo(entry.completedAt)}</span>
+      <span className="text-gray text-[10px] shrink-0 text-right">{timeAgo(entry.completedAt)}</span>
     </div>
   )
 }
