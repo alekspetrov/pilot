@@ -12,6 +12,8 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+var version = "dev"
+
 func main() {
 	app := NewApp()
 
@@ -31,7 +33,7 @@ func main() {
 		Mac: &mac.Options{
 			TitleBar: mac.TitleBarDefault(),
 			About: &mac.AboutInfo{
-				Title:   "Pilot",
+				Title:   "Pilot " + version,
 				Message: "AI that ships your tickets",
 			},
 		},
