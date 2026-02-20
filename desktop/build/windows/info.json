@@ -1,0 +1,12 @@
+{
+    "fixed": {
+        "file_version": "{{.Info.ProductVersion}}"
+    },
+    "info": {
+        "0000": {
+            "ProductVersion": "{{.Info.ProductVersion}}",
+            "ProductName": "Pilot",
+            "FileDescription": "Pilot Desktop - AI that ships your tickets"
+        }
+    }
+}

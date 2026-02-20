@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Pilot
+Comment=AI that ships your tickets
+Exec=Pilot
+Icon=pilot
+Terminal=false
+Categories=Development;
