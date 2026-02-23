@@ -20,6 +20,7 @@ import (
 
 	"github.com/alekspetrov/pilot/internal/adapters/asana"
 	"github.com/alekspetrov/pilot/internal/adapters/github"
+	"github.com/alekspetrov/pilot/internal/adapters/gitlab"
 	"github.com/alekspetrov/pilot/internal/adapters/jira"
 	"github.com/alekspetrov/pilot/internal/adapters/linear"
 	"github.com/alekspetrov/pilot/internal/adapters/slack"
@@ -116,6 +117,7 @@ func newStartCmd() *cobra.Command {
 		enableTelegram bool
 		enableGithub   bool
 		enableLinear   bool
+		enableGitlab   bool
 		enableSlack    bool
 		// Mode flags
 		noGateway    bool   // Lightweight mode: polling only, no HTTP gateway
@@ -156,7 +158,7 @@ Examples:
 			}
 
 			// Apply flag overrides to config
-			applyInputOverrides(cfg, cmd, enableTelegram, enableGithub, enableLinear, enableSlack, enableTunnel)
+			applyInputOverrides(cfg, cmd, enableTelegram, enableGithub, enableLinear, enableGitlab, enableSlack, enableTunnel)
 
 			// Apply team ID override if flag provided
 			if teamID != "" {
@@ -946,6 +948,73 @@ Examples:
 				}(asanaPoller)
 			}
 
+			// Enable GitLab polling in gateway mode if configured (GH-1698)
+			if cfg.Adapters.GitLab != nil && cfg.Adapters.GitLab.Enabled &&
+				cfg.Adapters.GitLab.Polling != nil && cfg.Adapters.GitLab.Polling.Enabled {
+
+				// Determine interval
+				interval := 30 * time.Second
+				if cfg.Adapters.GitLab.Polling.Interval > 0 {
+					interval = cfg.Adapters.GitLab.Polling.Interval
+				}
+
+				// Determine label
+				label := "pilot"
+				if cfg.Adapters.GitLab.Polling.Label != "" {
+					label = cfg.Adapters.GitLab.Polling.Label
+				} else if cfg.Adapters.GitLab.PilotLabel != "" {
+					label = cfg.Adapters.GitLab.PilotLabel
+				}
+
+				// Create GitLab client
+				var gitlabClient *gitlab.Client
+				if cfg.Adapters.GitLab.BaseURL != "" && cfg.Adapters.GitLab.BaseURL != "https://gitlab.com" {
+					gitlabClient = gitlab.NewClientWithBaseURL(cfg.Adapters.GitLab.Token, cfg.Adapters.GitLab.Project, cfg.Adapters.GitLab.BaseURL)
+				} else {
+					gitlabClient = gitlab.NewClient(cfg.Adapters.GitLab.Token, cfg.Adapters.GitLab.Project)
+				}
+
+				// Build poller options
+				var gitlabPollerOpts []gitlab.PollerOption
+				gitlabPollerOpts = append(gitlabPollerOpts,
+					gitlab.WithOnIssue(func(issueCtx context.Context, issue *gitlab.Issue) error {
+						_, err := handleGitLabIssueWithResult(issueCtx, cfg, gitlabClient, issue, projectPath, gwDispatcher, gwRunner, gwMonitor, gwProgram, gwAlertsEngine, gwEnforcer)
+						return err
+					}),
+				)
+
+				// Wire OnMRCreated callback to autopilot controller
+				if gwAutopilotController != nil {
+					gitlabPollerOpts = append(gitlabPollerOpts,
+						gitlab.WithOnMRCreated(func(mrIID int, mrURL string, issueIID int, headSHA string, branchName string) {
+							// Route to autopilot via OnPRCreated (MR ≈ PR for autopilot purposes)
+							gwAutopilotController.OnPRCreated(mrIID, mrURL, issueIID, headSHA, branchName)
+						}),
+					)
+				}
+
+				// Wire processed store for dedup across restarts
+				if gwAutopilotStateStore != nil {
+					gitlabPollerOpts = append(gitlabPollerOpts, gitlab.WithProcessedStore(gwAutopilotStateStore))
+				}
+
+				// Wire max concurrent from orchestrator config
+				if cfg.Orchestrator != nil && cfg.Orchestrator.MaxConcurrent > 0 {
+					gitlabPollerOpts = append(gitlabPollerOpts, gitlab.WithMaxConcurrent(cfg.Orchestrator.MaxConcurrent))
+				}
+
+				gitlabPoller := gitlab.NewPoller(gitlabClient, label, interval, gitlabPollerOpts...)
+
+				logging.WithComponent("start").Info("GitLab polling enabled in gateway mode",
+					slog.String("project", cfg.Adapters.GitLab.Project),
+					slog.String("label", label),
+					slog.Duration("interval", interval),
+				)
+				go func(p *gitlab.Poller) {
+					p.Start(context.Background())
+				}(gitlabPoller)
+			}
+
 			// Wire teams service if --team flag provided (GH-633)
 			var teamsDB *sql.DB
 			if cfg.TeamID != "" {
@@ -1110,6 +1179,7 @@ Examples:
 	cmd.Flags().BoolVar(&enableTelegram, "telegram", false, "Enable Telegram polling (overrides config)")
 	cmd.Flags().BoolVar(&enableGithub, "github", false, "Enable GitHub polling (overrides config)")
 	cmd.Flags().BoolVar(&enableLinear, "linear", false, "Enable Linear webhooks (overrides config)")
+	cmd.Flags().BoolVar(&enableGitlab, "gitlab", false, "Enable GitLab polling (overrides config)")
 	cmd.Flags().BoolVar(&enableSlack, "slack", false, "Enable Slack Socket Mode (overrides config)")
 	cmd.Flags().BoolVar(&enableTunnel, "tunnel", false, "Enable public tunnel for webhook ingress (Cloudflare/ngrok)")
 	cmd.Flags().StringVar(&teamID, "team", "", "Team ID or name for project access scoping (overrides config)")
@@ -1121,7 +1191,7 @@ Examples:
 
 // applyInputOverrides applies CLI flag overrides to config
 // Uses cmd.Flags().Changed() to only apply flags that were explicitly set
-func applyInputOverrides(cfg *config.Config, cmd *cobra.Command, telegramFlag, githubFlag, linearFlag, slackFlag, tunnelFlag bool) {
+func applyInputOverrides(cfg *config.Config, cmd *cobra.Command, telegramFlag, githubFlag, linearFlag, gitlabFlag, slackFlag, tunnelFlag bool) {
 	if cmd.Flags().Changed("telegram") {
 		if cfg.Adapters.Telegram == nil {
 			cfg.Adapters.Telegram = telegram.DefaultConfig()
@@ -1144,6 +1214,16 @@ func applyInputOverrides(cfg *config.Config, cmd *cobra.Command, telegramFlag, g
 			cfg.Adapters.Linear = linear.DefaultConfig()
 		}
 		cfg.Adapters.Linear.Enabled = linearFlag
+	}
+	if cmd.Flags().Changed("gitlab") {
+		if cfg.Adapters.GitLab == nil {
+			cfg.Adapters.GitLab = gitlab.DefaultConfig()
+		}
+		cfg.Adapters.GitLab.Enabled = gitlabFlag
+		if cfg.Adapters.GitLab.Polling == nil {
+			cfg.Adapters.GitLab.Polling = &gitlab.PollingConfig{}
+		}
+		cfg.Adapters.GitLab.Polling.Enabled = gitlabFlag
 	}
 	if cmd.Flags().Changed("slack") {
 		if cfg.Adapters.Slack == nil {
