@@ -41,7 +41,7 @@ func TestDownloadAsset_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("downloadAsset() error = %v", err)
 	}
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	got, err := os.ReadFile(tmpPath)
 	if err != nil {
@@ -121,7 +121,7 @@ func TestDownloadAsset_NilProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("downloadAsset() error = %v", err)
 	}
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ func TestCreateBackup_ReadOnlyDir(t *testing.T) {
 	if err := os.Mkdir(readOnlyDir, 0555); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(readOnlyDir, 0755)
+	defer func() { _ = os.Chmod(readOnlyDir, 0755) }()
 
 	u := &Upgrader{
 		binaryPath: binPath,
@@ -450,7 +450,7 @@ func TestInstallDirectBinary_ReadOnlyDest(t *testing.T) {
 	if err := os.Mkdir(readOnlyDir, 0555); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(readOnlyDir, 0755)
+	defer func() { _ = os.Chmod(readOnlyDir, 0755) }()
 
 	u := &Upgrader{binaryPath: filepath.Join(readOnlyDir, "pilot")}
 	err := u.installDirectBinary(srcPath)
@@ -1066,13 +1066,13 @@ func createTestTarGz(t *testing.T, path, entryName string, content []byte) {
 	if err != nil {
 		t.Fatalf("failed to create tar.gz: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gzw := gzip.NewWriter(f)
-	defer gzw.Close()
+	defer func() { _ = gzw.Close() }()
 
 	tw := tar.NewWriter(gzw)
-	defer tw.Close()
+	defer func() { _ = tw.Close() }()
 
 	hdr := &tar.Header{
 		Name:     entryName,
