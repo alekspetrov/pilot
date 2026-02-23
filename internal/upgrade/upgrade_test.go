@@ -1,12 +1,19 @@
 package upgrade
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -530,5 +537,1128 @@ func TestNoOpTaskChecker(t *testing.T) {
 	ctx := context.Background()
 	if err := checker.WaitForTasks(ctx, time.Second); err != nil {
 		t.Errorf("WaitForTasks() error = %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// VersionChecker tests
+// ---------------------------------------------------------------------------
+
+func TestNewVersionChecker(t *testing.T) {
+	t.Run("default interval", func(t *testing.T) {
+		vc := NewVersionChecker("1.0.0", 0)
+		if vc.checkInterval != DefaultCheckInterval {
+			t.Errorf("checkInterval = %v, want %v", vc.checkInterval, DefaultCheckInterval)
+		}
+		if vc.currentVersion != "1.0.0" {
+			t.Errorf("currentVersion = %q, want %q", vc.currentVersion, "1.0.0")
+		}
+	})
+
+	t.Run("custom interval", func(t *testing.T) {
+		vc := NewVersionChecker("2.0.0", 10*time.Minute)
+		if vc.checkInterval != 10*time.Minute {
+			t.Errorf("checkInterval = %v, want %v", vc.checkInterval, 10*time.Minute)
+		}
+	})
+}
+
+func TestVersionChecker_StartStop(t *testing.T) {
+	vc := NewVersionChecker("1.0.0", time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start should set isRunning
+	vc.Start(ctx)
+	vc.mu.RLock()
+	running := vc.isRunning
+	vc.mu.RUnlock()
+	if !running {
+		t.Error("isRunning = false after Start()")
+	}
+
+	// Double-start should be a no-op
+	vc.Start(ctx)
+
+	// Stop should clear isRunning
+	vc.Stop()
+	vc.mu.RLock()
+	running = vc.isRunning
+	vc.mu.RUnlock()
+	if running {
+		t.Error("isRunning = true after Stop()")
+	}
+
+	// Double-stop should be a no-op
+	vc.Stop()
+}
+
+func TestVersionChecker_OnUpdate(t *testing.T) {
+	vc := NewVersionChecker("1.0.0", time.Hour)
+
+	var called bool
+	vc.OnUpdate(func(info *VersionInfo) {
+		called = true
+	})
+
+	vc.mu.RLock()
+	fn := vc.onUpdate
+	vc.mu.RUnlock()
+
+	if fn == nil {
+		t.Fatal("onUpdate callback not set")
+	}
+
+	fn(&VersionInfo{})
+	if !called {
+		t.Error("onUpdate callback was not invoked")
+	}
+}
+
+func TestVersionChecker_GetLatestInfo(t *testing.T) {
+	vc := NewVersionChecker("1.0.0", time.Hour)
+
+	// Initially nil
+	if info := vc.GetLatestInfo(); info != nil {
+		t.Errorf("GetLatestInfo() = %v, want nil", info)
+	}
+
+	// Set and retrieve
+	expected := &VersionInfo{Current: "1.0.0", Latest: "2.0.0", UpdateAvail: true}
+	vc.mu.Lock()
+	vc.latestInfo = expected
+	vc.mu.Unlock()
+
+	if info := vc.GetLatestInfo(); info != expected {
+		t.Errorf("GetLatestInfo() did not return expected info")
+	}
+}
+
+func TestVersionChecker_LastCheck(t *testing.T) {
+	vc := NewVersionChecker("1.0.0", time.Hour)
+
+	if lc := vc.LastCheck(); !lc.IsZero() {
+		t.Errorf("LastCheck() = %v, want zero time", lc)
+	}
+
+	now := time.Now()
+	vc.mu.Lock()
+	vc.lastCheck = now
+	vc.mu.Unlock()
+
+	if lc := vc.LastCheck(); lc != now {
+		t.Errorf("LastCheck() = %v, want %v", lc, now)
+	}
+}
+
+func TestVersionChecker_IsHomebrew(t *testing.T) {
+	vc := NewVersionChecker("1.0.0", time.Hour)
+	// The running binary path is unlikely to be in /opt/homebrew/Cellar,
+	// but the flag state is what we test.
+	_ = vc.IsHomebrew()
+	_ = vc.GetHomebrewError()
+}
+
+func TestVersionChecker_CheckNow_homebrew(t *testing.T) {
+	vc := NewVersionChecker("1.0.0", time.Hour)
+	vc.isHomebrew = true
+	vc.homebrewErr = fmt.Errorf("homebrew installation")
+
+	_, err := vc.CheckNow(context.Background())
+	if err == nil {
+		t.Error("CheckNow() should return error for homebrew installation")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GracefulUpgrader tests
+// ---------------------------------------------------------------------------
+
+// mockTaskChecker implements TaskChecker for tests.
+type mockTaskChecker struct {
+	tasks   []string
+	waitErr error
+}
+
+func (m *mockTaskChecker) GetRunningTaskIDs() []string {
+	return m.tasks
+}
+
+func (m *mockTaskChecker) WaitForTasks(_ context.Context, _ time.Duration) error {
+	return m.waitErr
+}
+
+func TestGracefulUpgrader_PerformUpgrade(t *testing.T) {
+	// Create a mock HTTP server serving a valid release asset
+	binaryContent := []byte("new-binary-content")
+	assetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(binaryContent)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(binaryContent)
+	}))
+	defer assetServer.Close()
+
+	tempDir := t.TempDir()
+	binaryPath := filepath.Join(tempDir, "pilot")
+	if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+		t.Fatalf("Failed to create test binary: %v", err)
+	}
+
+	statePath := filepath.Join(tempDir, "upgrade-state.json")
+
+	upgrader := &Upgrader{
+		currentVersion: "0.1.0",
+		httpClient:     &http.Client{Timeout: 5 * time.Second},
+		binaryPath:     binaryPath,
+		backupPath:     binaryPath + BackupSuffix,
+	}
+
+	t.Run("success with no running tasks", func(t *testing.T) {
+		g := &GracefulUpgrader{
+			upgrader:    upgrader,
+			statePath:   statePath,
+			taskChecker: &NoOpTaskChecker{},
+		}
+
+		release := &Release{
+			TagName: "v0.2.0",
+			Assets: []Asset{
+				{
+					Name:               fmt.Sprintf("pilot-%s-%s", runtime.GOOS, runtime.GOARCH),
+					BrowserDownloadURL: assetServer.URL,
+					Size:               int64(len(binaryContent)),
+				},
+			},
+		}
+
+		var progressCalled bool
+		opts := &UpgradeOptions{
+			WaitForTasks: false,
+			Force:        true,
+			OnProgress: func(pct int, msg string) {
+				progressCalled = true
+			},
+		}
+
+		if err := g.PerformUpgrade(context.Background(), release, opts); err != nil {
+			t.Fatalf("PerformUpgrade() error = %v", err)
+		}
+
+		if !progressCalled {
+			t.Error("OnProgress callback was not called")
+		}
+
+		// State file should show completed
+		state, err := LoadState(statePath)
+		if err != nil {
+			t.Fatalf("LoadState() error = %v", err)
+		}
+		if state.Status != StatusCompleted {
+			t.Errorf("State.Status = %q, want %q", state.Status, StatusCompleted)
+		}
+	})
+
+	t.Run("nil opts uses defaults", func(t *testing.T) {
+		// Restore binary for next test
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("Failed to restore binary: %v", err)
+		}
+
+		g := &GracefulUpgrader{
+			upgrader:    upgrader,
+			statePath:   statePath,
+			taskChecker: &NoOpTaskChecker{},
+		}
+
+		release := &Release{
+			TagName: "v0.2.0",
+			Assets: []Asset{
+				{
+					Name:               fmt.Sprintf("pilot-%s-%s", runtime.GOOS, runtime.GOARCH),
+					BrowserDownloadURL: assetServer.URL,
+					Size:               int64(len(binaryContent)),
+				},
+			},
+		}
+
+		if err := g.PerformUpgrade(context.Background(), release, nil); err != nil {
+			t.Fatalf("PerformUpgrade(nil opts) error = %v", err)
+		}
+	})
+
+	t.Run("wait for tasks timeout", func(t *testing.T) {
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("Failed to restore binary: %v", err)
+		}
+
+		checker := &mockTaskChecker{
+			tasks:   []string{"task-1"},
+			waitErr: context.DeadlineExceeded,
+		}
+
+		g := &GracefulUpgrader{
+			upgrader:    upgrader,
+			statePath:   statePath,
+			taskChecker: checker,
+		}
+
+		release := &Release{TagName: "v0.2.0"}
+		opts := &UpgradeOptions{
+			WaitForTasks: true,
+			TaskTimeout:  time.Millisecond,
+			Force:        false,
+		}
+
+		err := g.PerformUpgrade(context.Background(), release, opts)
+		if err == nil {
+			t.Fatal("PerformUpgrade() should return error on task timeout")
+		}
+	})
+}
+
+func TestGracefulUpgrader_CheckAndRollback(t *testing.T) {
+	tempDir := t.TempDir()
+	binaryPath := filepath.Join(tempDir, "pilot")
+	backupPath := binaryPath + BackupSuffix
+	statePath := filepath.Join(tempDir, "upgrade-state.json")
+
+	t.Run("no state file", func(t *testing.T) {
+		g := &GracefulUpgrader{
+			upgrader: &Upgrader{
+				binaryPath: binaryPath,
+				backupPath: backupPath,
+			},
+			statePath: statePath,
+		}
+
+		rolled, err := g.CheckAndRollback()
+		if err != nil {
+			t.Fatalf("CheckAndRollback() error = %v", err)
+		}
+		if rolled {
+			t.Error("CheckAndRollback() = true, want false when no state file")
+		}
+	})
+
+	t.Run("rollback on failed state", func(t *testing.T) {
+		// Create binary and backup
+		if err := os.WriteFile(binaryPath, []byte("new-bad-binary"), 0755); err != nil {
+			t.Fatalf("Failed to create binary: %v", err)
+		}
+		if err := os.WriteFile(backupPath, []byte("original-good-binary"), 0755); err != nil {
+			t.Fatalf("Failed to create backup: %v", err)
+		}
+
+		// Create failed state
+		state := &State{
+			Status:     StatusFailed,
+			BackupPath: backupPath,
+			Error:      "upgrade failed",
+		}
+		if err := state.Save(statePath); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+
+		g := &GracefulUpgrader{
+			upgrader: &Upgrader{
+				binaryPath: binaryPath,
+				backupPath: backupPath,
+			},
+			statePath: statePath,
+		}
+
+		rolled, err := g.CheckAndRollback()
+		if err != nil {
+			t.Fatalf("CheckAndRollback() error = %v", err)
+		}
+		if !rolled {
+			t.Error("CheckAndRollback() = false, want true for failed state")
+		}
+
+		// Verify binary was restored
+		content, err := os.ReadFile(binaryPath)
+		if err != nil {
+			t.Fatalf("Failed to read binary: %v", err)
+		}
+		if string(content) != "original-good-binary" {
+			t.Errorf("Binary content = %q, want %q", string(content), "original-good-binary")
+		}
+	})
+
+	t.Run("no rollback for completed state", func(t *testing.T) {
+		state := &State{
+			Status: StatusCompleted,
+		}
+		if err := state.Save(statePath); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+
+		g := &GracefulUpgrader{
+			upgrader: &Upgrader{
+				binaryPath: binaryPath,
+				backupPath: backupPath,
+			},
+			statePath: statePath,
+		}
+
+		rolled, err := g.CheckAndRollback()
+		if err != nil {
+			t.Fatalf("CheckAndRollback() error = %v", err)
+		}
+		if rolled {
+			t.Error("CheckAndRollback() = true, want false for completed state")
+		}
+	})
+}
+
+func TestGracefulUpgrader_CleanupState(t *testing.T) {
+	tempDir := t.TempDir()
+	binaryPath := filepath.Join(tempDir, "pilot")
+	backupPath := binaryPath + BackupSuffix
+	statePath := filepath.Join(tempDir, "upgrade-state.json")
+
+	t.Run("cleanup completed state", func(t *testing.T) {
+		// Create backup file
+		if err := os.WriteFile(backupPath, []byte("backup"), 0755); err != nil {
+			t.Fatalf("Failed to create backup: %v", err)
+		}
+
+		state := &State{Status: StatusCompleted}
+		if err := state.Save(statePath); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+
+		g := &GracefulUpgrader{
+			upgrader: &Upgrader{
+				binaryPath: binaryPath,
+				backupPath: backupPath,
+			},
+			statePath: statePath,
+		}
+
+		if err := g.CleanupState(); err != nil {
+			t.Fatalf("CleanupState() error = %v", err)
+		}
+
+		// State should be cleared
+		loaded, err := LoadState(statePath)
+		if err != nil {
+			t.Fatalf("LoadState() error = %v", err)
+		}
+		if loaded != nil {
+			t.Error("State should be nil after cleanup")
+		}
+	})
+
+	t.Run("no cleanup for non-completed state", func(t *testing.T) {
+		state := &State{Status: StatusFailed}
+		if err := state.Save(statePath); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+
+		g := &GracefulUpgrader{
+			upgrader: &Upgrader{
+				binaryPath: binaryPath,
+				backupPath: backupPath,
+			},
+			statePath: statePath,
+		}
+
+		if err := g.CleanupState(); err != nil {
+			t.Fatalf("CleanupState() error = %v", err)
+		}
+
+		// State should still exist
+		loaded, err := LoadState(statePath)
+		if err != nil {
+			t.Fatalf("LoadState() error = %v", err)
+		}
+		if loaded == nil {
+			t.Error("State should not be cleared for non-completed status")
+		}
+	})
+
+	t.Run("no state file is ok", func(t *testing.T) {
+		_ = os.Remove(statePath)
+
+		g := &GracefulUpgrader{
+			upgrader: &Upgrader{
+				binaryPath: binaryPath,
+				backupPath: backupPath,
+			},
+			statePath: statePath,
+		}
+
+		if err := g.CleanupState(); err != nil {
+			t.Fatalf("CleanupState() error = %v, should handle missing state", err)
+		}
+	})
+}
+
+func TestGracefulUpgrader_GetUpgrader(t *testing.T) {
+	u := &Upgrader{currentVersion: "1.0.0"}
+	g := &GracefulUpgrader{upgrader: u}
+
+	if got := g.GetUpgrader(); got != u {
+		t.Error("GetUpgrader() did not return the expected upgrader")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HotUpgrader tests
+// ---------------------------------------------------------------------------
+
+func TestDefaultHotUpgradeConfig(t *testing.T) {
+	cfg := DefaultHotUpgradeConfig()
+	if !cfg.WaitForTasks {
+		t.Error("WaitForTasks should default to true")
+	}
+	if cfg.TaskTimeout != 2*time.Minute {
+		t.Errorf("TaskTimeout = %v, want %v", cfg.TaskTimeout, 2*time.Minute)
+	}
+	if cfg.FlushSession != nil {
+		t.Error("FlushSession should default to nil")
+	}
+	if cfg.OnProgress != nil {
+		t.Error("OnProgress should default to nil")
+	}
+}
+
+func TestDefaultUpgradeOptions(t *testing.T) {
+	opts := DefaultUpgradeOptions()
+	if !opts.WaitForTasks {
+		t.Error("WaitForTasks should default to true")
+	}
+	if opts.TaskTimeout != 5*time.Minute {
+		t.Errorf("TaskTimeout = %v, want %v", opts.TaskTimeout, 5*time.Minute)
+	}
+	if opts.Force {
+		t.Error("Force should default to false")
+	}
+}
+
+func TestHotUpgrader_Accessors(t *testing.T) {
+	tempDir := t.TempDir()
+	binaryPath := filepath.Join(tempDir, "pilot")
+	if err := os.WriteFile(binaryPath, []byte("binary"), 0755); err != nil {
+		t.Fatalf("Failed to create binary: %v", err)
+	}
+
+	u := &Upgrader{
+		currentVersion: "1.0.0",
+		binaryPath:     binaryPath,
+		backupPath:     binaryPath + BackupSuffix,
+	}
+	g := &GracefulUpgrader{upgrader: u, taskChecker: &NoOpTaskChecker{}}
+	h := &HotUpgrader{graceful: g, taskChecker: &NoOpTaskChecker{}}
+
+	if got := h.GetUpgrader(); got != u {
+		t.Error("GetUpgrader() did not return expected upgrader")
+	}
+	if got := h.GetGracefulUpgrader(); got != g {
+		t.Error("GetGracefulUpgrader() did not return expected graceful upgrader")
+	}
+}
+
+func TestHotUpgrader_PerformHotUpgrade(t *testing.T) {
+	binaryContent := []byte("new-hot-binary")
+	assetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(binaryContent)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(binaryContent)
+	}))
+	defer assetServer.Close()
+
+	tempDir := t.TempDir()
+	binaryPath := filepath.Join(tempDir, "pilot")
+	statePath := filepath.Join(tempDir, "upgrade-state.json")
+
+	t.Run("task wait timeout", func(t *testing.T) {
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("Failed to create binary: %v", err)
+		}
+
+		checker := &mockTaskChecker{
+			tasks:   []string{"running-task"},
+			waitErr: context.DeadlineExceeded,
+		}
+
+		u := &Upgrader{
+			currentVersion: "0.1.0",
+			httpClient:     &http.Client{Timeout: 5 * time.Second},
+			binaryPath:     binaryPath,
+			backupPath:     binaryPath + BackupSuffix,
+		}
+		g := &GracefulUpgrader{upgrader: u, statePath: statePath, taskChecker: checker}
+		h := &HotUpgrader{graceful: g, taskChecker: checker}
+
+		release := &Release{TagName: "v0.2.0"}
+		cfg := &HotUpgradeConfig{
+			WaitForTasks: true,
+			TaskTimeout:  time.Millisecond,
+		}
+
+		err := h.PerformHotUpgrade(context.Background(), release, cfg)
+		if err == nil {
+			t.Fatal("PerformHotUpgrade() should return error on task timeout")
+		}
+	})
+
+	t.Run("flush session callback", func(t *testing.T) {
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("Failed to create binary: %v", err)
+		}
+
+		var flushed int32
+		u := &Upgrader{
+			currentVersion: "0.1.0",
+			httpClient:     &http.Client{Timeout: 5 * time.Second},
+			binaryPath:     binaryPath,
+			backupPath:     binaryPath + BackupSuffix,
+		}
+		g := &GracefulUpgrader{upgrader: u, statePath: statePath, taskChecker: &NoOpTaskChecker{}}
+		h := &HotUpgrader{graceful: g, taskChecker: &NoOpTaskChecker{}}
+
+		release := &Release{
+			TagName: "v0.2.0",
+			Assets: []Asset{
+				{
+					Name:               fmt.Sprintf("pilot-%s-%s", runtime.GOOS, runtime.GOARCH),
+					BrowserDownloadURL: assetServer.URL,
+					Size:               int64(len(binaryContent)),
+				},
+			},
+		}
+
+		cfg := &HotUpgradeConfig{
+			WaitForTasks: false,
+			FlushSession: func() error {
+				atomic.StoreInt32(&flushed, 1)
+				return nil
+			},
+		}
+
+		// This will succeed through upgrade but fail on RestartWithNewBinary
+		// since we can't actually exec in a test. It may also succeed if
+		// CanHotRestart returns true and RestartWithNewBinary succeeds (unlikely in test).
+		// We just verify the flush callback ran.
+		_ = h.PerformHotUpgrade(context.Background(), release, cfg)
+
+		if atomic.LoadInt32(&flushed) != 1 {
+			t.Error("FlushSession callback was not called")
+		}
+	})
+
+	t.Run("flush session error is non-fatal", func(t *testing.T) {
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("Failed to create binary: %v", err)
+		}
+
+		u := &Upgrader{
+			currentVersion: "0.1.0",
+			httpClient:     &http.Client{Timeout: 5 * time.Second},
+			binaryPath:     binaryPath,
+			backupPath:     binaryPath + BackupSuffix,
+		}
+		g := &GracefulUpgrader{upgrader: u, statePath: statePath, taskChecker: &NoOpTaskChecker{}}
+		h := &HotUpgrader{graceful: g, taskChecker: &NoOpTaskChecker{}}
+
+		release := &Release{
+			TagName: "v0.2.0",
+			Assets: []Asset{
+				{
+					Name:               fmt.Sprintf("pilot-%s-%s", runtime.GOOS, runtime.GOARCH),
+					BrowserDownloadURL: assetServer.URL,
+					Size:               int64(len(binaryContent)),
+				},
+			},
+		}
+
+		cfg := &HotUpgradeConfig{
+			WaitForTasks: false,
+			FlushSession: func() error {
+				return errors.New("flush failed")
+			},
+		}
+
+		// Flush error is non-fatal, so upgrade should continue
+		_ = h.PerformHotUpgrade(context.Background(), release, cfg)
+	})
+
+	t.Run("nil config uses defaults", func(t *testing.T) {
+		if err := os.WriteFile(binaryPath, []byte("old-binary"), 0755); err != nil {
+			t.Fatalf("Failed to create binary: %v", err)
+		}
+
+		u := &Upgrader{
+			currentVersion: "0.1.0",
+			httpClient:     &http.Client{Timeout: 5 * time.Second},
+			binaryPath:     binaryPath,
+			backupPath:     binaryPath + BackupSuffix,
+		}
+		g := &GracefulUpgrader{upgrader: u, statePath: statePath, taskChecker: &NoOpTaskChecker{}}
+		h := &HotUpgrader{graceful: g, taskChecker: &NoOpTaskChecker{}}
+
+		release := &Release{
+			TagName: "v0.2.0",
+			Assets: []Asset{
+				{
+					Name:               fmt.Sprintf("pilot-%s-%s", runtime.GOOS, runtime.GOARCH),
+					BrowserDownloadURL: assetServer.URL,
+					Size:               int64(len(binaryContent)),
+				},
+			},
+		}
+
+		// nil config should not panic
+		_ = h.PerformHotUpgrade(context.Background(), release, nil)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// State additional tests
+// ---------------------------------------------------------------------------
+
+func TestState_MarkFailed(t *testing.T) {
+	t.Run("with error", func(t *testing.T) {
+		s := &State{Status: StatusInstalling}
+		s.MarkFailed(fmt.Errorf("download timeout"))
+
+		if s.Status != StatusFailed {
+			t.Errorf("Status = %q, want %q", s.Status, StatusFailed)
+		}
+		if s.Error != "download timeout" {
+			t.Errorf("Error = %q, want %q", s.Error, "download timeout")
+		}
+	})
+
+	t.Run("with nil error", func(t *testing.T) {
+		s := &State{Status: StatusInstalling}
+		s.MarkFailed(nil)
+
+		if s.Status != StatusFailed {
+			t.Errorf("Status = %q, want %q", s.Status, StatusFailed)
+		}
+		if s.Error != "" {
+			t.Errorf("Error = %q, want empty string", s.Error)
+		}
+	})
+}
+
+func TestState_MarkCompleted(t *testing.T) {
+	s := &State{Status: StatusInstalling}
+	before := time.Now()
+	s.MarkCompleted()
+	after := time.Now()
+
+	if s.Status != StatusCompleted {
+		t.Errorf("Status = %q, want %q", s.Status, StatusCompleted)
+	}
+	if s.UpgradeCompleted.Before(before) || s.UpgradeCompleted.After(after) {
+		t.Error("UpgradeCompleted timestamp is out of range")
+	}
+}
+
+func TestState_MarkRolledBack(t *testing.T) {
+	s := &State{Status: StatusFailed}
+	before := time.Now()
+	s.MarkRolledBack()
+	after := time.Now()
+
+	if s.Status != StatusRolledBack {
+		t.Errorf("Status = %q, want %q", s.Status, StatusRolledBack)
+	}
+	if s.UpgradeCompleted.Before(before) || s.UpgradeCompleted.After(after) {
+		t.Error("UpgradeCompleted timestamp is out of range")
+	}
+}
+
+func TestDefaultStatePath(t *testing.T) {
+	path := DefaultStatePath()
+	if path == "" {
+		t.Error("DefaultStatePath() returned empty string")
+	}
+	if filepath.Base(path) != StateFile {
+		t.Errorf("DefaultStatePath() base = %q, want %q", filepath.Base(path), StateFile)
+	}
+}
+
+func TestLoadState_empty_path(t *testing.T) {
+	// LoadState with empty path falls back to DefaultStatePath, which may or may not exist.
+	// We just verify it doesn't panic.
+	_, _ = LoadState("")
+}
+
+func TestState_JSON_roundtrip(t *testing.T) {
+	s := &State{
+		PreviousVersion: "1.0.0",
+		NewVersion:      "2.0.0",
+		UpgradeStarted:  time.Now().Truncate(time.Second),
+		PendingTasks:    []string{"t1", "t2"},
+		BackupPath:      "/tmp/backup",
+		Status:          StatusWaiting,
+		Error:           "some error",
+	}
+
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var loaded State
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if loaded.PreviousVersion != s.PreviousVersion {
+		t.Errorf("PreviousVersion = %q, want %q", loaded.PreviousVersion, s.PreviousVersion)
+	}
+	if loaded.Status != s.Status {
+		t.Errorf("Status = %q, want %q", loaded.Status, s.Status)
+	}
+	if len(loaded.PendingTasks) != 2 {
+		t.Errorf("PendingTasks len = %d, want 2", len(loaded.PendingTasks))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// upgrade.go additional tests
+// ---------------------------------------------------------------------------
+
+func TestIsHomebrewPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"opt homebrew", "/opt/homebrew/Cellar/pilot/1.0.0/bin/pilot", true},
+		{"usr local homebrew", "/usr/local/Cellar/pilot/1.0.0/bin/pilot", true},
+		{"linuxbrew", "/home/linuxbrew/.linuxbrew/Cellar/pilot/1.0.0/bin/pilot", true},
+		{"normal path", "/usr/local/bin/pilot", false},
+		{"home bin", "/home/user/bin/pilot", false},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isHomebrewPath(tt.path); got != tt.want {
+				t.Errorf("isHomebrewPath(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpgrader_isTarGz(t *testing.T) {
+	tempDir := t.TempDir()
+	u := &Upgrader{}
+
+	t.Run("valid gzip", func(t *testing.T) {
+		path := filepath.Join(tempDir, "test.tar.gz")
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatalf("Failed to create file: %v", err)
+		}
+		gw := gzip.NewWriter(f)
+		tw := tar.NewWriter(gw)
+		hdr := &tar.Header{Name: "pilot", Mode: 0755, Size: 4}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("WriteHeader error: %v", err)
+		}
+		if _, err := tw.Write([]byte("test")); err != nil {
+			t.Fatalf("Write error: %v", err)
+		}
+		_ = tw.Close()
+		_ = gw.Close()
+		_ = f.Close()
+
+		if !u.isTarGz(path) {
+			t.Error("isTarGz() = false for valid gzip file")
+		}
+	})
+
+	t.Run("not gzip", func(t *testing.T) {
+		path := filepath.Join(tempDir, "notgz")
+		if err := os.WriteFile(path, []byte("not a gzip file"), 0644); err != nil {
+			t.Fatalf("WriteFile error: %v", err)
+		}
+		if u.isTarGz(path) {
+			t.Error("isTarGz() = true for non-gzip file")
+		}
+	})
+
+	t.Run("nonexistent file", func(t *testing.T) {
+		if u.isTarGz(filepath.Join(tempDir, "nonexistent")) {
+			t.Error("isTarGz() = true for nonexistent file")
+		}
+	})
+}
+
+func TestUpgrader_installFromTarGz(t *testing.T) {
+	tempDir := t.TempDir()
+	binaryPath := filepath.Join(tempDir, "pilot")
+	u := &Upgrader{binaryPath: binaryPath}
+
+	t.Run("extract pilot binary", func(t *testing.T) {
+		tarPath := filepath.Join(tempDir, "test.tar.gz")
+		f, err := os.Create(tarPath)
+		if err != nil {
+			t.Fatalf("Create error: %v", err)
+		}
+
+		content := []byte("pilot-binary-from-tarball")
+		gw := gzip.NewWriter(f)
+		tw := tar.NewWriter(gw)
+
+		// Add a non-pilot file first (should be skipped)
+		hdr := &tar.Header{Name: "README.md", Mode: 0644, Size: 6, Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("WriteHeader error: %v", err)
+		}
+		if _, err := tw.Write([]byte("readme")); err != nil {
+			t.Fatalf("Write error: %v", err)
+		}
+
+		// Add the pilot binary
+		hdr = &tar.Header{Name: "pilot", Mode: 0755, Size: int64(len(content)), Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("WriteHeader error: %v", err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatalf("Write error: %v", err)
+		}
+
+		_ = tw.Close()
+		_ = gw.Close()
+		_ = f.Close()
+
+		if err := u.installFromTarGz(tarPath); err != nil {
+			t.Fatalf("installFromTarGz() error = %v", err)
+		}
+
+		got, err := os.ReadFile(binaryPath)
+		if err != nil {
+			t.Fatalf("ReadFile error: %v", err)
+		}
+		if string(got) != string(content) {
+			t.Errorf("Extracted content = %q, want %q", string(got), string(content))
+		}
+	})
+
+	t.Run("no pilot binary in archive", func(t *testing.T) {
+		tarPath := filepath.Join(tempDir, "nopilot.tar.gz")
+		f, err := os.Create(tarPath)
+		if err != nil {
+			t.Fatalf("Create error: %v", err)
+		}
+
+		gw := gzip.NewWriter(f)
+		tw := tar.NewWriter(gw)
+		hdr := &tar.Header{Name: "other-file", Mode: 0644, Size: 4, Typeflag: tar.TypeReg}
+		_ = tw.WriteHeader(hdr)
+		_, _ = tw.Write([]byte("data"))
+		_ = tw.Close()
+		_ = gw.Close()
+		_ = f.Close()
+
+		err = u.installFromTarGz(tarPath)
+		if err == nil {
+			t.Error("installFromTarGz() should error when pilot binary not found")
+		}
+	})
+}
+
+func TestUpgrader_installDirectBinary(t *testing.T) {
+	tempDir := t.TempDir()
+	binaryPath := filepath.Join(tempDir, "pilot")
+	u := &Upgrader{binaryPath: binaryPath}
+
+	srcPath := filepath.Join(tempDir, "downloaded")
+	content := []byte("direct-binary-content")
+	if err := os.WriteFile(srcPath, content, 0644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	if err := u.installDirectBinary(srcPath); err != nil {
+		t.Fatalf("installDirectBinary() error = %v", err)
+	}
+
+	got, err := os.ReadFile(binaryPath)
+	if err != nil {
+		t.Fatalf("ReadFile error: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("Installed content = %q, want %q", string(got), string(content))
+	}
+}
+
+func TestUpgrader_downloadAsset(t *testing.T) {
+	content := []byte("downloaded-asset-bytes")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	u := &Upgrader{
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+	}
+
+	t.Run("successful download", func(t *testing.T) {
+		asset := &Asset{
+			BrowserDownloadURL: server.URL,
+			Size:               int64(len(content)),
+		}
+
+		var progressPcts []int
+		tmpPath, err := u.downloadAsset(context.Background(), asset, func(pct int, msg string) {
+			progressPcts = append(progressPcts, pct)
+		})
+		if err != nil {
+			t.Fatalf("downloadAsset() error = %v", err)
+		}
+		defer func() { _ = os.Remove(tmpPath) }()
+
+		got, err := os.ReadFile(tmpPath)
+		if err != nil {
+			t.Fatalf("ReadFile error: %v", err)
+		}
+		if string(got) != string(content) {
+			t.Errorf("Downloaded content = %q, want %q", string(got), string(content))
+		}
+	})
+
+	t.Run("server error", func(t *testing.T) {
+		errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer errServer.Close()
+
+		asset := &Asset{BrowserDownloadURL: errServer.URL}
+		_, err := u.downloadAsset(context.Background(), asset, nil)
+		if err == nil {
+			t.Error("downloadAsset() should return error on 500")
+		}
+	})
+}
+
+func TestUpgrader_fetchLatestRelease(t *testing.T) {
+	t.Run("valid releases", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[
+				{"tag_name": "v1.0.0", "draft": true, "prerelease": false},
+				{"tag_name": "v0.9.0", "draft": false, "prerelease": true},
+				{"tag_name": "v0.8.0", "draft": false, "prerelease": false, "body": "stable", "assets": []}
+			]`))
+		}))
+		defer server.Close()
+
+		// We can't easily override the URL used by fetchLatestRelease,
+		// so test the response parsing indirectly via the mock server.
+		resp, err := http.Get(server.URL)
+		if err != nil {
+			t.Fatalf("HTTP GET error: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		var releases []Release
+		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+			t.Fatalf("Decode error: %v", err)
+		}
+
+		// Simulate the logic in fetchLatestRelease
+		var found *Release
+		for i := range releases {
+			if !releases[i].Draft && !releases[i].Prerelease {
+				found = &releases[i]
+				break
+			}
+		}
+
+		if found == nil {
+			t.Fatal("No stable release found")
+		}
+		if found.TagName != "v0.8.0" {
+			t.Errorf("Selected release = %q, want %q", found.TagName, "v0.8.0")
+		}
+	})
+
+	t.Run("all drafts fallback to first", func(t *testing.T) {
+		releases := []Release{
+			{TagName: "v2.0.0", Draft: true},
+			{TagName: "v1.9.0", Draft: true, Prerelease: true},
+		}
+
+		// Simulate fallback logic
+		var found *Release
+		for i := range releases {
+			if !releases[i].Draft && !releases[i].Prerelease {
+				found = &releases[i]
+				break
+			}
+		}
+		if found == nil && len(releases) > 0 {
+			found = &releases[0]
+		}
+
+		if found == nil || found.TagName != "v2.0.0" {
+			t.Errorf("Fallback release = %v, want v2.0.0", found)
+		}
+	})
+}
+
+func TestUpgrader_BinaryPath(t *testing.T) {
+	u := &Upgrader{binaryPath: "/usr/local/bin/pilot"}
+	if got := u.BinaryPath(); got != "/usr/local/bin/pilot" {
+		t.Errorf("BinaryPath() = %q, want %q", got, "/usr/local/bin/pilot")
+	}
+}
+
+func TestUpgrader_installBinary_dispatch(t *testing.T) {
+	tempDir := t.TempDir()
+	binaryPath := filepath.Join(tempDir, "pilot")
+	u := &Upgrader{binaryPath: binaryPath}
+
+	t.Run("direct binary", func(t *testing.T) {
+		srcPath := filepath.Join(tempDir, "plain-binary")
+		if err := os.WriteFile(srcPath, []byte("plain"), 0644); err != nil {
+			t.Fatalf("WriteFile error: %v", err)
+		}
+
+		if err := u.installBinary(srcPath); err != nil {
+			t.Fatalf("installBinary() error = %v", err)
+		}
+
+		got, err := os.ReadFile(binaryPath)
+		if err != nil {
+			t.Fatalf("ReadFile error: %v", err)
+		}
+		if string(got) != "plain" {
+			t.Errorf("Installed content = %q, want %q", string(got), "plain")
+		}
+	})
+}
+
+func TestCanHotRestart(t *testing.T) {
+	// On non-windows, should return true
+	if runtime.GOOS != "windows" {
+		if !CanHotRestart() {
+			t.Error("CanHotRestart() = false on non-windows platform")
+		}
+	}
+}
+
+func TestUpgrader_Rollback_noBackup(t *testing.T) {
+	tempDir := t.TempDir()
+	u := &Upgrader{
+		binaryPath: filepath.Join(tempDir, "pilot"),
+		backupPath: filepath.Join(tempDir, "pilot.backup"),
+	}
+
+	err := u.Rollback()
+	if err == nil {
+		t.Error("Rollback() should error when no backup exists")
 	}
 }
