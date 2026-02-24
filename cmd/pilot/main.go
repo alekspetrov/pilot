@@ -29,12 +29,14 @@ import (
 	"github.com/alekspetrov/pilot/internal/approval"
 	"github.com/alekspetrov/pilot/internal/autopilot"
 	"github.com/alekspetrov/pilot/internal/banner"
+	"github.com/alekspetrov/pilot/internal/comms"
 	"github.com/alekspetrov/pilot/internal/briefs"
 	"github.com/alekspetrov/pilot/internal/budget"
 	"github.com/alekspetrov/pilot/internal/config"
 	"github.com/alekspetrov/pilot/internal/dashboard"
 	"github.com/alekspetrov/pilot/internal/executor"
 	"github.com/alekspetrov/pilot/internal/gateway"
+	"github.com/alekspetrov/pilot/internal/intent"
 	"github.com/alekspetrov/pilot/internal/logging"
 	"github.com/alekspetrov/pilot/internal/memory"
 	"github.com/alekspetrov/pilot/internal/pilot"
@@ -1517,8 +1519,9 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 		})
 	}
 
-	// Initialize Telegram handler if enabled
-	var tgHandler *telegram.Handler
+	// Initialize Telegram transport if enabled (GH-1788: comms refactor)
+	var tgTransport *telegram.Transport
+	var tgHandler *telegram.Handler // kept for CheckSingleton + legacy tests
 	if hasTelegram {
 		var allowedIDs []int64
 		// Include explicitly configured allowed IDs
@@ -1530,6 +1533,7 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 			}
 		}
 
+		// Legacy handler — kept for CheckSingleton and CommandHandler
 		tgConfig := &telegram.HandlerConfig{
 			BotToken:      cfg.Adapters.Telegram.BotToken,
 			ProjectPath:   projectPath,
@@ -1546,13 +1550,68 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 		}
 		tgHandler = telegram.NewHandler(tgConfig, runner)
 
+		// GH-1788: New transport chain — messenger → comms.Handler → transport
+		tgClient := telegram.NewClient(cfg.Adapters.Telegram.BotToken)
+		tgMessenger := telegram.NewTelegramMessenger(tgClient, cfg.Adapters.Telegram.PlainTextMode)
+
+		// Build LLM classifier and conversation store for comms.Handler
+		var tgLLMClassifier intent.Classifier
+		var tgConvStore *intent.ConversationStore
+		if cfg.Adapters.Telegram.LLMClassifier != nil && cfg.Adapters.Telegram.LLMClassifier.Enabled {
+			apiKey := cfg.Adapters.Telegram.LLMClassifier.APIKey
+			if apiKey == "" {
+				apiKey = os.Getenv("ANTHROPIC_API_KEY")
+			}
+			if apiKey != "" {
+				tgLLMClassifier = intent.NewAnthropicClient(apiKey)
+				historySize := 10
+				if cfg.Adapters.Telegram.LLMClassifier.HistorySize > 0 {
+					historySize = cfg.Adapters.Telegram.LLMClassifier.HistorySize
+				}
+				historyTTL := 30 * time.Minute
+				if cfg.Adapters.Telegram.LLMClassifier.HistoryTTL > 0 {
+					historyTTL = cfg.Adapters.Telegram.LLMClassifier.HistoryTTL
+				}
+				tgConvStore = intent.NewConversationStore(historySize, historyTTL)
+			}
+		}
+
+		// Wrap platform-specific member resolver for comms.MemberResolver
+		var tgMemberResolver comms.MemberResolver
+		if teamAdapter != nil {
+			tgMemberResolver = telegram.NewTelegramMemberResolverAdapter(teamAdapter)
+		}
+
+		tgCommsHandler := comms.NewHandler(&comms.HandlerConfig{
+			Messenger:      tgMessenger,
+			Runner:         runner,
+			Projects:       config.NewProjectSource(cfg),
+			ProjectPath:    projectPath,
+			RateLimit:      cfg.Adapters.Telegram.RateLimit,
+			LLMClassifier:  tgLLMClassifier,
+			ConvStore:      tgConvStore,
+			MemberResolver: tgMemberResolver,
+			Store:          store,
+			TaskIDPrefix:   "TG",
+		})
+
+		tgTransport = telegram.NewTransport(tgClient, tgCommsHandler,
+			tgHandler.GetCommandHandler(),
+			&telegram.TransportConfig{
+				AllowedIDs:    allowedIDs,
+				Transcription: cfg.Adapters.Telegram.Transcription,
+			})
+
+		// Start cleanup loop for comms.Handler
+		go tgCommsHandler.CleanupLoop(ctx)
+
 		// Security warning if no allowed IDs configured
 		if len(allowedIDs) == 0 {
 			logging.WithComponent("telegram").Warn("SECURITY: allowed_ids is empty - ALL users can interact with the bot!")
 		}
 
 		// Check for existing instance
-		if err := tgHandler.CheckSingleton(ctx); err != nil {
+		if err := tgTransport.CheckSingleton(ctx); err != nil {
 			if errors.Is(err, telegram.ErrConflict) {
 				if replace {
 					fmt.Println("🔄 Stopping existing bot instance...")
@@ -1566,7 +1625,7 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 						delay := time.Duration(500+i*500) * time.Millisecond
 						time.Sleep(delay)
 						fmt.Print(".")
-						if err := tgHandler.CheckSingleton(ctx); err == nil {
+						if err := tgTransport.CheckSingleton(ctx); err == nil {
 							fmt.Println(" ✓")
 							fmt.Println("   ✓ Existing instance stopped")
 							fmt.Println()
@@ -2171,31 +2230,49 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 		}(asanaPoller)
 	}
 
-	// Start Telegram polling if enabled
-	if tgHandler != nil {
+	// Start Telegram polling if enabled (GH-1788: via Transport)
+	if tgTransport != nil {
 		if !dashboardMode {
 			fmt.Println("📱 Telegram polling started")
 		}
-		tgHandler.StartPolling(ctx)
+		tgTransport.StartPolling(ctx)
 	}
 
-	// Start Slack Socket Mode if enabled (GH-652: wire into polling mode)
-	var slackHandler *slack.Handler
+	// Start Slack Socket Mode if enabled (GH-1788: via Transport)
+	var slackTransport *slack.Transport
 	if cfg.Adapters.Slack != nil && cfg.Adapters.Slack.Enabled && cfg.Adapters.Slack.SocketMode &&
 		cfg.Adapters.Slack.AppToken != "" && cfg.Adapters.Slack.BotToken != "" {
-		slackHandler = slack.NewHandler(&slack.HandlerConfig{
-			AppToken:        cfg.Adapters.Slack.AppToken,
-			BotToken:        cfg.Adapters.Slack.BotToken,
-			ProjectPath:     projectPath,
-			Projects:        config.NewSlackProjectSource(cfg),
+
+		slackAPIClient := slack.NewClient(cfg.Adapters.Slack.BotToken)
+		slackMessenger := slack.NewSlackMessenger(slackAPIClient)
+
+		// Wrap platform-specific member resolver for comms.MemberResolver
+		var slackMemberResolver comms.MemberResolver
+		if teamAdapter != nil {
+			slackMemberResolver = slack.NewSlackMemberResolverAdapter(teamAdapter)
+		}
+
+		slackCommsHandler := comms.NewHandler(&comms.HandlerConfig{
+			Messenger:      slackMessenger,
+			Runner:         runner,
+			Projects:       config.NewSlackProjectSource(cfg),
+			ProjectPath:    projectPath,
+			MemberResolver: slackMemberResolver,
+			Store:          store,
+			TaskIDPrefix:   "SLACK",
+		})
+
+		slackSocketClient := slack.NewSocketModeClient(cfg.Adapters.Slack.AppToken)
+		slackTransport = slack.NewTransport(slackSocketClient, slackCommsHandler, &slack.TransportConfig{
 			AllowedChannels: cfg.Adapters.Slack.AllowedChannels,
 			AllowedUsers:    cfg.Adapters.Slack.AllowedUsers,
-			MemberResolver:  teamAdapter,
-			Store:           store,
-		}, runner)
+		})
+
+		// Start cleanup loop for comms.Handler
+		go slackCommsHandler.CleanupLoop(ctx)
 
 		go func() {
-			if err := slackHandler.StartListening(ctx); err != nil {
+			if err := slackTransport.StartListening(ctx); err != nil {
 				logging.WithComponent("slack").Error("Slack Socket Mode error", slog.Any("error", err))
 			}
 		}()
@@ -2203,7 +2280,7 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 		if !dashboardMode {
 			fmt.Println("💬 Slack Socket Mode started")
 		}
-		logging.WithComponent("start").Info("Slack Socket Mode started in polling mode")
+		logging.WithComponent("start").Info("Slack Socket Mode started via transport (GH-1788)")
 	}
 
 	// Start brief scheduler if enabled
@@ -2401,8 +2478,8 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 		// Terminate all running subprocesses (GH-883)
 		runner.CancelAll()
 
-		if tgHandler != nil {
-			tgHandler.Stop()
+		if tgTransport != nil {
+			tgTransport.Stop()
 		}
 		// ghPoller stops via context cancellation (no explicit stop needed)
 		if dispatcher != nil {
@@ -2424,8 +2501,8 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 	// Terminate all running subprocesses (GH-883)
 	runner.CancelAll()
 
-	if tgHandler != nil {
-		tgHandler.Stop()
+	if tgTransport != nil {
+		tgTransport.Stop()
 	}
 	if len(ghPollers) > 0 {
 		fmt.Printf("🐙 Stopping GitHub pollers (%d)...\n", len(ghPollers))

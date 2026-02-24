@@ -222,6 +222,11 @@ func (h *Handler) getParseMode() string {
 	return "Markdown"
 }
 
+// GetCommandHandler returns the command handler for use by Transport (GH-1788).
+func (h *Handler) GetCommandHandler() *CommandHandler {
+	return h.cmdHandler
+}
+
 // CheckSingleton verifies no other bot instance is already running.
 // Returns ErrConflict if another instance is detected.
 func (h *Handler) CheckSingleton(ctx context.Context) error {
