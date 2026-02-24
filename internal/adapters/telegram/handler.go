@@ -16,6 +16,7 @@ import (
 
 	"github.com/alekspetrov/pilot/internal/comms"
 	"github.com/alekspetrov/pilot/internal/executor"
+	"github.com/alekspetrov/pilot/internal/intent"
 	"github.com/alekspetrov/pilot/internal/logging"
 	"github.com/alekspetrov/pilot/internal/memory"
 	"github.com/alekspetrov/pilot/internal/transcription"
@@ -49,6 +50,7 @@ type RunningTask struct {
 
 // Handler processes incoming Telegram messages and executes tasks
 type Handler struct {
+	Shared            *comms.Handler          // Shared handler for intent dispatch and task lifecycle (GH-1760)
 	client            *Client
 	runner            *executor.Runner
 	projects          comms.ProjectSource     // Project source for multi-project support
@@ -146,6 +148,8 @@ func NewHandler(config *HandlerConfig, runner *executor.Runner) *Handler {
 	}
 
 	// Initialize LLM classifier if configured
+	var llmClassifierForShared intent.Classifier
+	var convStoreForShared *intent.ConversationStore
 	if config.LLMClassifier != nil && config.LLMClassifier.Enabled {
 		apiKey := config.LLMClassifier.APIKey
 		if apiKey == "" {
@@ -165,6 +169,10 @@ func NewHandler(config *HandlerConfig, runner *executor.Runner) *Handler {
 			}
 			h.conversationStore = NewConversationStore(historySize, historyTTL)
 
+			// Also initialize for the shared handler
+			llmClassifierForShared = intent.NewAnthropicClient(apiKey)
+			convStoreForShared = intent.NewConversationStore(historySize, historyTTL)
+
 			logging.WithComponent("telegram").Info("LLM intent classifier enabled",
 				slog.String("model", "claude-3-5-haiku"))
 		} else {
@@ -175,6 +183,18 @@ func NewHandler(config *HandlerConfig, runner *executor.Runner) *Handler {
 	// Create Transport layer for polling and message dispatch
 	h.transport = NewTransport(h.client, h)
 
+	// Initialize shared handler for intent dispatch and task lifecycle (GH-1760)
+	h.Shared = comms.NewHandler(&comms.HandlerConfig{
+		Messenger:      newTelegramMessenger(h.client, config.PlainTextMode),
+		Runner:         runner,
+		Projects:       config.Projects,
+		ProjectPath:    projectPath,
+		RateLimit:      config.RateLimit,
+		LLMClassifier:  llmClassifierForShared,
+		ConvStore:      convStoreForShared,
+		MemberResolver: newTelegramMemberBridge(config.MemberResolver),
+		Log:            logging.WithComponent("telegram.shared"),
+	})
 	return h
 }
 

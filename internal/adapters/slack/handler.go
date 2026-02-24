@@ -38,6 +38,7 @@ type PendingTask struct {
 // Handler processes incoming Slack events and coordinates task execution.
 // Mirrors Telegram handler's RBAC support with memberResolver and lastSender tracking.
 type Handler struct {
+	Shared            *comms.Handler            // Shared handler for intent dispatch and task lifecycle (GH-1760)
 	socketClient      *SocketModeClient
 	apiClient         *Client
 	memberResolver    MemberResolver            // Team member resolver for RBAC (optional, GH-786)
@@ -128,6 +129,8 @@ func NewHandler(config *HandlerConfig, runner *executor.Runner) *Handler {
 	}
 
 	// Initialize LLM classifier if configured
+	var llmClassifierForShared intent.Classifier
+	var convStoreForShared *intent.ConversationStore
 	if config.LLMClassifier != nil && config.LLMClassifier.Enabled {
 		apiKey := config.LLMClassifier.APIKey
 		if apiKey == "" {
@@ -147,11 +150,28 @@ func NewHandler(config *HandlerConfig, runner *executor.Runner) *Handler {
 			}
 			h.conversationStore = intent.NewConversationStore(historySize, historyTTL)
 
+			// Also initialize for the shared handler
+			llmClassifierForShared = intent.NewAnthropicClient(apiKey)
+			convStoreForShared = intent.NewConversationStore(historySize, historyTTL)
+
 			h.log.Info("LLM intent classifier enabled", slog.String("model", "claude-3-5-haiku"))
 		} else {
 			h.log.Warn("LLM classifier enabled but no API key found")
 		}
 	}
+
+	// Initialize shared handler for intent dispatch and task lifecycle (GH-1760)
+	h.Shared = comms.NewHandler(&comms.HandlerConfig{
+		Messenger:      newSlackMessenger(h.apiClient),
+		Runner:         runner,
+		Projects:       config.Projects,
+		ProjectPath:    projectPath,
+		RateLimit:      config.RateLimit,
+		LLMClassifier:  llmClassifierForShared,
+		ConvStore:      convStoreForShared,
+		MemberResolver: newSlackMemberBridge(config.MemberResolver),
+		Log:            logging.WithComponent("slack.shared"),
+	})
 
 	return h
 }

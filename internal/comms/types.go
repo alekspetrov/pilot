@@ -4,12 +4,15 @@ package comms
 import (
 	"context"
 	"time"
+
+	"github.com/alekspetrov/pilot/internal/executor"
 )
 
 // IncomingMessage is the platform-agnostic representation of an inbound user message.
 type IncomingMessage struct {
 	ContextID  string      // chatID / channelID
 	SenderID   string      // user ID (string; adapters convert int64)
+	Username   string      // display name of sender (for greetings)
 	Text       string      // normalized message text
 	ThreadID   string      // thread context (Slack threadTS, Telegram reply, etc.)
 	ImagePath  string      // downloaded image path (optional)
@@ -23,27 +26,44 @@ type IncomingMessage struct {
 // Messenger is the interface every chat adapter must implement for outbound messaging.
 type Messenger interface {
 	// SendText sends a plain text message to the given context (channel/chat).
-	SendText(ctx context.Context, contextID, text string) error
+	// threadID is optional (used by Slack for threading; empty for Telegram).
+	SendText(ctx context.Context, contextID, threadID, text string) error
 
 	// SendConfirmation sends a task confirmation prompt with approve/reject buttons.
 	// Returns a messageRef that can be used to update the message later.
 	SendConfirmation(ctx context.Context, contextID, threadID, taskID, desc, project string) (messageRef string, err error)
 
-	// SendProgress updates an existing message (identified by messageRef) with progress info.
-	// Returns a new messageRef if the platform creates a new message.
-	SendProgress(ctx context.Context, contextID, messageRef, taskID, phase string, progress int, detail string) (newRef string, err error)
+	// UpdateMessage updates a previously sent message (for progress updates).
+	// msgRef is the platform-specific message reference returned by SendText/SendConfirmation.
+	UpdateMessage(ctx context.Context, contextID, msgRef, text string) error
 
-	// SendResult sends the final task result (success or failure).
-	SendResult(ctx context.Context, contextID, threadID, taskID string, success bool, output, prURL string) error
+	// FormatGreeting returns a platform-specific greeting message.
+	FormatGreeting(username string) string
 
-	// SendChunked sends long content split into platform-appropriate chunks.
-	SendChunked(ctx context.Context, contextID, threadID, content, prefix string) error
+	// FormatQuestionAck returns a platform-specific acknowledgment for questions.
+	FormatQuestionAck() string
 
-	// AcknowledgeCallback responds to a button/callback interaction.
-	AcknowledgeCallback(ctx context.Context, callbackID string) error
+	// CleanOutput cleans internal signals from executor output.
+	CleanOutput(output string) string
 
-	// MaxMessageLength returns the platform's maximum single-message length.
-	MaxMessageLength() int
+	// FormatTaskResult formats an execution result for display.
+	FormatTaskResult(result *executor.ExecutionResult) string
+
+	// FormatProgressUpdate formats a progress update message.
+	FormatProgressUpdate(taskID, phase string, progress int, message string) string
+
+	// MaxMessageLen returns the max message length for this platform.
+	MaxMessageLen() int
+
+	// ChunkContent splits content into platform-appropriate chunks.
+	ChunkContent(content string, maxLen int) []string
+}
+
+// MemberResolver resolves a platform user to a team member ID for RBAC.
+type MemberResolver interface {
+	// ResolveMemberID maps a platform-specific sender ID to a team member ID.
+	// Returns ("", nil) when no match is found (= skip RBAC).
+	ResolveMemberID(senderID string) (string, error)
 }
 
 // PendingTask represents a task awaiting user confirmation.
