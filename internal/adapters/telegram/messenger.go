@@ -4,14 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-
-	"github.com/alekspetrov/pilot/internal/executor"
 )
 
 // TelegramMessenger implements comms.Messenger interface for Telegram
 type TelegramMessenger struct {
-	client         *Client
-	plainTextMode  bool
+	client        *Client
+	plainTextMode bool
 }
 
 // NewTelegramMessenger creates a new Telegram messenger
@@ -31,26 +29,17 @@ func (tm *TelegramMessenger) getParseMode() string {
 }
 
 // SendText sends a plain text message to a chat
-func (tm *TelegramMessenger) SendText(chatID string, text string) (string, error) {
-	ctx := context.Background()
-	resp, err := tm.client.SendMessage(ctx, chatID, text, tm.getParseMode())
+func (tm *TelegramMessenger) SendText(ctx context.Context, contextID, text string) error {
+	_, err := tm.client.SendMessage(ctx, contextID, text, tm.getParseMode())
 	if err != nil {
-		return "", fmt.Errorf("failed to send text message: %w", err)
+		return fmt.Errorf("failed to send text message: %w", err)
 	}
-
-	if resp == nil || resp.Result == nil {
-		return "", fmt.Errorf("empty response from send message")
-	}
-
-	// Convert message ID to string reference
-	messageRef := strconv.FormatInt(resp.Result.MessageID, 10)
-	return messageRef, nil
+	return nil
 }
 
 // SendConfirmation sends a confirmation message with execute/cancel buttons
-func (tm *TelegramMessenger) SendConfirmation(chatID string, taskID string, description string) (string, error) {
-	ctx := context.Background()
-	text := FormatTaskConfirmation(taskID, description, "")
+func (tm *TelegramMessenger) SendConfirmation(ctx context.Context, contextID, threadID, taskID, desc, project string) (string, error) {
+	text := FormatTaskConfirmation(taskID, desc, project)
 
 	keyboard := [][]InlineKeyboardButton{
 		{
@@ -65,7 +54,7 @@ func (tm *TelegramMessenger) SendConfirmation(chatID string, taskID string, desc
 		},
 	}
 
-	resp, err := tm.client.SendMessageWithKeyboard(ctx, chatID, text, tm.getParseMode(), keyboard)
+	resp, err := tm.client.SendMessageWithKeyboard(ctx, contextID, text, tm.getParseMode(), keyboard)
 	if err != nil {
 		return "", fmt.Errorf("failed to send confirmation message: %w", err)
 	}
@@ -74,52 +63,27 @@ func (tm *TelegramMessenger) SendConfirmation(chatID string, taskID string, desc
 		return "", fmt.Errorf("empty response from send message with keyboard")
 	}
 
-	// Convert message ID to string reference
-	messageRef := strconv.FormatInt(resp.Result.MessageID, 10)
-	return messageRef, nil
+	return strconv.FormatInt(resp.Result.MessageID, 10), nil
 }
 
-// SendProgress sends or updates a progress message
-func (tm *TelegramMessenger) SendProgress(chatID string, taskID string, phase string, progress int, message string, messageRef *string) (string, error) {
-	ctx := context.Background()
-	text := FormatProgressUpdate(taskID, phase, progress, message)
+// SendProgress updates an existing message or sends a new one with progress info
+func (tm *TelegramMessenger) SendProgress(ctx context.Context, contextID, messageRef, taskID, phase string, progress int, detail string) (string, error) {
+	text := FormatProgressUpdate(taskID, phase, progress, detail)
 
 	// If messageRef exists, try to edit the message
-	if messageRef != nil && *messageRef != "" {
-		messageID, err := strconv.ParseInt(*messageRef, 10, 64)
-		if err != nil {
-			// If we can't parse the message ID, send a new message instead
-			resp, err := tm.client.SendMessage(ctx, chatID, text, tm.getParseMode())
-			if err != nil {
-				return "", fmt.Errorf("failed to send progress message: %w", err)
+	if messageRef != "" {
+		messageID, err := strconv.ParseInt(messageRef, 10, 64)
+		if err == nil {
+			err = tm.client.EditMessage(ctx, contextID, messageID, text, tm.getParseMode())
+			if err == nil {
+				return messageRef, nil
 			}
-			if resp == nil || resp.Result == nil {
-				return "", fmt.Errorf("empty response from send message")
-			}
-			newRef := strconv.FormatInt(resp.Result.MessageID, 10)
-			return newRef, nil
 		}
-
-		// Try to edit the existing message
-		err = tm.client.EditMessage(ctx, chatID, messageID, text, tm.getParseMode())
-		if err != nil {
-			// If edit fails, send a new message instead
-			resp, err := tm.client.SendMessage(ctx, chatID, text, tm.getParseMode())
-			if err != nil {
-				return "", fmt.Errorf("failed to send progress message after edit failure: %w", err)
-			}
-			if resp == nil || resp.Result == nil {
-				return "", fmt.Errorf("empty response from send message")
-			}
-			newRef := strconv.FormatInt(resp.Result.MessageID, 10)
-			return newRef, nil
-		}
-
-		return *messageRef, nil
+		// Fall through to send new message if parse or edit failed
 	}
 
-	// Send a new message if no reference provided
-	resp, err := tm.client.SendMessage(ctx, chatID, text, tm.getParseMode())
+	// Send a new message
+	resp, err := tm.client.SendMessage(ctx, contextID, text, tm.getParseMode())
 	if err != nil {
 		return "", fmt.Errorf("failed to send progress message: %w", err)
 	}
@@ -128,58 +92,51 @@ func (tm *TelegramMessenger) SendProgress(chatID string, taskID string, phase st
 		return "", fmt.Errorf("empty response from send message")
 	}
 
-	newRef := strconv.FormatInt(resp.Result.MessageID, 10)
-	return newRef, nil
+	return strconv.FormatInt(resp.Result.MessageID, 10), nil
 }
 
 // SendResult sends a task result message
-func (tm *TelegramMessenger) SendResult(chatID string, result *executor.ExecutionResult) (string, error) {
-	ctx := context.Background()
-	text := FormatTaskResult(result)
+func (tm *TelegramMessenger) SendResult(ctx context.Context, contextID, threadID, taskID string, success bool, output, prURL string) error {
+	text := fmt.Sprintf("Task %s: ", taskID)
+	if success {
+		text += "✅ Success"
+	} else {
+		text += "❌ Failed"
+	}
+	if output != "" {
+		text += "\n" + output
+	}
+	if prURL != "" {
+		text += "\nPR: " + prURL
+	}
 
-	resp, err := tm.client.SendMessage(ctx, chatID, text, tm.getParseMode())
+	_, err := tm.client.SendMessage(ctx, contextID, text, tm.getParseMode())
 	if err != nil {
-		return "", fmt.Errorf("failed to send result message: %w", err)
+		return fmt.Errorf("failed to send result message: %w", err)
 	}
-
-	if resp == nil || resp.Result == nil {
-		return "", fmt.Errorf("empty response from send message")
-	}
-
-	// Convert message ID to string reference
-	messageRef := strconv.FormatInt(resp.Result.MessageID, 10)
-	return messageRef, nil
+	return nil
 }
 
 // SendChunked splits large messages and sends them sequentially
-func (tm *TelegramMessenger) SendChunked(chatID string, text string) ([]string, error) {
-	ctx := context.Background()
+func (tm *TelegramMessenger) SendChunked(ctx context.Context, contextID, threadID, content, prefix string) error {
 	maxLen := tm.MaxMessageLength()
-	chunks := chunkContent(text, maxLen)
-
-	var messageRefs []string
-	for _, chunk := range chunks {
-		resp, err := tm.client.SendMessage(ctx, chatID, chunk, tm.getParseMode())
-		if err != nil {
-			return messageRefs, fmt.Errorf("failed to send chunked message: %w", err)
-		}
-
-		if resp == nil || resp.Result == nil {
-			return messageRefs, fmt.Errorf("empty response from send chunked message")
-		}
-
-		// Convert message ID to string reference
-		messageRef := strconv.FormatInt(resp.Result.MessageID, 10)
-		messageRefs = append(messageRefs, messageRef)
+	if prefix != "" {
+		content = prefix + "\n" + content
 	}
+	chunks := chunkContent(content, maxLen)
 
-	return messageRefs, nil
+	for _, chunk := range chunks {
+		_, err := tm.client.SendMessage(ctx, contextID, chunk, tm.getParseMode())
+		if err != nil {
+			return fmt.Errorf("failed to send chunked message: %w", err)
+		}
+	}
+	return nil
 }
 
 // AcknowledgeCallback acknowledges a callback query (e.g., button press)
-func (tm *TelegramMessenger) AcknowledgeCallback(callbackID string, text string) error {
-	ctx := context.Background()
-	err := tm.client.AnswerCallback(ctx, callbackID, text)
+func (tm *TelegramMessenger) AcknowledgeCallback(ctx context.Context, callbackID string) error {
+	err := tm.client.AnswerCallback(ctx, callbackID, "")
 	if err != nil {
 		return fmt.Errorf("failed to acknowledge callback: %w", err)
 	}
