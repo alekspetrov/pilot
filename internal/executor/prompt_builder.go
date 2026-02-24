@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,6 +209,19 @@ func (r *Runner) BuildPrompt(task *Task, executionPath string) string {
 		sb.WriteString("3. Before committing, verify: build passes, tests pass, no undefined methods\n")
 		sb.WriteString("4. Commit with format: `type(scope): description`\n")
 		sb.WriteString("\nWork autonomously. Do not ask for confirmation.\n")
+	}
+
+	// GH-1812: Inject learned patterns into prompt (self-improvement)
+	if r.patternContext != nil {
+		prompt := sb.String()
+		injected, err := r.patternContext.InjectPatterns(context.Background(), prompt, task.ProjectPath, task.Description)
+		if err != nil {
+			slog.Warn("Failed to inject patterns into prompt", slog.Any("error", err))
+		} else if injected != prompt {
+			// Patterns were injected; rebuild from injected prompt
+			sb.Reset()
+			sb.WriteString(injected)
+		}
 	}
 
 	// GH-997: Inject re-anchor prompt if drift detected

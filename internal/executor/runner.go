@@ -313,6 +313,8 @@ type Runner struct {
 	subIssueCreator       SubIssueCreator // Optional creator for sub-issues in external trackers
 	// GH-1599: Execution log store for milestone entries
 	logStore              *memory.Store // Optional log store for writing execution milestones
+	// GH-1812: Pattern context for learned pattern injection
+	patternContext        *PatternContext // Optional pattern context for self-improvement
 }
 
 // NewRunner creates a new Runner instance with Claude Code backend by default.
@@ -609,6 +611,12 @@ func (r *Runner) SetKnowledgeStore(k *memory.KnowledgeStore) {
 // When set, user preferences (verbosity, code patterns) are applied to prompts.
 func (r *Runner) SetProfileManager(pm *memory.ProfileManager) {
 	r.profileManager = pm
+}
+
+// SetPatternContext sets the pattern context for learned pattern injection (GH-1812).
+// When set, relevant patterns from the learning system are injected into execution prompts.
+func (r *Runner) SetPatternContext(pc *PatternContext) {
+	r.patternContext = pc
 }
 
 // SetDriftDetector sets the drift detector for collaboration drift (GH-997).

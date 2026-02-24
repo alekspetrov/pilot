@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alekspetrov/pilot/internal/memory"
 )
 
 func TestLoadProjectContext(t *testing.T) {
@@ -579,4 +581,82 @@ func TestBuildPromptNoNavigator(t *testing.T) {
 	if !strings.Contains(prompt, "Regular development task") {
 		t.Error("Should contain task description")
 	}
+}
+
+func TestBuildPromptPatternInjection(t *testing.T) {
+	// Create temp dir with .agent/ so Navigator path is triggered
+	tempDir, err := os.MkdirTemp("", "pilot-test-patterns")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	agentDir := filepath.Join(tempDir, ".agent")
+	err = os.MkdirAll(agentDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create .agent dir: %v", err)
+	}
+
+	task := &Task{
+		ID:          "GH-1812",
+		Title:       "Test pattern injection",
+		Description: "Add error handling to API endpoint",
+		ProjectPath: tempDir,
+	}
+
+	t.Run("nil pattern context leaves prompt unchanged", func(t *testing.T) {
+		runner := NewRunner()
+		prompt := runner.BuildPrompt(task, tempDir)
+
+		if strings.Contains(prompt, "## Learned Patterns") {
+			t.Error("Prompt should not contain learned patterns when patternContext is nil")
+		}
+		if !strings.Contains(prompt, "## Task: GH-1812") {
+			t.Error("Prompt should still contain task marker")
+		}
+	})
+
+	t.Run("pattern context injects patterns into prompt", func(t *testing.T) {
+		// Create a real memory store with patterns
+		storeDir, err := os.MkdirTemp("", "pilot-test-store")
+		if err != nil {
+			t.Fatalf("Failed to create store dir: %v", err)
+		}
+		defer func() { _ = os.RemoveAll(storeDir) }()
+
+		store, err := memory.NewStore(storeDir)
+		if err != nil {
+			t.Fatalf("Failed to create store: %v", err)
+		}
+		defer store.Close()
+
+		// Save a global cross-pattern (visible to all projects)
+		err = store.SaveCrossPattern(&memory.CrossPattern{
+			ID:          "test-pattern-1",
+			Type:        "success",
+			Title:       "Input validation",
+			Description: "Always validate input parameters before processing",
+			Context:     "error handling",
+			Confidence:  0.9,
+			Occurrences: 5,
+			Scope:       "global",
+		})
+		if err != nil {
+			t.Fatalf("Failed to save cross pattern: %v", err)
+		}
+
+		runner := NewRunner()
+		pc := NewPatternContext(store)
+		runner.SetPatternContext(pc)
+
+		prompt := runner.BuildPrompt(task, tempDir)
+
+		// Pattern should be injected before the task marker
+		if !strings.Contains(prompt, "Learned Patterns") {
+			t.Error("Prompt should contain learned patterns section")
+		}
+		if !strings.Contains(prompt, "## Task: GH-1812") {
+			t.Error("Prompt should still contain task marker")
+		}
+	})
 }
