@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1313,4 +1314,203 @@ func TestPoller_RecoverOrphanedIssues_APIError(t *testing.T) {
 
 	// Should not panic - errors are logged but not returned
 	poller.recoverOrphanedIssues(context.Background())
+}
+
+// GH-1806: groupByOverlappingScope unit tests
+func TestGroupByOverlappingScope(t *testing.T) {
+	tests := []struct {
+		name       string
+		issues     []*Issue
+		wantGroups int
+		wantSizes  []int // sorted ascending
+	}{
+		{
+			name:       "empty input",
+			issues:     nil,
+			wantGroups: 0,
+		},
+		{
+			name: "all overlap same directory",
+			issues: []*Issue{
+				{Number: 1, Body: "Change internal/comms/handler.go"},
+				{Number: 2, Body: "Update internal/comms/router.go"},
+				{Number: 3, Body: "Fix internal/comms/utils.go"},
+			},
+			wantGroups: 1,
+			wantSizes:  []int{3},
+		},
+		{
+			name: "all different directories",
+			issues: []*Issue{
+				{Number: 1, Body: "Change internal/gateway/server.go"},
+				{Number: 2, Body: "Update internal/executor/runner.go"},
+				{Number: 3, Body: "Fix internal/memory/store.go"},
+			},
+			wantGroups: 3,
+			wantSizes:  []int{1, 1, 1},
+		},
+		{
+			name: "mixed overlap groups",
+			issues: []*Issue{
+				{Number: 1, Body: "Change internal/comms/handler.go"},
+				{Number: 2, Body: "Update internal/executor/runner.go"},
+				{Number: 3, Body: "Fix internal/comms/router.go"},
+				{Number: 4, Body: "Change internal/dashboard/tui.go"},
+			},
+			wantGroups: 3,
+			wantSizes:  []int{1, 1, 2},
+		},
+		{
+			name: "transitive overlap",
+			issues: []*Issue{
+				{Number: 1, Body: "Change internal/comms/handler.go and internal/gateway/server.go"},
+				{Number: 2, Body: "Update internal/gateway/router.go"},
+				{Number: 3, Body: "Fix internal/comms/utils.go"},
+			},
+			wantGroups: 1,
+			wantSizes:  []int{3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			groups := groupByOverlappingScope(tt.issues)
+			if len(groups) != tt.wantGroups {
+				t.Errorf("got %d groups, want %d", len(groups), tt.wantGroups)
+				return
+			}
+			if tt.wantSizes != nil {
+				sizes := make([]int, len(groups))
+				for i, g := range groups {
+					sizes[i] = len(g)
+				}
+				sort.Ints(sizes)
+				for i, s := range sizes {
+					if s != tt.wantSizes[i] {
+						t.Errorf("group sizes %v, want %v", sizes, tt.wantSizes)
+						break
+					}
+				}
+			}
+		})
+	}
+}
+
+// GH-1806: 3 issues referencing same dir → only 1 dispatched
+func TestPoller_ScopeOverlap_AllOverlap(t *testing.T) {
+	now := time.Now()
+	issues := []*Issue{
+		{Number: 2, Title: "B", Body: "Fix internal/comms/handler.go", Labels: []Label{{Name: "pilot"}}, CreatedAt: now.Add(1 * time.Minute)},
+		{Number: 1, Title: "A", Body: "Change internal/comms/router.go", Labels: []Label{{Name: "pilot"}}, CreatedAt: now},
+		{Number: 3, Title: "C", Body: "Update internal/comms/utils.go", Labels: []Label{{Name: "pilot"}}, CreatedAt: now.Add(2 * time.Minute)},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(mustMarshal(t, issues))
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+
+	var dispatched int32
+	poller, _ := NewPoller(client, "owner/repo", "pilot", 30*time.Second,
+		WithOnIssue(func(_ context.Context, issue *Issue) error {
+			atomic.AddInt32(&dispatched, 1)
+			return nil
+		}),
+	)
+
+	poller.checkForNewIssues(context.Background())
+	poller.WaitForActive()
+
+	if got := atomic.LoadInt32(&dispatched); got != 1 {
+		t.Errorf("dispatched %d issues, want 1", got)
+	}
+}
+
+// GH-1806: 3 issues referencing different dirs → all 3 dispatched
+func TestPoller_ScopeOverlap_NoOverlap(t *testing.T) {
+	now := time.Now()
+	issues := []*Issue{
+		{Number: 1, Title: "A", Body: "Fix internal/gateway/server.go", Labels: []Label{{Name: "pilot"}}, CreatedAt: now},
+		{Number: 2, Title: "B", Body: "Change internal/executor/runner.go", Labels: []Label{{Name: "pilot"}}, CreatedAt: now.Add(1 * time.Minute)},
+		{Number: 3, Title: "C", Body: "Update internal/memory/store.go", Labels: []Label{{Name: "pilot"}}, CreatedAt: now.Add(2 * time.Minute)},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(mustMarshal(t, issues))
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+
+	var dispatched int32
+	poller, _ := NewPoller(client, "owner/repo", "pilot", 30*time.Second,
+		WithOnIssue(func(_ context.Context, issue *Issue) error {
+			atomic.AddInt32(&dispatched, 1)
+			return nil
+		}),
+	)
+
+	poller.checkForNewIssues(context.Background())
+	poller.WaitForActive()
+
+	if got := atomic.LoadInt32(&dispatched); got != 3 {
+		t.Errorf("dispatched %d issues, want 3", got)
+	}
+}
+
+// GH-1806: mixed overlap groups → correct subset dispatched
+func TestPoller_ScopeOverlap_MixedGroups(t *testing.T) {
+	now := time.Now()
+	issues := []*Issue{
+		{Number: 1, Title: "A", Body: "Fix internal/comms/handler.go", Labels: []Label{{Name: "pilot"}}, CreatedAt: now},
+		{Number: 2, Title: "B", Body: "Change internal/executor/runner.go", Labels: []Label{{Name: "pilot"}}, CreatedAt: now.Add(1 * time.Minute)},
+		{Number: 3, Title: "C", Body: "Update internal/comms/router.go", Labels: []Label{{Name: "pilot"}}, CreatedAt: now.Add(2 * time.Minute)},
+		{Number: 4, Title: "D", Body: "Fix internal/dashboard/tui.go", Labels: []Label{{Name: "pilot"}}, CreatedAt: now.Add(3 * time.Minute)},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(mustMarshal(t, issues))
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+
+	var dispatched int32
+	var dispatchedNumbers sync.Map
+	poller, _ := NewPoller(client, "owner/repo", "pilot", 30*time.Second,
+		WithOnIssue(func(_ context.Context, issue *Issue) error {
+			atomic.AddInt32(&dispatched, 1)
+			dispatchedNumbers.Store(issue.Number, true)
+			return nil
+		}),
+	)
+
+	poller.checkForNewIssues(context.Background())
+	poller.WaitForActive()
+
+	if got := atomic.LoadInt32(&dispatched); got != 3 {
+		t.Errorf("dispatched %d issues, want 3", got)
+	}
+
+	// Issue 1 (oldest in comms group) should be dispatched, issue 3 deferred
+	if _, ok := dispatchedNumbers.Load(1); !ok {
+		t.Error("expected issue #1 (oldest in overlap group) to be dispatched")
+	}
+	if _, ok := dispatchedNumbers.Load(3); ok {
+		t.Error("expected issue #3 (newer in overlap group) to NOT be dispatched")
+	}
+}
+
+func mustMarshal(t *testing.T, v interface{}) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return data
 }

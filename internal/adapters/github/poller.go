@@ -563,6 +563,7 @@ func (p *Poller) checkForNewIssues(ctx context.Context) {
 		return
 	}
 
+	var candidates []*Issue
 	for _, issue := range issues {
 		// Skip if already in progress or failed (check before processed to allow retry)
 		if HasLabel(issue, LabelInProgress) || HasLabel(issue, LabelFailed) {
@@ -577,11 +578,11 @@ func (p *Poller) checkForNewIssues(ctx context.Context) {
 
 		// Check if already processed
 		p.mu.RLock()
-		processed := p.processed[issue.Number]
+		alreadyProcessed := p.processed[issue.Number]
 		p.mu.RUnlock()
 
 		// If processed but no status labels, allow retry (pilot-failed was removed)
-		if processed {
+		if alreadyProcessed {
 			p.logger.Info("Issue was processed but status labels removed, allowing retry",
 				slog.Int("number", issue.Number))
 			p.mu.Lock()
@@ -604,8 +605,38 @@ func (p *Poller) checkForNewIssues(ctx context.Context) {
 			continue
 		}
 
-		// Mark processed immediately to prevent duplicate dispatch on next tick
+		candidates = append(candidates, issue)
+	}
+
+	// Mark all candidates as processed to prevent duplicate dispatch.
+	// Deferred issues will be retried via the retry logic once the dispatched
+	// issue's status labels change (e.g., after its PR merges).
+	for _, issue := range candidates {
 		p.markProcessed(issue.Number)
+	}
+
+	// Group candidates by overlapping scope; dispatch only the oldest per group
+	groups := groupByOverlappingScope(candidates)
+	var toDispatch []*Issue
+	for _, group := range groups {
+		if len(group) == 1 {
+			toDispatch = append(toDispatch, group[0])
+		} else {
+			// Sort by CreatedAt ascending, dispatch only the oldest
+			sort.Slice(group, func(i, j int) bool {
+				return group[i].CreatedAt.Before(group[j].CreatedAt)
+			})
+			toDispatch = append(toDispatch, group[0])
+			for _, deferred := range group[1:] {
+				p.logger.Info("Deferring overlapping issue until next poll tick",
+					slog.Int("number", deferred.Number),
+					slog.Int("dispatched", group[0].Number),
+				)
+			}
+		}
+	}
+
+	for _, issue := range toDispatch {
 
 		// Acquire semaphore slot (blocks if max_concurrent reached)
 		select {
@@ -656,6 +687,57 @@ func (p *Poller) checkForNewIssues(ctx context.Context) {
 			}
 		}(issue)
 	}
+}
+
+// groupByOverlappingScope partitions issues into groups where any two issues
+// in the same group share at least one overlapping directory scope (transitive
+// closure). Issues with no overlap to any other issue end up in singleton groups.
+func groupByOverlappingScope(issues []*Issue) [][]*Issue {
+	n := len(issues)
+	if n == 0 {
+		return nil
+	}
+
+	// Union-Find
+	parent := make([]int, n)
+	for i := range parent {
+		parent[i] = i
+	}
+	var find func(int) int
+	find = func(x int) int {
+		if parent[x] != x {
+			parent[x] = find(parent[x])
+		}
+		return parent[x]
+	}
+	union := func(a, b int) {
+		ra, rb := find(a), find(b)
+		if ra != rb {
+			parent[ra] = rb
+		}
+	}
+
+	// Pairwise overlap check
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			if executor.IssuesOverlap(issues[i].Body, issues[j].Body) {
+				union(i, j)
+			}
+		}
+	}
+
+	// Collect groups
+	groups := make(map[int][]*Issue)
+	for i, issue := range issues {
+		root := find(i)
+		groups[root] = append(groups[root], issue)
+	}
+
+	result := make([][]*Issue, 0, len(groups))
+	for _, g := range groups {
+		result = append(result, g)
+	}
+	return result
 }
 
 // markProcessed marks an issue as processed
