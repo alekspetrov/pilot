@@ -1261,3 +1261,158 @@ func TestStateStore_PurgeOldPlaneProcessedIssues(t *testing.T) {
 		t.Errorf("expected 0 after purge, got %d", len(all))
 	}
 }
+
+// GH-1844: Table-driven test for generic adapter processed methods across all adapters.
+func TestStateStore_GenericAdapterProcessed(t *testing.T) {
+	adapters := []string{"github", "linear", "gitlab", "jira", "asana", "azuredevops", "plane"}
+
+	for _, adapter := range adapters {
+		t.Run(adapter, func(t *testing.T) {
+			store := newTestStateStore(t)
+			issueID := adapter + "-issue-42"
+
+			// Not processed initially
+			processed, err := store.IsAdapterProcessed(adapter, issueID)
+			if err != nil {
+				t.Fatalf("IsAdapterProcessed failed: %v", err)
+			}
+			if processed {
+				t.Error("issue should not be processed initially")
+			}
+
+			// Mark processed
+			if err := store.MarkAdapterProcessed(adapter, issueID, "success"); err != nil {
+				t.Fatalf("MarkAdapterProcessed failed: %v", err)
+			}
+
+			processed, err = store.IsAdapterProcessed(adapter, issueID)
+			if err != nil {
+				t.Fatalf("IsAdapterProcessed failed: %v", err)
+			}
+			if !processed {
+				t.Error("issue should be processed after marking")
+			}
+
+			// Load all
+			all, err := store.LoadAdapterProcessed(adapter)
+			if err != nil {
+				t.Fatalf("LoadAdapterProcessed failed: %v", err)
+			}
+			if len(all) != 1 || !all[issueID] {
+				t.Errorf("LoadAdapterProcessed = %v, want {%s: true}", all, issueID)
+			}
+
+			// Idempotent mark (update result)
+			if err := store.MarkAdapterProcessed(adapter, issueID, "failed"); err != nil {
+				t.Fatalf("idempotent MarkAdapterProcessed failed: %v", err)
+			}
+			all, _ = store.LoadAdapterProcessed(adapter)
+			if len(all) != 1 {
+				t.Errorf("got %d after idempotent mark, want 1", len(all))
+			}
+
+			// Unmark
+			if err := store.UnmarkAdapterProcessed(adapter, issueID); err != nil {
+				t.Fatalf("UnmarkAdapterProcessed failed: %v", err)
+			}
+			processed, err = store.IsAdapterProcessed(adapter, issueID)
+			if err != nil {
+				t.Fatalf("IsAdapterProcessed after unmark failed: %v", err)
+			}
+			if processed {
+				t.Error("issue should not be processed after unmarking")
+			}
+
+			// Purge
+			if err := store.MarkAdapterProcessed(adapter, issueID, "success"); err != nil {
+				t.Fatalf("MarkAdapterProcessed for purge failed: %v", err)
+			}
+			purged, err := store.PurgeOldAdapterProcessed(adapter, 0)
+			if err != nil {
+				t.Fatalf("PurgeOldAdapterProcessed failed: %v", err)
+			}
+			if purged != 1 {
+				t.Errorf("purged = %d, want 1", purged)
+			}
+			all, _ = store.LoadAdapterProcessed(adapter)
+			if len(all) != 0 {
+				t.Errorf("got %d after purge, want 0", len(all))
+			}
+		})
+	}
+}
+
+// GH-1844: Test adapters are isolated — marking one adapter doesn't affect another.
+func TestStateStore_GenericAdapterProcessedIsolation(t *testing.T) {
+	store := newTestStateStore(t)
+
+	if err := store.MarkAdapterProcessed("github", "100", "success"); err != nil {
+		t.Fatalf("MarkAdapterProcessed(github) failed: %v", err)
+	}
+	if err := store.MarkAdapterProcessed("gitlab", "100", "success"); err != nil {
+		t.Fatalf("MarkAdapterProcessed(gitlab) failed: %v", err)
+	}
+
+	// Each adapter should only see its own entry
+	ghAll, _ := store.LoadAdapterProcessed("github")
+	glAll, _ := store.LoadAdapterProcessed("gitlab")
+	if len(ghAll) != 1 || len(glAll) != 1 {
+		t.Errorf("github=%d gitlab=%d, want 1 each", len(ghAll), len(glAll))
+	}
+
+	// Purging one adapter shouldn't affect the other
+	_, _ = store.PurgeOldAdapterProcessed("github", 0)
+	glAll, _ = store.LoadAdapterProcessed("gitlab")
+	if len(glAll) != 1 {
+		t.Errorf("gitlab should still have 1 after github purge, got %d", len(glAll))
+	}
+}
+
+// GH-1844: Test data migration — insert into old tables, verify readable via generic methods.
+func TestStateStore_DataMigrationFromOldTables(t *testing.T) {
+	store := newTestStateStore(t)
+
+	// Insert directly into old tables (simulating pre-migration data)
+	oldTableInserts := []string{
+		`INSERT INTO autopilot_processed (issue_number, processed_at, result) VALUES (42, CURRENT_TIMESTAMP, 'ok')`,
+		`INSERT INTO linear_processed (issue_id, processed_at, result) VALUES ('lin-abc', CURRENT_TIMESTAMP, 'ok')`,
+		`INSERT INTO gitlab_processed (issue_number, processed_at, result) VALUES (99, CURRENT_TIMESTAMP, 'ok')`,
+		`INSERT INTO jira_processed (issue_key, processed_at, result) VALUES ('PROJ-10', CURRENT_TIMESTAMP, 'ok')`,
+		`INSERT INTO asana_processed (task_gid, processed_at, result) VALUES ('asana-gid-1', CURRENT_TIMESTAMP, 'ok')`,
+		`INSERT INTO azuredevops_processed (work_item_id, processed_at, result) VALUES (500, CURRENT_TIMESTAMP, 'ok')`,
+		`INSERT INTO plane_processed (issue_id, processed_at, result) VALUES ('plane-uuid-1', CURRENT_TIMESTAMP, 'ok')`,
+	}
+	for _, ins := range oldTableInserts {
+		if _, err := store.db.Exec(ins); err != nil {
+			t.Fatalf("insert into old table failed: %v", err)
+		}
+	}
+
+	// Re-run migration (simulating restart) — should migrate data into adapter_processed
+	if err := store.migrate(); err != nil {
+		t.Fatalf("re-migration failed: %v", err)
+	}
+
+	// Verify all old data is readable via generic methods
+	tests := []struct {
+		adapter string
+		issueID string
+	}{
+		{"github", "42"},
+		{"linear", "lin-abc"},
+		{"gitlab", "99"},
+		{"jira", "PROJ-10"},
+		{"asana", "asana-gid-1"},
+		{"azuredevops", "500"},
+		{"plane", "plane-uuid-1"},
+	}
+	for _, tc := range tests {
+		processed, err := store.IsAdapterProcessed(tc.adapter, tc.issueID)
+		if err != nil {
+			t.Fatalf("IsAdapterProcessed(%s, %s) failed: %v", tc.adapter, tc.issueID, err)
+		}
+		if !processed {
+			t.Errorf("expected %s/%s to be processed after migration", tc.adapter, tc.issueID)
+		}
+	}
+}
