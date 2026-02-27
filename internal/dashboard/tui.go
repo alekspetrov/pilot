@@ -400,20 +400,6 @@ func (m Model) effectivePanelTotalWidth() int {
 	return panelTotalWidth
 }
 
-// effectivePanelInnerWidth returns the inner content width (total - 4 for borders/padding).
-func (m Model) effectivePanelInnerWidth() int {
-	return m.effectivePanelTotalWidth() - 4
-}
-
-// effectiveCardWidth returns the card width for the current layout (panel / 3).
-func (m Model) effectiveCardWidth() int {
-	return m.effectivePanelTotalWidth() / 3
-}
-
-// effectiveCardInnerWidth returns the card inner content width (card - 6 for borders/padding).
-func (m Model) effectiveCardInnerWidth() int {
-	return m.effectiveCardWidth() - 6
-}
 
 // tickMsg is sent periodically to refresh the display
 type tickMsg time.Time
