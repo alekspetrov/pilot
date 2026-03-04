@@ -314,9 +314,10 @@ type Runner struct {
 	// GH-1599: Execution log store for milestone entries
 	logStore              *memory.Store // Optional log store for writing execution milestones
 	// GH-1811: Learning system (self-improvement)
-	learningLoop         LearningRecorder     // Optional learning loop for pattern extraction + feedback
-	patternContext       *PatternContext       // Optional pattern context for prompt injection
-	selfReviewExtractor  SelfReviewExtractor   // Optional extractor for self-review pattern learning (GH-1955)
+	learningLoop         LearningRecorder          // Optional learning loop for pattern extraction + feedback
+	patternContext       *PatternContext            // Optional pattern context for prompt injection
+	selfReviewExtractor  SelfReviewExtractor        // Optional extractor for self-review pattern learning (GH-1955)
+	outcomeTracker       *memory.ModelOutcomeTracker // Optional outcome tracker for model escalation (GH-1991)
 }
 
 // NewRunner creates a new Runner instance with Claude Code backend by default.
@@ -642,6 +643,19 @@ func (r *Runner) SetLearningLoop(loop LearningRecorder) {
 func (r *Runner) SetPatternContext(ctx *PatternContext) {
 	r.patternContext = ctx
 }
+
+// SetOutcomeTracker sets the model outcome tracker for escalation decisions (GH-1991).
+// When set, the runner records execution outcomes and the model router uses failure
+// rates to escalate to more capable models when needed.
+func (r *Runner) SetOutcomeTracker(tracker *memory.ModelOutcomeTracker) {
+	r.outcomeTracker = tracker
+	if r.modelRouter != nil {
+		r.modelRouter.SetOutcomeTracker(tracker)
+	}
+}
+
+// HasOutcomeTracker reports whether an outcome tracker is wired.
+func (r *Runner) HasOutcomeTracker() bool { return r.outcomeTracker != nil }
 
 // HasLearningLoop reports whether a learning loop is wired.
 func (r *Runner) HasLearningLoop() bool { return r.learningLoop != nil }
@@ -2674,6 +2688,9 @@ The previous execution completed but made no code changes. This task requires ac
 	// GH-1813: Record execution outcome for pattern learning (self-improvement)
 	r.recordLearning(ctx, task, result)
 
+	// GH-1991: Record model outcome for escalation tracking
+	r.recordOutcome(task, result)
+
 	return result, nil
 }
 // Cancel terminates a running task by killing its Claude Code process.
@@ -2717,6 +2734,34 @@ func (r *Runner) recordLearning(ctx context.Context, task *Task, result *Executi
 	}
 	if learnErr := r.learningLoop.RecordExecution(ctx, exec, nil); learnErr != nil {
 		r.log.Warn("Failed to record execution for learning", slog.Any("error", learnErr))
+	}
+}
+
+// recordOutcome records the model execution outcome for escalation tracking (GH-1991).
+// It is non-fatal — errors are logged but do not affect the execution result.
+func (r *Runner) recordOutcome(task *Task, result *ExecutionResult) {
+	if r.outcomeTracker == nil {
+		return
+	}
+
+	taskType := string(DetectComplexity(task))
+	model := result.ModelName
+	if model == "" {
+		return // No model info, skip
+	}
+
+	outcome := "success"
+	if !result.Success {
+		outcome = "failure"
+	}
+
+	tokens := int(result.TokensInput + result.TokensOutput)
+
+	if err := r.outcomeTracker.RecordOutcome(taskType, model, outcome, tokens, result.Duration); err != nil {
+		r.log.Warn("Failed to record model outcome",
+			slog.String("task_id", task.ID),
+			slog.Any("error", err),
+		)
 	}
 }
 

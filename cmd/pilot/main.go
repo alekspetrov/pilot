@@ -914,6 +914,10 @@ Examples:
 					gwRunner.SetPatternContext(gwPatternContext)
 					gwRunner.SetSelfReviewExtractor(gwExtractor)
 
+					// GH-1991: Wire model outcome tracker for escalation (gateway mode)
+					gwOutcomeTracker := memory.NewModelOutcomeTracker(gwStore)
+					gwRunner.SetOutcomeTracker(gwOutcomeTracker)
+
 					if gwAutopilotController != nil {
 						gwAutopilotController.SetLearningLoop(gwLearningLoop)
 					}
@@ -1336,6 +1340,10 @@ func runPollingMode(cfg *config.Config, projectPath string, replace, dashboardMo
 			runner.SetLearningLoop(learningLoop)
 			runner.SetPatternContext(patternContext)
 			runner.SetSelfReviewExtractor(extractor)
+
+			// GH-1991: Wire model outcome tracker for escalation
+			outcomeTracker := memory.NewModelOutcomeTracker(store)
+			runner.SetOutcomeTracker(outcomeTracker)
 
 			// GH-1823: Wire review learning into autopilot controllers
 			for _, ctrl := range autopilotControllers {

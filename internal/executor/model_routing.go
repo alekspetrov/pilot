@@ -2,7 +2,10 @@ package executor
 
 import (
 	"context"
+	"log/slog"
 	"time"
+
+	"github.com/alekspetrov/pilot/internal/memory"
 )
 
 // ModelRouter selects the appropriate model, timeout, and effort level based on task complexity.
@@ -11,7 +14,8 @@ type ModelRouter struct {
 	modelConfig      *ModelRoutingConfig
 	timeoutConfig    *TimeoutConfig
 	effortConfig     *EffortRoutingConfig
-	effortClassifier *EffortClassifier // LLM-based effort classifier (GH-727)
+	effortClassifier *EffortClassifier          // LLM-based effort classifier (GH-727)
+	outcomeTracker   *memory.ModelOutcomeTracker // Outcome-based model escalation (GH-1991)
 }
 
 // NewModelRouter creates a new ModelRouter with the given configuration.
@@ -41,13 +45,32 @@ func NewModelRouterWithEffort(modelConfig *ModelRoutingConfig, timeoutConfig *Ti
 
 // SelectModel returns the appropriate model name for a task based on its complexity.
 // If model routing is disabled, returns empty string (use backend default).
+// When an outcome tracker is attached, checks if the selected model has a high failure
+// rate for the detected task type and escalates if needed (GH-1991).
 func (r *ModelRouter) SelectModel(task *Task) string {
 	if r.modelConfig == nil || !r.modelConfig.Enabled {
 		return ""
 	}
 
 	complexity := DetectComplexity(task)
-	return r.GetModelForComplexity(complexity)
+	model := r.GetModelForComplexity(complexity)
+
+	// GH-1991: Check outcome tracker for escalation
+	if r.outcomeTracker != nil && model != "" {
+		taskType := string(complexity)
+		if shouldEscalate, nextModel := r.outcomeTracker.ShouldEscalate(taskType, model); shouldEscalate {
+			failureRate := r.outcomeTracker.GetFailureRate(taskType, model)
+			slog.Info("Model escalated due to failure rate",
+				slog.String("task_type", taskType),
+				slog.String("original_model", model),
+				slog.String("escalated_model", nextModel),
+				slog.Float64("failure_rate", failureRate),
+			)
+			return nextModel
+		}
+	}
+
+	return model
 }
 
 // GetModelForComplexity returns the model name for a given complexity level.
@@ -116,6 +139,13 @@ func (r *ModelRouter) GetTimeoutForComplexity(complexity Complexity) time.Durati
 // IsRoutingEnabled returns true if model routing is enabled.
 func (r *ModelRouter) IsRoutingEnabled() bool {
 	return r.modelConfig != nil && r.modelConfig.Enabled
+}
+
+// SetOutcomeTracker attaches a model outcome tracker for failure-based escalation (GH-1991).
+// When set, SelectModel checks if the chosen model has a high failure rate for the task type
+// and escalates to a more capable model if needed (e.g., Haiku → Sonnet 4.6 → Opus 4.6).
+func (r *ModelRouter) SetOutcomeTracker(tracker *memory.ModelOutcomeTracker) {
+	r.outcomeTracker = tracker
 }
 
 // SetEffortClassifier attaches an LLM-based effort classifier to the router.

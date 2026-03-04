@@ -99,6 +99,10 @@ func NewPollingHarness(t *testing.T, cfg *config.Config) *Harness {
 		pc := executor.NewPatternContext(store)
 		h.PatternContext = pc
 		h.Runner.SetPatternContext(pc)
+
+		// GH-1991: Model outcome tracker for escalation
+		outcomeTracker := memory.NewModelOutcomeTracker(store)
+		h.Runner.SetOutcomeTracker(outcomeTracker)
 	}
 
 	// Autopilot controller
@@ -201,6 +205,10 @@ func NewGatewayHarness(t *testing.T, cfg *config.Config) *Harness {
 		pc := executor.NewPatternContext(store)
 		h.PatternContext = pc
 		h.Runner.SetPatternContext(pc)
+
+		// GH-1991: Model outcome tracker for escalation
+		outcomeTracker := memory.NewModelOutcomeTracker(store)
+		h.Runner.SetOutcomeTracker(outcomeTracker)
 	}
 
 	// Autopilot controller

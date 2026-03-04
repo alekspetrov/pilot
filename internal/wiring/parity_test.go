@@ -78,6 +78,7 @@ func TestPollingGatewayParity(t *testing.T) {
 		{"HasProfileManager", func(h *Harness) bool { return h.Runner.HasProfileManager() }},
 		{"HasParallelRunner", func(h *Harness) bool { return h.Runner.HasParallelRunner() }},
 		{"HasSubIssueCreator", func(h *Harness) bool { return h.Runner.HasSubIssueCreator() }},
+		{"HasOutcomeTracker", func(h *Harness) bool { return h.Runner.HasOutcomeTracker() }},
 	}
 
 	for _, tt := range tests {

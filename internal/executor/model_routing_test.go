@@ -3,8 +3,11 @@ package executor
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/alekspetrov/pilot/internal/memory"
 )
 
 func TestModelRouter_SelectModel(t *testing.T) {
@@ -384,5 +387,121 @@ func TestModelRouter_SelectEffortFallsBackOnLLMFailure(t *testing.T) {
 	got := router.SelectEffort(task)
 	if got != "low" {
 		t.Errorf("Expected fallback to static mapping 'low', got %q", got)
+	}
+}
+
+// newTestStore creates a temporary memory store for testing.
+func newTestStore(t *testing.T) *memory.Store {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "model-routing-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	store, err := memory.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
+
+func TestModelRouter_SelectModelWithEscalation(t *testing.T) {
+	store := newTestStore(t)
+	tracker := memory.NewModelOutcomeTracker(store)
+
+	modelConfig := &ModelRoutingConfig{
+		Enabled: true,
+		Trivial: "claude-haiku-4-5",
+		Simple:  "claude-haiku-4-5",
+		Medium:  "claude-sonnet-4-6",
+		Complex: "claude-opus-4-6",
+	}
+
+	router := NewModelRouter(modelConfig, nil)
+	router.SetOutcomeTracker(tracker)
+
+	// Record failures for haiku on trivial tasks to trigger escalation
+	for i := 0; i < 5; i++ {
+		if err := tracker.RecordOutcome("trivial", "claude-haiku-4-5", "failure", 500, time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Trivial task should now escalate from haiku to sonnet
+	task := &Task{Description: "Fix typo in README"}
+	got := router.SelectModel(task)
+	if got != "claude-sonnet-4-6" {
+		t.Errorf("SelectModel() = %q, want %q (should escalate haiku→sonnet)", got, "claude-sonnet-4-6")
+	}
+}
+
+func TestModelRouter_SelectModelNoEscalationWithLowFailureRate(t *testing.T) {
+	store := newTestStore(t)
+	tracker := memory.NewModelOutcomeTracker(store)
+
+	modelConfig := &ModelRoutingConfig{
+		Enabled: true,
+		Trivial: "claude-haiku-4-5",
+		Simple:  "claude-haiku-4-5",
+		Medium:  "claude-sonnet-4-6",
+		Complex: "claude-opus-4-6",
+	}
+
+	router := NewModelRouter(modelConfig, nil)
+	router.SetOutcomeTracker(tracker)
+
+	// Record mostly successes — failure rate below threshold
+	for i := 0; i < 8; i++ {
+		if err := tracker.RecordOutcome("trivial", "claude-haiku-4-5", "success", 500, time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := tracker.RecordOutcome("trivial", "claude-haiku-4-5", "failure", 500, time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 2/10 = 0.2, below 0.3 threshold — no escalation
+	task := &Task{Description: "Fix typo in README"}
+	got := router.SelectModel(task)
+	if got != "claude-haiku-4-5" {
+		t.Errorf("SelectModel() = %q, want %q (should not escalate)", got, "claude-haiku-4-5")
+	}
+}
+
+func TestModelRouter_SelectModelNoTrackerNoEscalation(t *testing.T) {
+	modelConfig := &ModelRoutingConfig{
+		Enabled: true,
+		Trivial: "claude-haiku-4-5",
+		Simple:  "claude-haiku-4-5",
+		Medium:  "claude-sonnet-4-6",
+		Complex: "claude-opus-4-6",
+	}
+
+	router := NewModelRouter(modelConfig, nil)
+	// No tracker set
+
+	task := &Task{Description: "Fix typo in README"}
+	got := router.SelectModel(task)
+	if got != "claude-haiku-4-5" {
+		t.Errorf("SelectModel() = %q, want %q (no tracker, no escalation)", got, "claude-haiku-4-5")
+	}
+}
+
+func TestModelRouter_SetOutcomeTracker(t *testing.T) {
+	store := newTestStore(t)
+	tracker := memory.NewModelOutcomeTracker(store)
+
+	router := NewModelRouter(nil, nil)
+	if router.outcomeTracker != nil {
+		t.Error("outcomeTracker should be nil initially")
+	}
+
+	router.SetOutcomeTracker(tracker)
+	if router.outcomeTracker == nil {
+		t.Error("outcomeTracker should be set after SetOutcomeTracker")
 	}
 }
