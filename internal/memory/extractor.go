@@ -453,10 +453,7 @@ func (e *PatternExtractor) ExtractFromSelfReview(ctx context.Context, selfReview
 			continue
 		}
 
-		examples := make([]string, 0, len(matches))
-		for _, m := range matches {
-			examples = append(examples, m)
-		}
+		examples := append([]string{}, matches...)
 
 		result.AntiPatterns = append(result.AntiPatterns, &ExtractedPattern{
 			Type:        finding.pType,
