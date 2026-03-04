@@ -1690,10 +1690,10 @@ func TestPoller_CheckForNewIssues_SkipsRetryWithMergedPRs(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.URL.Path == "/repos/owner/repo/issues":
+		switch r.URL.Path {
+		case "/repos/owner/repo/issues":
 			_ = json.NewEncoder(w).Encode(issues)
-		case r.URL.Path == "/search/issues":
+		case "/search/issues":
 			_, _ = w.Write([]byte(`{"total_count": 1}`))
 		default:
 			w.WriteHeader(http.StatusOK)
@@ -1735,10 +1735,10 @@ func TestPoller_FindOldestUnprocessedIssue_SkipsRetryWithMergedPRs(t *testing.T)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.URL.Path == "/repos/owner/repo/issues":
+		switch r.URL.Path {
+		case "/repos/owner/repo/issues":
 			_ = json.NewEncoder(w).Encode(issues)
-		case r.URL.Path == "/search/issues":
+		case "/search/issues":
 			_, _ = w.Write([]byte(`{"total_count": 3}`))
 		default:
 			w.WriteHeader(http.StatusOK)
