@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1968,7 +1969,7 @@ func TestBuildSelfReviewPrompt(t *testing.T) {
 		ProjectPath: "/tmp/test",
 	}
 
-	prompt := runner.buildSelfReviewPrompt(task)
+	prompt := runner.buildSelfReviewPrompt(context.Background(), task)
 
 	// Verify key elements
 	if !strings.Contains(prompt, "Self-Review Phase") {
@@ -2633,7 +2634,7 @@ func TestBuildSelfReviewPrompt_ConstantValueSanity(t *testing.T) {
 		ProjectPath: "/tmp/test",
 	}
 
-	prompt := runner.buildSelfReviewPrompt(task)
+	prompt := runner.buildSelfReviewPrompt(context.Background(), task)
 
 	if !strings.Contains(prompt, "Constant Value Sanity Check") {
 		t.Error("Self-review prompt should contain 'Constant Value Sanity Check'")
@@ -2654,7 +2655,7 @@ func TestBuildSelfReviewPrompt_CrossFileParity(t *testing.T) {
 		ProjectPath: "/tmp/test",
 	}
 
-	prompt := runner.buildSelfReviewPrompt(task)
+	prompt := runner.buildSelfReviewPrompt(context.Background(), task)
 
 	if !strings.Contains(prompt, "Cross-File Parity Check") {
 		t.Error("Self-review prompt should contain 'Cross-File Parity Check'")

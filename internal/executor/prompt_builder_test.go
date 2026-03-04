@@ -1,10 +1,13 @@
 package executor
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alekspetrov/pilot/internal/memory"
 )
 
 func TestLoadProjectContext(t *testing.T) {
@@ -492,7 +495,7 @@ func TestBuildSelfReviewPromptContainsLintCheck(t *testing.T) {
 		Description: "Test self-review lint section",
 	}
 
-	prompt := runner.buildSelfReviewPrompt(task)
+	prompt := runner.buildSelfReviewPrompt(context.Background(), task)
 
 	// Verify self-review contains lint check section
 	if !strings.Contains(prompt, "### 8. Lint Check") {
@@ -578,5 +581,162 @@ func TestBuildPromptNoNavigator(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Regular development task") {
 		t.Error("Should contain task description")
+	}
+}
+
+// TestBuildSelfReviewPrompt_PatternCompliance verifies that learned patterns
+// appear in self-review when PatternContext is set (GH-1949).
+func TestBuildSelfReviewPrompt_PatternCompliance(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "pilot-test-patterns-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, err := memory.NewStore(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Seed a recommended pattern (use "org" scope so it's found by project query)
+	err = store.SaveCrossPattern(&memory.CrossPattern{
+		ID:          "test-pattern-1",
+		Type:        "code",
+		Title:       "Error Wrapping",
+		Description: "Always wrap errors with context",
+		Context:     "Go error handling",
+		Confidence:  0.9,
+		Scope:       "org",
+	})
+	if err != nil {
+		t.Fatalf("Failed to save pattern: %v", err)
+	}
+
+	// Seed an anti-pattern (use "org" scope so it's found by project query)
+	err = store.SaveCrossPattern(&memory.CrossPattern{
+		ID:            "test-anti-1",
+		Type:          "error",
+		Title:         "[ANTI] Bare returns",
+		Description:   "AVOID: Returning errors without wrapping",
+		Confidence:    0.85,
+		IsAntiPattern: true,
+		Scope:         "org",
+	})
+	if err != nil {
+		t.Fatalf("Failed to save anti-pattern: %v", err)
+	}
+
+	runner := NewRunner()
+	runner.SetPatternContext(NewPatternContext(store))
+
+	task := &Task{
+		ID:          "GH-1949",
+		Title:       "Test pattern compliance",
+		Description: "Fix error handling in executor",
+		ProjectPath: "/tmp/test",
+	}
+
+	prompt := runner.buildSelfReviewPrompt(context.Background(), task)
+
+	// (a) Patterns appear in self-review
+	if !strings.Contains(prompt, "### 9. Pattern Compliance Check") {
+		t.Error("Self-review prompt should contain '### 9. Pattern Compliance Check' section")
+	}
+	if !strings.Contains(prompt, "Recommended Patterns") {
+		t.Error("Self-review prompt should contain recommended patterns")
+	}
+	if !strings.Contains(prompt, "Error Wrapping") {
+		t.Error("Self-review prompt should contain the seeded pattern title")
+	}
+
+	// (b) Anti-patterns appear as AVOID items
+	if !strings.Contains(prompt, "Anti-Patterns to Avoid") {
+		t.Error("Self-review prompt should contain anti-patterns section")
+	}
+	if !strings.Contains(prompt, "Bare returns") {
+		t.Error("Self-review prompt should contain the seeded anti-pattern title")
+	}
+
+	// Verify the section is between check 8 and Actions
+	lintPos := strings.Index(prompt, "### 8. Lint Check")
+	patternPos := strings.Index(prompt, "### 9. Pattern Compliance Check")
+	actionsPos := strings.Index(prompt, "### Actions")
+	if lintPos == -1 || patternPos == -1 || actionsPos == -1 {
+		t.Fatal("Missing expected sections in prompt")
+	}
+	if !(lintPos < patternPos && patternPos < actionsPos) {
+		t.Error("Pattern compliance check should be between lint check and actions")
+	}
+}
+
+// TestBuildSelfReviewPrompt_NoPatterns verifies that the pattern compliance
+// section is omitted when no patterns exist (GH-1949).
+func TestBuildSelfReviewPrompt_NoPatterns(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "pilot-test-no-patterns-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, err := memory.NewStore(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// No patterns seeded — empty store
+	runner := NewRunner()
+	runner.SetPatternContext(NewPatternContext(store))
+
+	task := &Task{
+		ID:          "GH-1949",
+		Title:       "Test no patterns",
+		Description: "Simple change",
+		ProjectPath: "/tmp/test",
+	}
+
+	prompt := runner.buildSelfReviewPrompt(context.Background(), task)
+
+	// (c) Section is omitted when no patterns exist
+	if strings.Contains(prompt, "Pattern Compliance Check") {
+		t.Error("Self-review prompt should NOT contain pattern compliance section when no patterns exist")
+	}
+
+	// Existing checks still present
+	if !strings.Contains(prompt, "### 8. Lint Check") {
+		t.Error("Self-review prompt should still contain lint check")
+	}
+	if !strings.Contains(prompt, "### Actions") {
+		t.Error("Self-review prompt should still contain actions section")
+	}
+}
+
+// TestBuildSelfReviewPrompt_NilPatternContext verifies graceful degradation
+// when patternContext is nil (GH-1949).
+func TestBuildSelfReviewPrompt_NilPatternContext(t *testing.T) {
+	runner := NewRunner()
+	// patternContext is nil by default
+
+	task := &Task{
+		ID:          "GH-1949",
+		Title:       "Test nil context",
+		Description: "Simple change",
+		ProjectPath: "/tmp/test",
+	}
+
+	prompt := runner.buildSelfReviewPrompt(context.Background(), task)
+
+	// Should not contain pattern section
+	if strings.Contains(prompt, "Pattern Compliance Check") {
+		t.Error("Self-review prompt should NOT contain pattern compliance section when patternContext is nil")
+	}
+
+	// Should still have all standard checks
+	if !strings.Contains(prompt, "Self-Review Phase") {
+		t.Error("Self-review prompt should contain standard header")
+	}
+	if !strings.Contains(prompt, "### Actions") {
+		t.Error("Self-review prompt should contain actions section")
 	}
 }

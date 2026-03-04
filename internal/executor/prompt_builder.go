@@ -257,7 +257,7 @@ func (r *Runner) buildRetryPrompt(task *Task, feedback string, attempt int) stri
 // buildSelfReviewPrompt constructs the prompt for self-review phase.
 // The prompt instructs Claude to examine its changes for common issues
 // and fix them before PR creation.
-func (r *Runner) buildSelfReviewPrompt(task *Task) string {
+func (r *Runner) buildSelfReviewPrompt(ctx context.Context, task *Task) string {
 	var sb strings.Builder
 
 	sb.WriteString("## Self-Review Phase\n\n")
@@ -329,6 +329,19 @@ func (r *Runner) buildSelfReviewPrompt(task *Task) string {
 	sb.WriteString("### 8. Lint Check\n")
 	sb.WriteString("Run `golangci-lint run --new-from-rev=origin/main ./...` and fix any violations.\n")
 	sb.WriteString("Common issue: unchecked return values in test mock handlers (w.Write, json.Encode, SendText).\n\n")
+
+	// GH-1949: Pattern compliance check from learned patterns
+	if r.patternContext != nil {
+		patterns, err := r.patternContext.GetPatternsForTask(ctx, task.ProjectPath, task.Description)
+		if err != nil {
+			slog.Warn("Failed to get patterns for self-review", slog.Any("error", err))
+		} else if patterns != "" {
+			sb.WriteString("### 9. Pattern Compliance Check\n")
+			sb.WriteString("Verify your changes comply with learned patterns from previous executions:\n\n")
+			sb.WriteString(patterns)
+			sb.WriteString("\n")
+		}
+	}
 
 	sb.WriteString("### Actions\n")
 	sb.WriteString("- If you find issues: FIX them and commit the fix\n")

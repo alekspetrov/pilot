@@ -2795,7 +2795,7 @@ func (r *Runner) runSelfReview(ctx context.Context, task *Task, state *progressS
 	r.log.Info("Running self-review phase", slog.String("task_id", task.ID))
 	r.reportProgress(task.ID, "Self-Review", 95, "Reviewing changes...")
 
-	reviewPrompt := r.buildSelfReviewPrompt(task)
+	reviewPrompt := r.buildSelfReviewPrompt(ctx, task)
 
 	// Execute self-review with shorter timeout (2 minutes)
 	reviewCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
