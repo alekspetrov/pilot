@@ -905,3 +905,67 @@ func TestLearnFromReview_NoReviews(t *testing.T) {
 		t.Errorf("No reviews should result in no patterns, got %d", patternStore.Count())
 	}
 }
+
+func TestLearnFromCIFailure(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "feedback-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	patternStore, _ := NewGlobalPatternStore(tmpDir)
+	extractor := NewPatternExtractor(patternStore, store)
+	loop := NewLearningLoop(store, extractor, nil)
+	ctx := context.Background()
+
+	ciLogs := "FAIL: TestHandler_Auth — nil pointer dereference at handler.go:42"
+	failedChecks := []string{"test", "lint"}
+
+	err = loop.LearnFromCIFailure(ctx, "/test/project", ciLogs, failedChecks)
+	if err != nil {
+		t.Fatalf("LearnFromCIFailure failed: %v", err)
+	}
+}
+
+func TestLearnFromCIFailure_EmptyLogsAndChecks(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "feedback-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	loop := NewLearningLoop(store, nil, nil)
+	ctx := context.Background()
+
+	// Empty logs and no checks — should return nil without doing anything
+	err = loop.LearnFromCIFailure(ctx, "/test/project", "", nil)
+	if err != nil {
+		t.Fatalf("LearnFromCIFailure with empty input should not error: %v", err)
+	}
+}
+
+func TestLearnFromCIFailure_NilExtractor(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "feedback-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	store, _ := NewStore(tmpDir)
+	defer func() { _ = store.Close() }()
+
+	loop := NewLearningLoop(store, nil, nil)
+	ctx := context.Background()
+
+	// Has logs but no extractor — should return nil gracefully
+	err = loop.LearnFromCIFailure(ctx, "/test/project", "some CI logs", []string{"build"})
+	if err != nil {
+		t.Fatalf("LearnFromCIFailure with nil extractor should not error: %v", err)
+	}
+}

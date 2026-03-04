@@ -3155,6 +3155,107 @@ func TestHandleMerged_NilLearningLoop(t *testing.T) {
 	}
 }
 
+// TestHandleCIFailed_LearnsFromCIFailure verifies that handleCIFailed calls
+// LearnFromCIFailure when a learning loop is configured.
+func TestHandleCIFailed_LearnsFromCIFailure(t *testing.T) {
+	issueCreated := false
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/owner/repo/commits/abc1234/check-runs":
+			resp := github.CheckRunsResponse{
+				TotalCount: 2,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: "completed", Conclusion: "failure"},
+					{Name: "test", Status: "completed", Conclusion: "success"},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(mustJSON(t, resp))
+		case r.URL.Path == "/repos/owner/repo/issues" && r.Method == "POST":
+			issueCreated = true
+			resp := github.Issue{Number: 200}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(mustJSON(t, resp))
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+	cfg.CIPollInterval = 10 * time.Millisecond
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+	loop, cleanup := newTestLearningLoop(t)
+	defer cleanup()
+	c.SetLearningLoop(loop)
+
+	prState := &PRState{
+		PRNumber: 42,
+		HeadSHA:  "abc1234",
+		Stage:    StageCIFailed,
+	}
+
+	err := c.handleCIFailed(context.Background(), prState)
+	if err != nil {
+		t.Fatalf("handleCIFailed returned unexpected error: %v", err)
+	}
+
+	if !issueCreated {
+		t.Error("expected fix issue to be created")
+	}
+	if prState.Stage != StageFailed {
+		t.Errorf("Stage = %s, want %s", prState.Stage, StageFailed)
+	}
+}
+
+// TestHandleCIFailed_NilLearningLoop verifies that handleCIFailed does not panic
+// when no learning loop is configured (nil guard).
+func TestHandleCIFailed_NilLearningLoop(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/owner/repo/commits/abc1234/check-runs":
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{Name: "build", Status: "completed", Conclusion: "failure"},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(mustJSON(t, resp))
+		case r.URL.Path == "/repos/owner/repo/issues" && r.Method == "POST":
+			resp := github.Issue{Number: 201}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(mustJSON(t, resp))
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvDev
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+	// learningLoop intentionally not set
+
+	prState := &PRState{
+		PRNumber: 42,
+		HeadSHA:  "abc1234",
+		Stage:    StageCIFailed,
+	}
+
+	// Must not panic
+	err := c.handleCIFailed(context.Background(), prState)
+	if err != nil {
+		t.Fatalf("handleCIFailed returned unexpected error: %v", err)
+	}
+}
+
 // mustJSON serialises v to JSON and fails the test on error.
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
