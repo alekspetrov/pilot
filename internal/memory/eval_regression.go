@@ -32,11 +32,6 @@ func CheckRegression(baseline, current []*EvalTask, threshold float64) *Regressi
 		baselineSuccess[t.ID] = t.Success
 	}
 
-	currentSuccess := make(map[string]bool, len(current))
-	for _, t := range current {
-		currentSuccess[t.ID] = t.Success
-	}
-
 	var regressed, improved []string
 	for _, t := range current {
 		prev, existed := baselineSuccess[t.ID]
