@@ -3787,3 +3787,156 @@ func TestController_HasChangesRequested_FilterByTime(t *testing.T) {
 		t.Error("hasChangesRequested should return false for reviews submitted before PR creation")
 	}
 }
+
+func TestController_MaybeCloseParentIssue(t *testing.T) {
+	tests := []struct {
+		name           string
+		issueNumber    int
+		issueBody      string // Body of the sub-issue (returned by GetIssue)
+		openSubCount   int    // Count returned by SearchOpenSubIssues
+		searchErr      bool   // If true, search API returns error
+		getIssueErr    bool   // If true, GetIssue returns error
+		wantClosed     bool   // Whether parent issue should be closed
+		wantComment    bool   // Whether summary comment should be posted
+		wantLabelAdded bool   // Whether pilot-done label should be added
+	}{
+		{
+			name:           "last sub-issue triggers parent close",
+			issueNumber:    10,
+			issueBody:      "Some description\n\nParent: GH-5\n",
+			openSubCount:   0,
+			wantClosed:     true,
+			wantComment:    true,
+			wantLabelAdded: true,
+		},
+		{
+			name:         "sibling still open - no-op",
+			issueNumber:  10,
+			issueBody:    "Some description\n\nParent: GH-5\n",
+			openSubCount: 2,
+			wantClosed:   false,
+			wantComment:  false,
+		},
+		{
+			name:        "issue with no parent reference - no-op",
+			issueNumber: 10,
+			issueBody:   "Just a regular issue with no parent link",
+			wantClosed:  false,
+			wantComment: false,
+		},
+		{
+			name:        "no issue number - no-op",
+			issueNumber: 0,
+			wantClosed:  false,
+		},
+		{
+			name:        "GetIssue API error - graceful no-op",
+			issueNumber: 10,
+			getIssueErr: true,
+			wantClosed:  false,
+		},
+		{
+			name:        "SearchOpenSubIssues API error - graceful no-op",
+			issueNumber: 10,
+			issueBody:   "Parent: GH-5\n",
+			searchErr:   true,
+			wantClosed:  false,
+		},
+		{
+			name:           "label cleanup - pilot-failed removed on parent close",
+			issueNumber:    10,
+			issueBody:      "Parent: GH-5",
+			openSubCount:   0,
+			wantClosed:     true,
+			wantComment:    true,
+			wantLabelAdded: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parentClosed := false
+			commentPosted := false
+			labelAdded := false
+			labelFailedRemoved := false
+			labelInProgressRemoved := false
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/repos/owner/repo/issues/10" && r.Method == http.MethodGet:
+					if tt.getIssueErr {
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					issue := github.Issue{Number: 10, Body: tt.issueBody, State: "closed"}
+					w.WriteHeader(http.StatusOK)
+					_ = json.NewEncoder(w).Encode(issue)
+
+				case r.URL.Path == "/search/issues" && r.Method == http.MethodGet:
+					if tt.searchErr {
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					resp := struct {
+						TotalCount int `json:"total_count"`
+					}{TotalCount: tt.openSubCount}
+					w.WriteHeader(http.StatusOK)
+					_ = json.NewEncoder(w).Encode(resp)
+
+				case r.URL.Path == "/repos/owner/repo/issues/5/labels" && r.Method == http.MethodPost:
+					labelAdded = true
+					w.WriteHeader(http.StatusOK)
+
+				case r.URL.Path == "/repos/owner/repo/issues/5/labels/pilot-failed" && r.Method == http.MethodDelete:
+					labelFailedRemoved = true
+					w.WriteHeader(http.StatusOK)
+
+				case r.URL.Path == "/repos/owner/repo/issues/5/labels/pilot-in-progress" && r.Method == http.MethodDelete:
+					labelInProgressRemoved = true
+					w.WriteHeader(http.StatusOK)
+
+				case r.URL.Path == "/repos/owner/repo/issues/5" && r.Method == http.MethodPatch:
+					parentClosed = true
+					w.WriteHeader(http.StatusOK)
+
+				case r.URL.Path == "/repos/owner/repo/issues/5/comments" && r.Method == http.MethodPost:
+					commentPosted = true
+					resp := github.Comment{ID: 1, Body: "test"}
+					w.WriteHeader(http.StatusCreated)
+					_ = json.NewEncoder(w).Encode(resp)
+
+				default:
+					w.WriteHeader(http.StatusOK)
+				}
+			}))
+			defer server.Close()
+
+			ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+			cfg := DefaultConfig()
+			c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+			prState := &PRState{
+				PRNumber:    42,
+				IssueNumber: tt.issueNumber,
+			}
+
+			c.maybeCloseParentIssue(context.Background(), prState)
+
+			if parentClosed != tt.wantClosed {
+				t.Errorf("parent closed = %v, want %v", parentClosed, tt.wantClosed)
+			}
+			if commentPosted != tt.wantComment {
+				t.Errorf("comment posted = %v, want %v", commentPosted, tt.wantComment)
+			}
+			if tt.wantLabelAdded && !labelAdded {
+				t.Error("expected pilot-done label to be added to parent")
+			}
+			if tt.wantClosed && !labelFailedRemoved {
+				t.Error("expected pilot-failed label removal attempt on parent")
+			}
+			if tt.wantClosed && !labelInProgressRemoved {
+				t.Error("expected pilot-in-progress label removal attempt on parent")
+			}
+		})
+	}
+}

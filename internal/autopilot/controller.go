@@ -1103,6 +1103,9 @@ func (c *Controller) handleMerged(ctx context.Context, prState *PRState) error {
 		}
 	}
 
+	// GH-2086: Check if parent epic can be auto-closed (all sub-issues done).
+	c.maybeCloseParentIssue(ctx, prState)
+
 	if c.config.ResolvedEnv().SkipPostMergeCI {
 		// Fast path: skip post-merge CI, check if we should release immediately
 		if c.shouldTriggerRelease() && !c.resolvedRelease().RequireCI {
@@ -1124,6 +1127,66 @@ func (c *Controller) handleMerged(ctx context.Context, prState *PRState) error {
 	)
 	prState.Stage = StagePostMergeCI
 	return nil
+}
+
+// maybeCloseParentIssue checks if the merged PR's issue is a sub-issue of a parent epic,
+// and if all sibling sub-issues are now closed, closes the parent issue with a summary comment.
+// All errors are logged as warnings without blocking the merge flow.
+func (c *Controller) maybeCloseParentIssue(ctx context.Context, prState *PRState) {
+	if prState.IssueNumber <= 0 {
+		return
+	}
+
+	// Fetch the sub-issue body to find parent reference
+	issue, err := c.ghClient.GetIssue(ctx, c.owner, c.repo, prState.IssueNumber)
+	if err != nil {
+		c.log.Warn("maybeCloseParentIssue: failed to fetch sub-issue", "issue", prState.IssueNumber, "error", err)
+		return
+	}
+
+	parentNum := github.ParseParentIssueNumber(issue.Body)
+	if parentNum == 0 {
+		return // Not a sub-issue
+	}
+
+	// Count remaining open siblings (excluding this one, which should already be closed)
+	openCount, err := c.ghClient.SearchOpenSubIssues(ctx, c.owner, c.repo, parentNum)
+	if err != nil {
+		c.log.Warn("maybeCloseParentIssue: failed to search open sub-issues", "parent", parentNum, "error", err)
+		return
+	}
+
+	if openCount > 0 {
+		c.log.Info("maybeCloseParentIssue: siblings still open, skipping parent close",
+			"parent", parentNum, "open_siblings", openCount)
+		return
+	}
+
+	// All sub-issues closed — close the parent
+	c.log.Info("maybeCloseParentIssue: all sub-issues closed, closing parent", "parent", parentNum)
+
+	// Label cleanup: add pilot-done, remove pilot-failed and pilot-in-progress
+	if err := c.ghClient.AddLabels(ctx, c.owner, c.repo, parentNum, []string{github.LabelDone}); err != nil {
+		c.log.Warn("maybeCloseParentIssue: failed to add pilot-done to parent", "parent", parentNum, "error", err)
+	}
+	if err := c.ghClient.RemoveLabel(ctx, c.owner, c.repo, parentNum, github.LabelFailed); err != nil {
+		c.log.Debug("maybeCloseParentIssue: pilot-failed cleanup on parent", "parent", parentNum, "error", err)
+	}
+	if err := c.ghClient.RemoveLabel(ctx, c.owner, c.repo, parentNum, github.LabelInProgress); err != nil {
+		c.log.Debug("maybeCloseParentIssue: pilot-in-progress cleanup on parent", "parent", parentNum, "error", err)
+	}
+
+	// Close the parent issue
+	if err := c.ghClient.UpdateIssueState(ctx, c.owner, c.repo, parentNum, "closed"); err != nil {
+		c.log.Warn("maybeCloseParentIssue: failed to close parent issue", "parent", parentNum, "error", err)
+		return
+	}
+
+	// Post summary comment
+	comment := fmt.Sprintf("All sub-issues completed. Parent closed automatically by Pilot after GH-%d merged (PR #%d).", prState.IssueNumber, prState.PRNumber)
+	if _, err := c.ghClient.AddComment(ctx, c.owner, c.repo, parentNum, comment); err != nil {
+		c.log.Warn("maybeCloseParentIssue: failed to post summary comment", "parent", parentNum, "error", err)
+	}
 }
 
 // handlePostMergeCI monitors deployment/post-merge checks.
