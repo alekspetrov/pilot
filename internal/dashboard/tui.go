@@ -1732,8 +1732,6 @@ func renderEpicProgressBar(done, total, innerWidth int) string {
 	return "[" + strings.Repeat("#", filled) + strings.Repeat("-", empty) + "]"
 }
 
-// renderHistory renders completed tasks history with epic-aware grouping.
-// Active epics show expanded with sub-issue tree; completed epics collapse to one line.
 // renderEvalStats renders a compact eval stats panel showing latest pass@1 rate
 // with a trend indicator and optional regression warning.
 func (m Model) renderEvalStats() string {
@@ -1811,6 +1809,8 @@ func (m Model) renderEvalStats() string {
 	return renderPanel("EVAL", line, tw)
 }
 
+// renderHistory renders completed tasks history with epic-aware grouping.
+// Active epics show expanded with sub-issue tree; completed epics collapse to one line.
 func (m Model) renderHistory() string {
 	var content strings.Builder
 	tw := m.effectivePanelTotalWidth()
