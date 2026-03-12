@@ -159,6 +159,12 @@ func (r *Retrier) Evaluate(err error, attempt int, originalTimeout time.Duration
 			ShouldRetry: false,
 			Reason:      "invalid_config errors are not retryable (fail fast)",
 		}
+	case "oom_killed":
+		// GH-2112: OOM kills indicate resource exhaustion - retrying won't help
+		return RetryDecision{
+			ShouldRetry: false,
+			Reason:      "oom_killed errors are not retryable (resource exhaustion)",
+		}
 	default:
 		// Unknown errors use default behavior (no smart retry)
 		return RetryDecision{

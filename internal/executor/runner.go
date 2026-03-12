@@ -1570,6 +1570,18 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 					)
 					r.reportProgress(task.ID, "API Error", 100, beErr.ErrorMessage())
 
+				case "oom_killed":
+					// GH-2112: OOM/SIGKILL classification
+					alertType = AlertEventTypeTaskFailed
+					errorCategory = "oom_killed"
+					log.Error("Backend process OOM-killed",
+						slog.String("task_id", task.ID),
+						slog.String("message", beErr.ErrorMessage()),
+						slog.String("stderr", beErr.ErrorStderr()),
+						slog.Duration("duration", duration),
+					)
+					r.reportProgress(task.ID, "OOM Killed", 100, beErr.ErrorMessage())
+
 				default:
 					// GH-917-5: Log stderr for process errors and unknown errors too
 					log.Error("Backend execution failed",
@@ -2173,6 +2185,12 @@ The previous execution completed but made no code changes. This task requires ac
 								errorCategory = "api_error"
 								log.Error("Retry failed: API error", slog.String("message", beErr.ErrorMessage()))
 								r.reportProgress(task.ID, "API Error", 100, beErr.ErrorMessage())
+							case "oom_killed":
+								// GH-2112: OOM/SIGKILL classification in retry path
+								alertType = AlertEventTypeTaskFailed
+								errorCategory = "oom_killed"
+								log.Error("Retry failed: process OOM-killed", slog.String("message", beErr.ErrorMessage()))
+								r.reportProgress(task.ID, "OOM Killed", 100, beErr.ErrorMessage())
 							default:
 								log.Error("Retry execution failed", slog.Any("error", retryErr))
 								r.reportProgress(task.ID, "Retry Failed", 100, result.Error)

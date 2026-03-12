@@ -123,6 +123,25 @@ func TestRetrier_Evaluate_InvalidConfig_FailFast(t *testing.T) {
 	}
 }
 
+// TestRetrier_Evaluate_OOM verifies OOM errors are not retried.
+// GH-2112: OOM kills indicate resource exhaustion, retrying won't help.
+func TestRetrier_Evaluate_OOM(t *testing.T) {
+	config := &RetryConfig{
+		Enabled: true,
+	}
+	retrier := NewRetrier(config)
+
+	err := &ClaudeCodeError{Type: ErrorTypeOOM, Message: "Process OOM-killed (exit code 139)"}
+
+	decision := retrier.Evaluate(err, 0, 10*time.Minute)
+	if decision.ShouldRetry {
+		t.Error("Expected ShouldRetry=false for OOM (resource exhaustion)")
+	}
+	if decision.Reason != "oom_killed errors are not retryable (resource exhaustion)" {
+		t.Errorf("Unexpected reason: %s", decision.Reason)
+	}
+}
+
 func TestRetrier_Evaluate_Disabled(t *testing.T) {
 	config := &RetryConfig{
 		Enabled: false, // Disabled

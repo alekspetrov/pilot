@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -49,6 +50,9 @@ const (
 	ErrorTypeAPIError ClaudeCodeErrorType = "api_error"
 	// ErrorTypeTimeout indicates the process was killed due to timeout
 	ErrorTypeTimeout ClaudeCodeErrorType = "timeout"
+	// ErrorTypeOOM indicates the process was OOM-killed (exit 137/139)
+	// GH-2112: SIGKILL (137) or SIGSEGV (139) from kernel OOM killer
+	ErrorTypeOOM ClaudeCodeErrorType = "oom_killed"
 	// ErrorTypeSessionNotFound indicates the session for --from-pr or --resume was not found (GH-1267)
 	ErrorTypeSessionNotFound ClaudeCodeErrorType = "session_not_found"
 	// ErrorTypeUnknown indicates an unclassified error
@@ -78,8 +82,21 @@ func (e *ClaudeCodeError) ErrorMessage() string { return e.Message }
 // ErrorStderr implements BackendError.
 func (e *ClaudeCodeError) ErrorStderr() string { return e.Stderr }
 
-// classifyClaudeCodeError examines stderr output to classify the error.
+// classifyClaudeCodeError examines stderr output and exit code to classify the error.
+// GH-2112: Exit codes 137 (SIGKILL) and 139 (SIGSEGV) are classified as OOM before
+// falling through to stderr-based detection.
 func classifyClaudeCodeError(stderr string, originalErr error) *ClaudeCodeError {
+	// GH-2112: Check exit code first for OOM detection.
+	// Exit 137 = killed by SIGKILL (128+9), exit 139 = killed by SIGSEGV (128+11).
+	// Both are commonly caused by the kernel OOM killer.
+	if exitCode := extractExitCode(originalErr); exitCode == 137 || exitCode == 139 {
+		return &ClaudeCodeError{
+			Type:    ErrorTypeOOM,
+			Message: fmt.Sprintf("Process OOM-killed (exit code %d)", exitCode),
+			Stderr:  strings.TrimSpace(stderr),
+		}
+	}
+
 	stderrLower := strings.ToLower(stderr)
 
 	// Rate limit detection
@@ -152,6 +169,18 @@ func classifyClaudeCodeError(stderr string, originalErr error) *ClaudeCodeError 
 		Message: msg,
 		Stderr:  strings.TrimSpace(stderr),
 	}
+}
+
+// extractExitCode returns the process exit code from an *exec.ExitError, or -1 if unavailable.
+func extractExitCode(err error) int {
+	if err == nil {
+		return -1
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
 }
 
 // parseClaudeCodeError examines stderr output to classify the error.
@@ -538,11 +567,22 @@ func (b *ClaudeCodeBackend) executeWithFromPR(ctx context.Context, opts ExecuteO
 		stderr := stderrOutput.String()
 		ccErr := parseClaudeCodeError(stderr, err).(*ClaudeCodeError)
 
-		b.log.Warn("Claude Code execution failed",
-			slog.String("error_type", string(ccErr.Type)),
-			slog.String("message", ccErr.Message),
-			slog.String("stderr", ccErr.Stderr),
-		)
+		// GH-2112: Log OOM kills at Error level with distinct message for monitoring
+		if ccErr.Type == ErrorTypeOOM {
+			b.log.Error("Claude Code process OOM-killed",
+				slog.String("error_type", string(ccErr.Type)),
+				slog.String("message", ccErr.Message),
+				slog.String("stderr", ccErr.Stderr),
+				slog.Int64("tokens_input", result.TokensInput),
+				slog.Int64("tokens_output", result.TokensOutput),
+			)
+		} else {
+			b.log.Warn("Claude Code execution failed",
+				slog.String("error_type", string(ccErr.Type)),
+				slog.String("message", ccErr.Message),
+				slog.String("stderr", ccErr.Stderr),
+			)
+		}
 
 		// Store classified error info in result
 		if result.Error == "" {

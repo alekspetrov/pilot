@@ -2,6 +2,8 @@ package executor
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -651,4 +653,106 @@ func TestClaudeCodeError_Error(t *testing.T) {
 			t.Errorf("Error() = %q, unexpected format", errStr)
 		}
 	})
+}
+
+// TestExtractExitCode verifies exit code extraction from exec.ExitError.
+func TestExtractExitCode(t *testing.T) {
+	t.Run("nil error returns -1", func(t *testing.T) {
+		if got := extractExitCode(nil); got != -1 {
+			t.Errorf("extractExitCode(nil) = %d, want -1", got)
+		}
+	})
+
+	t.Run("non-ExitError returns -1", func(t *testing.T) {
+		if got := extractExitCode(fmt.Errorf("some error")); got != -1 {
+			t.Errorf("extractExitCode(generic) = %d, want -1", got)
+		}
+	})
+
+	t.Run("ExitError returns exit code", func(t *testing.T) {
+		// Run a command that exits with code 1 to get a real ExitError
+		cmd := exec.Command("sh", "-c", "exit 1")
+		err := cmd.Run()
+		if err == nil {
+			t.Fatal("expected error from exit 1")
+		}
+		if got := extractExitCode(err); got != 1 {
+			t.Errorf("extractExitCode(exit 1) = %d, want 1", got)
+		}
+	})
+}
+
+// TestClassifyClaudeCodeErrorOOM verifies OOM classification via exit codes.
+// GH-2112: Exit codes 137 (SIGKILL) and 139 (SIGSEGV) should be classified as OOM.
+func TestClassifyClaudeCodeErrorOOM(t *testing.T) {
+	tests := []struct {
+		name       string
+		exitCode   int
+		stderr     string
+		expectType ClaudeCodeErrorType
+	}{
+		{
+			name:       "exit 139 - SIGSEGV/OOM",
+			exitCode:   139,
+			stderr:     "",
+			expectType: ErrorTypeOOM,
+		},
+		{
+			name:       "exit 137 - SIGKILL/OOM",
+			exitCode:   137,
+			stderr:     "",
+			expectType: ErrorTypeOOM,
+		},
+		{
+			name:       "exit 139 with stderr - still OOM (exit code takes precedence)",
+			exitCode:   139,
+			stderr:     "signal: killed",
+			expectType: ErrorTypeOOM,
+		},
+		{
+			name:       "exit 1 with signal:killed stderr - timeout (not OOM)",
+			exitCode:   1,
+			stderr:     "signal: killed",
+			expectType: ErrorTypeTimeout,
+		},
+		{
+			name:       "exit 1 with rate limit stderr",
+			exitCode:   1,
+			stderr:     "Error: You've hit your limit",
+			expectType: ErrorTypeRateLimit,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a real ExitError by running a command with the desired exit code
+			cmd := exec.Command("sh", "-c", fmt.Sprintf("exit %d", tt.exitCode))
+			exitErr := cmd.Run()
+			if exitErr == nil {
+				t.Fatalf("expected error from exit %d", tt.exitCode)
+			}
+
+			ccErr := classifyClaudeCodeError(tt.stderr, exitErr)
+			if ccErr.Type != tt.expectType {
+				t.Errorf("classifyClaudeCodeError() type = %q, want %q", ccErr.Type, tt.expectType)
+			}
+		})
+	}
+}
+
+// TestOOMErrorMessage verifies OOM error message format.
+func TestOOMErrorMessage(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "exit 139")
+	exitErr := cmd.Run()
+	if exitErr == nil {
+		t.Fatal("expected error")
+	}
+
+	ccErr := classifyClaudeCodeError("", exitErr)
+	if ccErr.Type != ErrorTypeOOM {
+		t.Fatalf("expected OOM, got %q", ccErr.Type)
+	}
+	if ccErr.Message != "Process OOM-killed (exit code 139)" {
+		t.Errorf("unexpected message: %q", ccErr.Message)
+	}
 }

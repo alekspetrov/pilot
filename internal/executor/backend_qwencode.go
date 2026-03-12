@@ -51,6 +51,7 @@ const (
 	QwenErrorTypeRateLimit        QwenCodeErrorType = "rate_limit"
 	QwenErrorTypeAPIError         QwenCodeErrorType = "api_error"
 	QwenErrorTypeTimeout          QwenCodeErrorType = "timeout"
+	QwenErrorTypeOOM              QwenCodeErrorType = "oom_killed" // GH-2112
 	QwenErrorTypeInvalidConfig    QwenCodeErrorType = "invalid_config"
 	QwenErrorTypeSessionNotFound  QwenCodeErrorType = "session_not_found"
 	QwenErrorTypeUnknown          QwenCodeErrorType = "unknown"
@@ -79,8 +80,18 @@ func (e *QwenCodeError) ErrorMessage() string { return e.Message }
 // ErrorStderr implements BackendError.
 func (e *QwenCodeError) ErrorStderr() string { return e.Stderr }
 
-// classifyQwenCodeError examines stderr output to classify the error.
+// classifyQwenCodeError examines stderr output and exit code to classify the error.
+// GH-2112: Exit codes 137/139 classified as OOM before stderr-based detection.
 func classifyQwenCodeError(stderr string, originalErr error) *QwenCodeError {
+	// GH-2112: Check exit code first for OOM detection
+	if exitCode := extractExitCode(originalErr); exitCode == 137 || exitCode == 139 {
+		return &QwenCodeError{
+			Type:    QwenErrorTypeOOM,
+			Message: fmt.Sprintf("Process OOM-killed (exit code %d)", exitCode),
+			Stderr:  strings.TrimSpace(stderr),
+		}
+	}
+
 	stderrLower := strings.ToLower(stderr)
 
 	// Rate limit detection

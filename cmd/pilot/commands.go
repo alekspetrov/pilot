@@ -313,9 +313,10 @@ func newTaskCmd() *cobra.Command {
 	var verbose bool
 	var enableAlerts bool
 	var enableBudget bool
-	var localMode bool    // GH-2103: problem-solving prompt without PR constraints
-	var teamID string     // GH-635: team project access scoping
-	var teamMember string // GH-635: member email for access scoping
+	var localMode bool      // GH-2103: problem-solving prompt without PR constraints
+	var teamID string       // GH-635: team project access scoping
+	var teamMember string   // GH-635: member email for access scoping
+	var resultJSONPath string // GH-2112: crash-resilient result JSON output
 
 	cmd := &cobra.Command{
 		Use:   "task [description]",
@@ -669,12 +670,33 @@ Examples:
 			}
 			fmt.Println()
 
+			// GH-2112: Write partial result JSON before execution for crash resilience.
+			// If the process is OOM-killed, at least a partial result file exists.
+			if resultJSONPath != "" {
+				partialResult := map[string]interface{}{
+					"task_id":    taskID,
+					"task_title": taskDesc,
+					"status":     "running",
+					"started_at": time.Now().UTC().Format(time.RFC3339),
+				}
+				if writeErr := writeResultJSON(resultJSONPath, partialResult); writeErr != nil {
+					fmt.Printf("   ⚠️  Failed to write partial result JSON: %s\n", writeErr)
+				}
+			}
+
 			// Start progress display with Navigator check
 			progress.StartWithNavigatorCheck(projectPath)
 
 			// Execute the task
 			result, err := runner.Execute(ctx, task)
 			if err != nil {
+				// GH-2112: Write failure result JSON even on execution error
+				if resultJSONPath != "" {
+					failResult := buildResultJSON(taskID, taskDesc, result, err)
+					if writeErr := writeResultJSON(resultJSONPath, failResult); writeErr != nil {
+						fmt.Printf("   ⚠️  Failed to write result JSON: %s\n", writeErr)
+					}
+				}
 				return fmt.Errorf("execution failed: %w", err)
 			}
 
@@ -698,6 +720,14 @@ Examples:
 
 			// Finish progress display with comprehensive report
 			progress.FinishWithReport(report)
+
+			// GH-2112: Write final result JSON (overwrites partial)
+			if resultJSONPath != "" {
+				finalResult := buildResultJSON(taskID, taskDesc, result, nil)
+				if writeErr := writeResultJSON(resultJSONPath, finalResult); writeErr != nil {
+					fmt.Printf("   ⚠️  Failed to write result JSON: %s\n", writeErr)
+				}
+			}
 
 			// Send alerts based on result
 			if result.Success {
@@ -751,8 +781,63 @@ Examples:
 	cmd.Flags().BoolVar(&localMode, "local", false, "Use problem-solving prompt without PR/Navigator constraints")
 	cmd.Flags().StringVar(&teamID, "team", "", "Team ID or name for project access scoping (overrides config)")
 	cmd.Flags().StringVar(&teamMember, "team-member", "", "Member email for team access scoping (overrides config)")
+	cmd.Flags().StringVar(&resultJSONPath, "result-json", "", "Write execution result to JSON file (crash-resilient: partial result written before execution)")
 
 	return cmd
+}
+
+// writeResultJSON writes a result map to a JSON file atomically.
+// GH-2112: Used for crash-resilient result reporting.
+func writeResultJSON(path string, data map[string]interface{}) error {
+	jsonBytes, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal result JSON: %w", err)
+	}
+	return os.WriteFile(path, jsonBytes, 0644)
+}
+
+// buildResultJSON creates a result map from execution result.
+// GH-2112: Ensures all metrics are captured even on OOM/crash.
+func buildResultJSON(taskID, taskTitle string, result *executor.ExecutionResult, execErr error) map[string]interface{} {
+	data := map[string]interface{}{
+		"task_id":       taskID,
+		"task_title":    taskTitle,
+		"completed_at":  time.Now().UTC().Format(time.RFC3339),
+	}
+
+	if result != nil {
+		data["success"] = result.Success
+		data["duration_ms"] = result.Duration.Milliseconds()
+		data["tokens_input"] = result.TokensInput
+		data["tokens_output"] = result.TokensOutput
+		data["tokens_total"] = result.TokensInput + result.TokensOutput
+		data["estimated_cost_usd"] = result.EstimatedCostUSD
+		data["model"] = result.ModelName
+		data["files_changed"] = result.FilesChanged
+		data["lines_added"] = result.LinesAdded
+		data["lines_removed"] = result.LinesRemoved
+		data["pr_url"] = result.PRUrl
+		data["commit_sha"] = result.CommitSHA
+		if result.Error != "" {
+			data["error"] = result.Error
+		}
+		if result.Success {
+			data["status"] = "completed"
+		} else {
+			data["status"] = "failed"
+		}
+	} else {
+		data["status"] = "failed"
+		data["success"] = false
+	}
+
+	if execErr != nil {
+		data["exec_error"] = execErr.Error()
+		data["status"] = "failed"
+		data["success"] = false
+	}
+
+	return data
 }
 
 // killExistingTelegramBot finds and kills any running pilot process with Telegram enabled
