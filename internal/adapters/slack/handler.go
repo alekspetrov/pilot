@@ -387,21 +387,16 @@ func (h *Handler) isAllowed(channelID, userID string) bool {
 	return false
 }
 
-// detectIntent uses LLM classification with regex fallback.
+// detectIntent uses LLM classification with chat fallback.
 func (h *Handler) detectIntent(ctx context.Context, channelID, text string) intent.Intent {
-	// Fast path: commands always use regex
+	// Fast path: commands
 	if strings.HasPrefix(text, "/") {
 		return intent.IntentCommand
 	}
 
-	// Fast path: clear question patterns don't need LLM verification
-	if intent.IsClearQuestion(text) {
-		return intent.IntentQuestion
-	}
-
-	// If LLM classifier not available, use regex
+	// If LLM classifier not available, default to chat
 	if h.llmClassifier == nil {
-		return intent.DetectIntent(text)
+		return intent.IntentChat
 	}
 
 	// Try LLM classification with timeout
@@ -416,9 +411,9 @@ func (h *Handler) detectIntent(ctx context.Context, channelID, text string) inte
 
 	detectedIntent, err := h.llmClassifier.Classify(classifyCtx, history, text)
 	if err != nil {
-		h.log.Debug("LLM classification failed, using regex",
+		h.log.Debug("LLM classification failed, defaulting to chat",
 			slog.Any("error", err))
-		return intent.DetectIntent(text)
+		return intent.IntentChat
 	}
 
 	h.log.Debug("LLM classified intent",

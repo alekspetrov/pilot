@@ -174,11 +174,6 @@ func (h *Handler) detectIntent(ctx context.Context, contextID, text string) inte
 		return intent.IntentCommand
 	}
 
-	// Fast path: clear questions
-	if intent.IsClearQuestion(text) {
-		return intent.IntentQuestion
-	}
-
 	// LLM classification if available
 	if h.llmClassifier != nil {
 		classifyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -191,8 +186,8 @@ func (h *Handler) detectIntent(ctx context.Context, contextID, text string) inte
 
 		detected, err := h.llmClassifier.Classify(classifyCtx, history, text)
 		if err != nil {
-			h.log.Debug("LLM classification failed, using regex", slog.Any("error", err))
-			return intent.DetectIntent(text)
+			h.log.Debug("LLM classification failed, defaulting to chat", slog.Any("error", err))
+			return intent.IntentChat
 		}
 
 		h.log.Debug("LLM classified intent",
@@ -202,7 +197,7 @@ func (h *Handler) detectIntent(ctx context.Context, contextID, text string) inte
 		return detected
 	}
 
-	return intent.DetectIntent(text)
+	return intent.IntentChat
 }
 
 // ---------- intent handlers ----------

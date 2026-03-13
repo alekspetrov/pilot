@@ -160,9 +160,9 @@ func TestHandleMessage_RateLimited(t *testing.T) {
 
 	ctx := context.Background()
 	// First message consumes the single token
-	h.HandleMessage(ctx, &IncomingMessage{ContextID: "ch1", SenderID: "u1", Text: "hello"})
+	h.HandleMessage(ctx, &IncomingMessage{ContextID: "ch1", SenderID: "u1", Text: "/help"})
 	// Second message should be rate limited
-	h.HandleMessage(ctx, &IncomingMessage{ContextID: "ch1", SenderID: "u1", Text: "hello again"})
+	h.HandleMessage(ctx, &IncomingMessage{ContextID: "ch1", SenderID: "u1", Text: "/status"})
 
 	texts := m.getTexts()
 	found := false
@@ -178,7 +178,11 @@ func TestHandleMessage_RateLimited(t *testing.T) {
 
 func TestHandleMessage_Greeting(t *testing.T) {
 	m := &handlerMock{}
-	h := newTestHandler(m)
+	h := NewHandler(&HandlerConfig{
+		Messenger:     m,
+		LLMClassifier: &hMockClassifier{result: intent.IntentGreeting},
+		TaskIDPrefix:  "TEST",
+	})
 
 	h.HandleMessage(context.Background(), &IncomingMessage{
 		ContextID: "ch1",
@@ -294,13 +298,13 @@ func TestDetectIntent_Command(t *testing.T) {
 	}
 }
 
-func TestDetectIntent_ClearQuestion(t *testing.T) {
+func TestDetectIntent_NoLLM_DefaultsToChat(t *testing.T) {
 	m := &handlerMock{}
 	h := newTestHandler(m)
 
 	got := h.detectIntent(context.Background(), "ch1", "What does the auth handler do?")
-	if got != intent.IntentQuestion {
-		t.Errorf("expected question intent, got %s", got)
+	if got != intent.IntentChat {
+		t.Errorf("expected chat intent (no LLM), got %s", got)
 	}
 }
 
@@ -326,10 +330,10 @@ func TestDetectIntent_LLMFallback(t *testing.T) {
 		TaskIDPrefix:  "TEST",
 	})
 
-	// Should fall back to regex
+	// Should fall back to chat when LLM fails
 	got := h.detectIntent(context.Background(), "ch1", "hello")
-	if got != intent.IntentGreeting {
-		t.Errorf("expected greeting intent from fallback, got %s", got)
+	if got != intent.IntentChat {
+		t.Errorf("expected chat intent from fallback, got %s", got)
 	}
 }
 
@@ -532,7 +536,7 @@ func TestSenderTracking(t *testing.T) {
 	h.HandleMessage(context.Background(), &IncomingMessage{
 		ContextID: "ch1",
 		SenderID:  "user-42",
-		Text:      "hello",
+		Text:      "/help",
 	})
 
 	h.mu.Lock()

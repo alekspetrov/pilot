@@ -430,22 +430,16 @@ func (h *Handler) processUpdate(ctx context.Context, update *Update) {
 	}
 }
 
-// detectIntentWithLLM uses LLM classification with regex fallback
+// detectIntentWithLLM uses LLM classification with chat fallback
 func (h *Handler) detectIntentWithLLM(ctx context.Context, chatID, text string) intent.Intent {
-	// If LLM classifier not available, use regex
+	// If LLM classifier not available, default to chat
 	if h.llmClassifier == nil {
-		return intent.DetectIntent(text)
+		return intent.IntentChat
 	}
 
-	// Fast path: commands always use regex
+	// Fast path: commands
 	if strings.HasPrefix(text, "/") {
 		return intent.IntentCommand
-	}
-
-	// Fast path: clear question patterns don't need LLM verification
-	// Prevents Haiku from misclassifying "What's in roadmap" as Task
-	if intent.IsClearQuestion(text) {
-		return intent.IntentQuestion
 	}
 
 	// Try LLM classification with timeout
@@ -460,9 +454,9 @@ func (h *Handler) detectIntentWithLLM(ctx context.Context, chatID, text string) 
 
 	classified, err := h.llmClassifier.Classify(classifyCtx, history, text)
 	if err != nil {
-		logging.WithComponent("telegram").Debug("LLM classification failed, using regex",
+		logging.WithComponent("telegram").Debug("LLM classification failed, defaulting to chat",
 			slog.Any("error", err))
-		return intent.DetectIntent(text)
+		return intent.IntentChat
 	}
 
 	logging.WithComponent("telegram").Debug("LLM classified intent",
