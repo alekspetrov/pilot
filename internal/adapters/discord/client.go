@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -40,41 +41,75 @@ func NewClientWithBaseURL(botToken, baseURL string) *Client {
 }
 
 // doRequest sends an HTTP request to the Discord API.
+// On HTTP 429 (rate limited), reads Retry-After and retries up to 3 times.
 func (c *Client) doRequest(ctx context.Context, method, endpoint string, body interface{}) ([]byte, error) {
-	var reqBody io.Reader
+	// Marshal body once; create a fresh reader on each attempt
+	var bodyBytes []byte
 	if body != nil {
-		data, err := json.Marshal(body)
+		var err error
+		bodyBytes, err = json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("marshal body: %w", err)
 		}
-		reqBody = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+endpoint, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		var reqBody io.Reader
+		if bodyBytes != nil {
+			reqBody = bytes.NewReader(bodyBytes)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, c.baseURL+endpoint, reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+
+		req.Header.Set("Authorization", "Bot "+c.botToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "DiscordBot (Pilot, 1.0)")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("send request: %w", err)
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+
+		// Handle rate limiting: back off and retry
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxAttempts-1 {
+			wait := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			return nil, fmt.Errorf("discord API error: HTTP %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		return respBody, nil
 	}
 
-	req.Header.Set("Authorization", "Bot "+c.botToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "DiscordBot (Pilot, 1.0)")
+	return nil, fmt.Errorf("discord API: max retries exceeded for %s %s", method, endpoint)
+}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+// parseRetryAfterHeader parses the Retry-After header value (integer seconds).
+func parseRetryAfterHeader(header string) time.Duration {
+	if header == "" {
+		return time.Second
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+	if secs, err := strconv.ParseFloat(header, 64); err == nil && secs > 0 {
+		return time.Duration(secs * float64(time.Second))
 	}
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("discord API error: HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return respBody, nil
+	return time.Second
 }
 
 // SendMessage sends a message to a channel.
@@ -113,8 +148,8 @@ func (c *Client) EditMessage(ctx context.Context, channelID, messageID, content 
 // SendMessageWithComponents sends a message with interactive components (buttons).
 func (c *Client) SendMessageWithComponents(ctx context.Context, channelID, content string, components []Component) (*Message, error) {
 	payload := struct {
-		Content    string       `json:"content"`
-		Components []Component  `json:"components"`
+		Content    string      `json:"content"`
+		Components []Component `json:"components"`
 	}{
 		Content:    content,
 		Components: components,

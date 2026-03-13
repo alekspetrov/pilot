@@ -15,16 +15,19 @@ import (
 
 // Handler processes incoming Discord events and coordinates task execution.
 type Handler struct {
-	gatewayClient   *GatewayClient
-	apiClient       *Client
-	runner          *executor.Runner
-	allowedGuilds   map[string]bool
-	allowedChannels map[string]bool
-	pendingTasks    map[string]*PendingTaskInfo
-	mu              sync.Mutex
-	stopCh          chan struct{}
-	wg              sync.WaitGroup
-	log             *slog.Logger
+	gatewayClient     *GatewayClient
+	apiClient         *Client
+	runner            *executor.Runner
+	allowedGuilds     map[string]bool
+	allowedChannels   map[string]bool
+	pendingTasks      map[string]*PendingTaskInfo
+	progressCallbacks map[string]func(string, int, string) // taskID → progress callback
+	projectPath       string
+	mu                sync.Mutex
+	stopCh            chan struct{}
+	stopOnce          sync.Once // guards Stop() against double-call
+	wg                sync.WaitGroup
+	log               *slog.Logger
 }
 
 // PendingTaskInfo represents a task awaiting confirmation.
@@ -42,6 +45,7 @@ type HandlerConfig struct {
 	BotToken        string
 	AllowedGuilds   []string
 	AllowedChannels []string
+	ProjectPath     string
 }
 
 // NewHandler creates a new Discord event handler.
@@ -56,58 +60,131 @@ func NewHandler(config *HandlerConfig, runner *executor.Runner) *Handler {
 		allowedChannels[id] = true
 	}
 
+	projectPath := config.ProjectPath
+	if projectPath == "" {
+		projectPath = "."
+	}
+
 	return &Handler{
-		gatewayClient:   NewGatewayClient(config.BotToken, DefaultIntents),
-		apiClient:       NewClient(config.BotToken),
-		runner:          runner,
-		allowedGuilds:   allowedGuilds,
-		allowedChannels: allowedChannels,
-		pendingTasks:    make(map[string]*PendingTaskInfo),
-		stopCh:          make(chan struct{}),
-		log:             logging.WithComponent("discord.handler"),
+		gatewayClient:     NewGatewayClient(config.BotToken, DefaultIntents),
+		apiClient:         NewClient(config.BotToken),
+		runner:            runner,
+		allowedGuilds:     allowedGuilds,
+		allowedChannels:   allowedChannels,
+		pendingTasks:      make(map[string]*PendingTaskInfo),
+		progressCallbacks: make(map[string]func(string, int, string)),
+		projectPath:       projectPath,
+		stopCh:            make(chan struct{}),
+		log:               logging.WithComponent("discord.handler"),
 	}
 }
 
 // StartListening connects to Discord and starts listening for events.
+// Implements reconnection with exponential backoff (max 10 retries).
 func (h *Handler) StartListening(ctx context.Context) error {
-	if err := h.gatewayClient.Connect(ctx); err != nil {
-		return fmt.Errorf("connect gateway: %w", err)
-	}
-
-	events, err := h.gatewayClient.Listen(ctx)
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
-	}
-
-	h.log.Info("Discord handler listening for events")
-
 	// Start cleanup goroutine
 	h.wg.Add(1)
 	go h.cleanupLoop(ctx)
 
-	// Process events
+	// Register single multiplexed progress callback — avoids concurrent tasks
+	// overwriting each other's callback on the global runner.
+	if h.runner != nil {
+		h.runner.OnProgress(func(tid, phase string, progress int, msg string) {
+			h.mu.Lock()
+			cb := h.progressCallbacks[tid]
+			h.mu.Unlock()
+			if cb != nil {
+				cb(phase, progress, msg)
+			}
+		})
+	}
+
+	const maxRetries = 10
+	backoff := 1 * time.Second
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			h.log.Info("Reconnecting to Discord Gateway",
+				slog.Int("attempt", attempt),
+				slog.Duration("backoff", backoff))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-h.stopCh:
+				return nil
+			case <-time.After(backoff):
+			}
+			if backoff < 60*time.Second {
+				backoff *= 2
+			}
+		}
+
+		var connectErr error
+		if attempt > 0 && h.gatewayClient.CanResume() {
+			// Try resume first; fall back to full reconnect on failure
+			connectErr = h.gatewayClient.reconnect(ctx, true)
+			if connectErr != nil {
+				h.log.Warn("Resume failed, falling back to full reconnect",
+					slog.Any("error", connectErr))
+				connectErr = h.gatewayClient.reconnect(ctx, false)
+			}
+		} else {
+			connectErr = h.gatewayClient.Connect(ctx)
+		}
+
+		if connectErr != nil {
+			h.log.Warn("Failed to connect to Discord Gateway",
+				slog.Any("error", connectErr),
+				slog.Int("attempt", attempt))
+			continue
+		}
+
+		events, err := h.gatewayClient.Listen(ctx)
+		if err != nil {
+			h.log.Warn("Listen error", slog.Any("error", err), slog.Int("attempt", attempt))
+			continue
+		}
+
+		h.log.Info("Discord handler listening for events")
+		backoff = 1 * time.Second // reset on successful connect
+
+		if clean := h.runEventLoop(ctx, events); clean {
+			return nil // context cancelled or stop signal
+		}
+
+		h.log.Warn("Discord event loop exited unexpectedly, attempting reconnect")
+	}
+
+	return fmt.Errorf("discord: failed to reconnect after %d attempts", maxRetries)
+}
+
+// runEventLoop processes events until the channel closes or a stop signal fires.
+// Returns true for a clean shutdown (ctx/stop), false if the channel dropped.
+func (h *Handler) runEventLoop(ctx context.Context, events <-chan GatewayEvent) bool {
 	for {
 		select {
 		case <-ctx.Done():
 			h.log.Info("Discord listener stopping (context cancelled)")
-			return ctx.Err()
+			return true
 		case <-h.stopCh:
 			h.log.Info("Discord listener stopping (stop signal)")
-			return nil
+			return true
 		case evt, ok := <-events:
 			if !ok {
 				h.log.Info("Discord event channel closed")
-				return nil
+				return false
 			}
 			h.processEvent(ctx, &evt)
 		}
 	}
 }
 
-// Stop gracefully stops the handler.
+// Stop gracefully stops the handler. Safe to call multiple times.
 func (h *Handler) Stop() {
-	close(h.stopCh)
-	_ = h.gatewayClient.Close()
+	h.stopOnce.Do(func() {
+		close(h.stopCh)
+		_ = h.gatewayClient.Close()
+	})
 	h.wg.Wait()
 }
 
@@ -130,19 +207,30 @@ func (h *Handler) cleanupLoop(ctx context.Context) {
 }
 
 // cleanupExpiredTasks removes tasks pending for more than 5 minutes.
+// Collects expired entries under lock, then sends notifications after releasing
+// the lock to avoid holding it during blocking HTTP calls.
 func (h *Handler) cleanupExpiredTasks(ctx context.Context) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	expiry := time.Now().Add(-5 * time.Minute)
+
+	h.mu.Lock()
+	var expired []*PendingTaskInfo
+	var expiredChannels []string
 	for channelID, task := range h.pendingTasks {
 		if task.CreatedAt.Before(expiry) {
-			_, _ = h.apiClient.SendMessage(ctx, task.ChannelID, "⏰ Task "+task.TaskID+" expired (no confirmation received).")
-			delete(h.pendingTasks, channelID)
-			h.log.Debug("Expired pending task",
-				slog.String("task_id", task.TaskID),
-				slog.String("channel_id", channelID))
+			expired = append(expired, task)
+			expiredChannels = append(expiredChannels, channelID)
 		}
+	}
+	for _, ch := range expiredChannels {
+		delete(h.pendingTasks, ch)
+	}
+	h.mu.Unlock()
+
+	for _, task := range expired {
+		_, _ = h.apiClient.SendMessage(ctx, task.ChannelID, "⏰ Task "+task.TaskID+" expired (no confirmation received).")
+		h.log.Debug("Expired pending task",
+			slog.String("task_id", task.TaskID),
+			slog.String("channel_id", task.ChannelID))
 	}
 }
 
@@ -187,13 +275,22 @@ func (h *Handler) handleMessageCreate(ctx context.Context, event *GatewayEvent) 
 		return
 	}
 
+	// Strip bot mention prefix so task description doesn't leak <@BOT_ID>
+	if botID := h.gatewayClient.BotUserID(); botID != "" {
+		mention := "<@" + botID + ">"
+		text = strings.TrimPrefix(text, mention)
+		text = strings.TrimSpace(text)
+	}
+
+	if text == "" {
+		return
+	}
+
 	h.log.Debug("Message received",
 		slog.String("channel_id", msg.ChannelID),
 		slog.String("author_id", msg.Author.ID),
 		slog.String("text", TruncateText(text, 50)))
 
-	// For now, treat as task message
-	// In a full implementation, would use intent detection
 	if strings.HasPrefix(text, "/") {
 		// Handle commands
 		return
@@ -229,9 +326,10 @@ func (h *Handler) handleInteractionCreate(ctx context.Context, event *GatewayEve
 		slog.String("custom_id", interaction.Data.CustomID),
 		slog.String("user_id", userID))
 
-	// Acknowledge interaction
-	responseType := 4 // CHANNEL_MESSAGE_WITH_SOURCE (deferred)
-	_ = h.apiClient.CreateInteractionResponse(ctx, interaction.ID, interaction.Token, responseType, "Processing...")
+	// Acknowledge interaction silently (type 6 = DEFERRED_UPDATE_MESSAGE)
+	// Type 4 would post a visible "Processing..." message — use 6 instead.
+	responseType := 6
+	_ = h.apiClient.CreateInteractionResponse(ctx, interaction.ID, interaction.Token, responseType, "")
 
 	// Handle button actions
 	switch interaction.Data.CustomID {
@@ -243,14 +341,15 @@ func (h *Handler) handleInteractionCreate(ctx context.Context, event *GatewayEve
 }
 
 // isAllowed checks if a guild/channel is authorized.
+// DMs have an empty guildID — guild allowlist is skipped for them.
 func (h *Handler) isAllowed(guildID, channelID string) bool {
 	// If no restrictions, allow all
 	if len(h.allowedGuilds) == 0 && len(h.allowedChannels) == 0 {
 		return true
 	}
 
-	// Check guild allowlist
-	if len(h.allowedGuilds) > 0 && h.allowedGuilds[guildID] {
+	// Check guild allowlist (skip for DMs which have no guild)
+	if guildID != "" && len(h.allowedGuilds) > 0 && h.allowedGuilds[guildID] {
 		return true
 	}
 
@@ -259,13 +358,18 @@ func (h *Handler) isAllowed(guildID, channelID string) bool {
 		return true
 	}
 
+	// DMs with no channel restriction: allow (only guild allowlist is set, doesn't apply to DMs)
+	if guildID == "" && len(h.allowedChannels) == 0 {
+		return true
+	}
+
 	return false
 }
 
 // handleTask creates and sends a confirmation prompt for a task.
 func (h *Handler) handleTask(ctx context.Context, channelID, userID, description string) {
-	// Generate task ID
-	taskID := fmt.Sprintf("DISCORD-%d", time.Now().Unix())
+	// Use UnixNano for task ID — Unix() has second precision causing collisions under load
+	taskID := fmt.Sprintf("DISCORD-%d", time.Now().UnixNano())
 
 	// Check for existing pending task
 	h.mu.Lock()
@@ -341,29 +445,27 @@ func (h *Handler) executeTask(ctx context.Context, channelID, taskID, descriptio
 		progressMsgID = msg.ID
 	}
 
-	// Create task for executor
+	// Create task for executor using ProjectPath from config
 	task := &executor.Task{
 		ID:          taskID,
 		Title:       TruncateText(description, 50),
 		Description: description,
-		ProjectPath: ".", // Default to current dir
+		ProjectPath: h.projectPath,
 		Verbose:     false,
 		Branch:      fmt.Sprintf("pilot/%s", taskID),
 		BaseBranch:  "main",
 		CreatePR:    true,
 	}
 
-	// Set up progress callback
-	var lastPhase string
-	var lastProgress int
-	var lastUpdate time.Time
-
+	// Register per-task progress callback; the runner's single callback
+	// dispatches to the correct handler via taskID lookup.
 	if progressMsgID != "" && h.runner != nil {
-		h.runner.OnProgress(func(tid string, phase string, progress int, message string) {
-			if tid != taskID {
-				return
-			}
+		var lastPhase string
+		var lastProgress int
+		var lastUpdate time.Time
 
+		h.mu.Lock()
+		h.progressCallbacks[taskID] = func(phase string, progress int, message string) {
 			now := time.Now()
 			phaseChanged := phase != lastPhase
 			progressChanged := progress-lastProgress >= 15
@@ -379,7 +481,8 @@ func (h *Handler) executeTask(ctx context.Context, channelID, taskID, descriptio
 
 			updateText := FormatProgressUpdate(taskID, phase, progress, message)
 			_ = h.apiClient.EditMessage(ctx, channelID, progressMsgID, updateText)
-		})
+		}
+		h.mu.Unlock()
 	}
 
 	// Execute task
@@ -388,10 +491,10 @@ func (h *Handler) executeTask(ctx context.Context, channelID, taskID, descriptio
 		slog.String("channel_id", channelID))
 	result, err := h.runner.Execute(ctx, task)
 
-	// Clear progress callback
-	if h.runner != nil {
-		h.runner.OnProgress(nil)
-	}
+	// Remove per-task progress callback
+	h.mu.Lock()
+	delete(h.progressCallbacks, taskID)
+	h.mu.Unlock()
 
 	// Send result
 	if err != nil {

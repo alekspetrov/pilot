@@ -49,6 +49,30 @@ func TestHandlerGuildFiltering(t *testing.T) {
 			guildID: "any",
 			allowed: true,
 		},
+		{
+			// DMs have empty guildID; guild allowlist must not block them
+			name:          "DM with guild allowlist set",
+			allowedGuilds: []string{"guild123"},
+			guildID:       "", // DM
+			channelID:     "dm-chan",
+			allowed:       true,
+		},
+		{
+			// DM channel is explicitly allowed
+			name:            "DM with channel allowlist set",
+			allowedChannels: []string{"dm-chan"},
+			guildID:         "",
+			channelID:       "dm-chan",
+			allowed:         true,
+		},
+		{
+			// DM channel not in channel allowlist
+			name:            "DM blocked by channel allowlist",
+			allowedChannels: []string{"other-chan"},
+			guildID:         "",
+			channelID:       "dm-chan",
+			allowed:         false,
+		},
 	}
 
 	for _, tt := range tests {

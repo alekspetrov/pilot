@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/alekspetrov/pilot/internal/adapters/discord"
@@ -20,6 +21,7 @@ func discordPollerRegistration() PollerRegistration {
 				BotToken:        deps.Cfg.Adapters.Discord.BotToken,
 				AllowedGuilds:   deps.Cfg.Adapters.Discord.AllowedGuilds,
 				AllowedChannels: deps.Cfg.Adapters.Discord.AllowedChannels,
+				ProjectPath:     deps.ProjectPath,
 			}, deps.Runner)
 
 			go func() {
@@ -29,7 +31,7 @@ func discordPollerRegistration() PollerRegistration {
 					)
 				}
 			}()
-			logging.WithComponent("start").Info("Discord bot started")
+			fmt.Println("🎮 Discord bot started")
 		},
 	}
 }

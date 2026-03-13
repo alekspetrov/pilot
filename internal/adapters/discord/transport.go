@@ -18,9 +18,11 @@ type GatewayClient struct {
 	intents       int
 	conn          *websocket.Conn
 	sessionID     string
+	botUserID     string // populated from READY event payload
 	seq           *int
 	heartbeatTick *time.Ticker
 	stopCh        chan struct{}
+	closeOnce     sync.Once // guards Close() against double-call
 	mu            sync.Mutex
 	log           *slog.Logger
 }
@@ -60,7 +62,7 @@ func (g *GatewayClient) Connect(ctx context.Context) error {
 	g.log.Info("Connected to Discord Gateway")
 
 	// Wait for HELLO and send IDENTIFY
-	if err := g.handleHello(ctx); err != nil {
+	if err := g.doHandleHello(ctx, false); err != nil {
 		_ = g.conn.Close()
 		g.conn = nil
 		return fmt.Errorf("handle hello: %w", err)
@@ -69,8 +71,61 @@ func (g *GatewayClient) Connect(ctx context.Context) error {
 	return nil
 }
 
-// handleHello receives HELLO opcode and starts heartbeat loop.
-func (g *GatewayClient) handleHello(ctx context.Context) error {
+// reconnect closes the existing connection, re-dials, and handles HELLO.
+// If resume is true, sends RESUME; otherwise sends IDENTIFY.
+// Must NOT be called while g.mu is held.
+func (g *GatewayClient) reconnect(ctx context.Context, resume bool) error {
+	g.mu.Lock()
+	if g.conn != nil {
+		_ = g.conn.Close()
+		g.conn = nil // signals old heartbeatLoop goroutine to exit
+	}
+	g.mu.Unlock()
+
+	client := NewClient(g.botToken)
+	gatewayURL, err := client.GetGatewayURL(ctx)
+	if err != nil {
+		return fmt.Errorf("get gateway url: %w", err)
+	}
+
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+	}
+	conn, _, err := dialer.DialContext(ctx, gatewayURL+"?v=10&encoding=json", nil)
+	if err != nil {
+		return fmt.Errorf("dial gateway: %w", err)
+	}
+
+	g.mu.Lock()
+	g.conn = conn
+	if err := g.doHandleHello(ctx, resume); err != nil {
+		_ = g.conn.Close()
+		g.conn = nil
+		g.mu.Unlock()
+		return fmt.Errorf("handle hello: %w", err)
+	}
+	g.mu.Unlock()
+
+	return nil
+}
+
+// CanResume reports whether a session resume is possible.
+func (g *GatewayClient) CanResume() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.sessionID != "" && g.seq != nil
+}
+
+// BotUserID returns the bot's own user ID (populated after READY event).
+func (g *GatewayClient) BotUserID() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.botUserID
+}
+
+// doHandleHello receives HELLO opcode and sends either IDENTIFY or RESUME.
+// Must be called while g.mu is held.
+func (g *GatewayClient) doHandleHello(ctx context.Context, resume bool) error {
 	// Set read deadline for HELLO
 	deadline := time.Now().Add(10 * time.Second)
 	_ = g.conn.SetReadDeadline(deadline)
@@ -91,29 +146,44 @@ func (g *GatewayClient) handleHello(ctx context.Context) error {
 		return fmt.Errorf("parse hello: %w", err)
 	}
 
-	// Send IDENTIFY
-	identifyData := IdentifyData{
-		Token:   g.botToken,
-		Intents: g.intents,
-		Properties: map[string]string{
-			"os":      "linux",
-			"browser": "pilot",
-			"device":  "pilot",
-		},
+	if resume {
+		seq := 0
+		if g.seq != nil {
+			seq = *g.seq
+		}
+		resumePayload := Resume{
+			Op: OpcodeResume,
+			D: ResumeData{
+				Token:     g.botToken,
+				SessionID: g.sessionID,
+				Seq:       seq,
+			},
+		}
+		if err := g.conn.WriteJSON(resumePayload); err != nil {
+			return fmt.Errorf("send resume: %w", err)
+		}
+		g.log.Info("Sent RESUME", slog.String("session_id", g.sessionID))
+	} else {
+		identifyData := IdentifyData{
+			Token:   g.botToken,
+			Intents: g.intents,
+			Properties: map[string]string{
+				"os":      "linux",
+				"browser": "pilot",
+				"device":  "pilot",
+			},
+		}
+		identify := Identify{Op: OpcodeIdentify, D: identifyData}
+		if err := g.conn.WriteJSON(identify); err != nil {
+			return fmt.Errorf("send identify: %w", err)
+		}
+		g.log.Info("Sent IDENTIFY", slog.Int("heartbeat_interval", hello.HeartbeatInterval))
 	}
 
-	identify := Identify{
-		Op: OpcodeIdentify,
-		D:  identifyData,
+	// Stop previous ticker before starting a new one
+	if g.heartbeatTick != nil {
+		g.heartbeatTick.Stop()
 	}
-
-	if err := g.conn.WriteJSON(identify); err != nil {
-		return fmt.Errorf("send identify: %w", err)
-	}
-
-	g.log.Info("Sent IDENTIFY", slog.Int("heartbeat_interval", hello.HeartbeatInterval))
-
-	// Start heartbeat loop
 	g.heartbeatTick = time.NewTicker(time.Duration(hello.HeartbeatInterval) * time.Millisecond)
 	go g.heartbeatLoop()
 
@@ -179,29 +249,23 @@ func (g *GatewayClient) Listen(ctx context.Context) (<-chan GatewayEvent, error)
 				g.mu.Unlock()
 			}
 
-			// Track session ID on READY
+			// Track session ID and bot user ID on READY
 			if event.T != nil && *event.T == "READY" {
 				var readyData struct {
 					SessionID string `json:"session_id"`
+					User      struct {
+						ID string `json:"id"`
+					} `json:"user"`
 				}
 				data, _ := json.Marshal(event.D)
 				if err := json.Unmarshal(data, &readyData); err == nil {
 					g.mu.Lock()
 					g.sessionID = readyData.SessionID
+					g.botUserID = readyData.User.ID
 					g.mu.Unlock()
-					g.log.Info("Received READY", slog.String("session_id", readyData.SessionID))
-				}
-			}
-
-			// Handle close codes for reconnection logic
-			if event.Op < 0 { // Close frame
-				closeCode := event.Op // Simplified, actual close code is in frame
-				if closeCode >= CloseCodeUnknownError && closeCode <= CloseCodeSessionTimeout {
-					g.log.Info("Reconnectable close code", slog.Int("code", closeCode))
-					// Caller should handle reconnection
-				} else if closeCode == CloseCodeInvalidToken {
-					g.log.Error("Non-resumable close code", slog.Int("code", closeCode))
-					return
+					g.log.Info("Received READY",
+						slog.String("session_id", readyData.SessionID),
+						slog.String("bot_user_id", readyData.User.ID))
 				}
 			}
 
@@ -218,7 +282,7 @@ func (g *GatewayClient) Listen(ctx context.Context) (<-chan GatewayEvent, error)
 	return out, nil
 }
 
-// Resume attempts to resume the session.
+// Resume attempts to resume the session over the existing connection.
 func (g *GatewayClient) Resume(ctx context.Context) error {
 	g.mu.Lock()
 	if g.conn == nil || g.sessionID == "" || g.seq == nil {
@@ -244,19 +308,19 @@ func (g *GatewayClient) Resume(ctx context.Context) error {
 	return nil
 }
 
-// Close closes the WebSocket connection.
+// Close closes the WebSocket connection. Safe to call multiple times.
 func (g *GatewayClient) Close() error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	close(g.stopCh)
-	if g.heartbeatTick != nil {
-		g.heartbeatTick.Stop()
-	}
-
-	if g.conn != nil {
-		return g.conn.Close()
-	}
-
-	return nil
+	var connErr error
+	g.closeOnce.Do(func() {
+		close(g.stopCh)
+		g.mu.Lock()
+		if g.heartbeatTick != nil {
+			g.heartbeatTick.Stop()
+		}
+		if g.conn != nil {
+			connErr = g.conn.Close()
+		}
+		g.mu.Unlock()
+	})
+	return connErr
 }
