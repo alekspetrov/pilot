@@ -114,18 +114,6 @@ func (s *scopeMismatchGHServer) hasAddLabel(issue int, label string) bool {
 	return false
 }
 
-func (s *scopeMismatchGHServer) hasRemoveLabel(issue int, label string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	want := fmt.Sprintf("%d:%s", issue, label)
-	for _, c := range s.removeLabelCalls {
-		if c == want {
-			return true
-		}
-	}
-	return false
-}
-
 func TestController_VerifyFixPRDeliversSourceScope(t *testing.T) {
 	fixIssueBody := "Fixes CI failure.\n\n<!-- autopilot-meta branch:pilot/GH-100 pr:7 iteration:1 source:100 -->"
 

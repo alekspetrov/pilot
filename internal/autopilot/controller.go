@@ -3840,6 +3840,15 @@ func (c *Controller) handleCIFailed(ctx context.Context, prState *PRState) error
 	// even if this call errors and GitHub's close still lands moments later.
 	c.markSelfClosed(prState, issueNum)
 
+	// GH-5361: persist the marker immediately rather than relying solely on
+	// ProcessPR's tail persistPRState call. A daemon death between the
+	// markSelfClosed above and that tail persist would otherwise lose the
+	// in-memory-only marker entirely — the next restart's
+	// checkExternalMergeOrClose would then read the close GitHub already
+	// performed as external and run the destructive relabel/branch-delete
+	// path this marker exists to prevent.
+	c.persistPRState(prState)
+
 	// Close the failed PR on GitHub so the sequential poller's merge waiter
 	// can unblock and pick up the fix issue. Without this, the poller stays
 	// blocked in WaitWithCallback() waiting for a PR that will never merge.
