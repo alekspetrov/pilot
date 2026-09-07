@@ -230,6 +230,7 @@ func (c *Controller) verifyFixPRDeliversSourceScope(ctx context.Context, prState
 		c.fireOwnerDeathAlert(sourceNum, reasonMsg, "mismatch_no_supersede")
 		c.log.Warn("verifyFixPRDeliversSourceScope: fix PR shares no files with origin PR — not superseding source issue",
 			"source", sourceNum, "fix_issue", prState.IssueNumber, "fix_pr", prState.PRNumber, "origin_pr", originPR)
+		c.cleanupOriginScope(prState.IssueNumber)
 		return
 	}
 
@@ -244,6 +245,20 @@ func (c *Controller) verifyFixPRDeliversSourceScope(ctx context.Context, prState
 	)
 	c.log.Info("verifyFixPRDeliversSourceScope: fix PR confirmed to deliver origin scope — source issue marked superseded",
 		"source", sourceNum, "fix_issue", prState.IssueNumber, "fix_pr", prState.PRNumber, "origin_pr", originPR)
+	c.cleanupOriginScope(prState.IssueNumber)
+}
+
+// cleanupOriginScope deletes the recorded origin-scope row for fixIssueNumber
+// once verifyFixPRDeliversSourceScope has reached a final gate decision
+// (mismatch or confirmed match) — best-effort, since leaving a stale row
+// behind only costs a few bytes and a harmless re-read, never correctness.
+func (c *Controller) cleanupOriginScope(fixIssueNumber int) {
+	if c.stateStore == nil {
+		return
+	}
+	if err := c.stateStore.DeleteOriginScope(c.repoKey(), fixIssueNumber); err != nil {
+		c.log.Warn("cleanupOriginScope: failed to delete origin-scope record", "fix_issue", fixIssueNumber, "error", err)
+	}
 }
 
 // originScope resolves the origin PR number and changed-file set for a
