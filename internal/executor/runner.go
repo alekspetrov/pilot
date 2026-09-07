@@ -2457,6 +2457,77 @@ func (r *Runner) checkIssueSupersededBeforePR(ctx context.Context, task *Task, r
 	return true
 }
 
+// escalateUnfetchableFixSHA handles the GH-5348 (subtask 2) case where an
+// autopilot-fix task recorded a base SHA (task.FixFromSHA != "") but neither
+// the original branch nor that exact commit could be resolved on the remote
+// — ResolveFixContinuationBaseRef (git.go) already logged the underlying
+// fetch failure. The only two options at that point are (a) silently start
+// the "fix" from origin/main, discarding whatever the original PR delivered
+// (the pilot-console #275 incident this task exists to close), or (b) fail
+// loudly and hand the fix issue to a human. This implements (b).
+//
+// Scoped to the fix issue itself: applies pilot-needs-human plus an
+// explanatory comment there and nothing else. The original issue that spawned
+// this fix is never touched — it is not this task's issue, and GH-5348's
+// spec is explicit that it must stay untouched by this path (superseding it
+// is only ever justified by delivery evidence, not by the fix run's own
+// inability to start).
+func (r *Runner) escalateUnfetchableFixSHA(ctx context.Context, task *Task) (*ExecutionResult, error) {
+	detail := fmt.Sprintf(
+		"autopilot-fix could not resolve a worktree base: recorded SHA %s is unfetchable and branch %q no longer exists on origin — refusing to fall back to main and silently drop the original commits",
+		task.FixFromSHA, task.Branch,
+	)
+	r.log.Error("autopilot-fix: recorded base SHA unfetchable; parking fix issue instead of falling back to main",
+		slog.String("task_id", task.ID),
+		slog.String("branch", task.Branch),
+		slog.String("sha", task.FixFromSHA),
+	)
+
+	if task.SourceAdapter == "" || task.SourceAdapter == "github" {
+		issueNum := task.GHIssueRef()
+		if issueNum != "" {
+			labelCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+
+			commentBody := fmt.Sprintf(
+				"Pilot parked this task under `pilot-needs-human`: %s\n\nThis fix issue continues a PR whose branch was deleted; the original commit is no longer fetchable either, so there is nothing safe to continue from. Recreate the branch manually (or re-open the original PR) before clearing this label.",
+				detail,
+			)
+			if err := ghIssueComment(labelCtx, task.ProjectPath, issueNum, commentBody); err != nil {
+				r.log.Warn("unfetchable-fix-SHA escalation: failed to post explanatory comment",
+					slog.String("task_id", task.ID), slog.Any("error", err))
+			}
+			if err := ghEditLabels(labelCtx, task.ProjectPath, issueNum, []string{labelPilotNeedsHuman}, []string{labelPilotRetryReady}); err != nil {
+				r.log.Warn("unfetchable-fix-SHA escalation: failed to apply pilot-needs-human label",
+					slog.String("task_id", task.ID), slog.Any("error", err))
+			}
+		}
+	}
+
+	r.recordExecutionEvent(task.LogExecutionID(), memory.StageFailed, detail)
+	r.reportProgress(task.ID, "NeedsHuman", 100, detail)
+	r.emitAlertEvent(AlertEvent{
+		Type:      AlertEventTypeTaskFailed,
+		TaskID:    task.ID,
+		TaskTitle: task.Title,
+		Project:   task.ProjectPath,
+		Error:     detail,
+		Timestamp: time.Now(),
+		Metadata: map[string]string{
+			"task_id": task.ID,
+			"project": task.ProjectPath,
+			"reason":  detail,
+			"label":   labelPilotNeedsHuman,
+		},
+	})
+
+	return &ExecutionResult{
+		TaskID:  task.ID,
+		Success: false,
+		Error:   detail,
+	}, fmt.Errorf("autopilot-fix: %s", detail)
+}
+
 // classifyZeroDeliveryEpicCompletion reclassifies an epic-parent result that
 // reports Success=true but carries no evidence any real work happened —
 // zero tokens burned by Claude (planning or children), zero files changed,
@@ -2771,6 +2842,20 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 				slog.String("branch", task.Branch),
 				slog.String("base_ref", worktreeBaseRef),
 			)
+
+			// GH-5348 (subtask 2): a recorded base SHA that resolves to ""
+			// here means ResolveFixContinuationBaseRef could neither find a
+			// live origin/<branch> nor fetch the recorded commit (e.g.
+			// garbage-collected on the remote) — task.FixFromSHA != "" is
+			// exactly the guard that makes "" unambiguous. Falling through
+			// to worktree creation would silently default the base to
+			// origin/main, reproducing the pilot-console #275 incident this
+			// task exists to close. Fail loudly instead: park the fix issue
+			// itself under pilot-needs-human and stop — the original issue
+			// is never touched by this path.
+			if worktreeBaseRef == "" {
+				return r.escalateUnfetchableFixSHA(ctx, task)
+			}
 		}
 
 		var worktreePath string
