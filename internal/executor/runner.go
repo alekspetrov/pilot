@@ -657,6 +657,15 @@ type Task struct {
 	// linked to the original PR, giving Claude full context of previous changes.
 	// Typically set for autopilot-fix issues to continue from the failed PR's session.
 	FromPR int
+	// FixFromSHA is the original PR's full head commit SHA, set only for
+	// autopilot-fix issues that carried a sha: field in their autopilot-meta
+	// comment (GH-5348). When set, the worktree for this task is cut from
+	// this exact commit if Branch no longer exists on the remote (e.g. the
+	// original PR's branch was deleted on close) — see
+	// GitOperations.ResolveFixContinuationBaseRef. Without this, a deleted
+	// fix branch silently rebuilt from main, discarding the original diff
+	// (pilot-console #275 incident).
+	FixFromSHA string
 	// SourceAdapter identifies the adapter that originated this task (GH-1471).
 	// Examples: "github", "linear", "jira", "gitlab", "azuredevops"
 	// When non-empty and not "github", epic sub-issue creation uses the SubIssueCreator
@@ -2744,6 +2753,26 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 		)
 		r.reportProgress(task.ID, "Worktree", 1, "Creating isolated worktree...")
 
+		// GH-5348: autopilot-fix issues reuse the original PR's branch name so
+		// the fix continues that PR's diff. But CreateWorktreeWithBranch/Acquire
+		// force-create the branch (`git worktree add -B`), which resets it to
+		// whatever base ref is passed — an empty baseBranch defaults to
+		// origin/main. If the original branch was deleted (e.g. on PR close),
+		// that silently rebuilt the "fix" from main and discarded the real
+		// commits (pilot-console #275). Resolve the correct base explicitly:
+		// the branch's current remote tip if it still exists, else the
+		// recorded original commit.
+		var worktreeBaseRef string
+		if task.FixFromSHA != "" {
+			mainGit := NewGitOperations(task.ProjectPath)
+			worktreeBaseRef = mainGit.ResolveFixContinuationBaseRef(ctx, task.Branch, task.FixFromSHA)
+			r.log.Info("Resolved autopilot-fix worktree base",
+				slog.String("task_id", task.ID),
+				slog.String("branch", task.Branch),
+				slog.String("base_ref", worktreeBaseRef),
+			)
+		}
+
 		var worktreePath string
 		var cleanup func()
 		var err error
@@ -2754,14 +2783,14 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 				slog.Int("pool_available", r.worktreeManager.PoolAvailable()),
 			)
 			var result *WorktreeResult
-			result, err = r.worktreeManager.Acquire(ctx, task.ID, task.Branch, "")
+			result, err = r.worktreeManager.Acquire(ctx, task.ID, task.Branch, worktreeBaseRef)
 			if err == nil {
 				worktreePath = result.Path
 				cleanup = result.Cleanup
 			}
 		} else {
 			worktreePath, cleanup, err = CreateWorktreeWithBranch(
-				ctx, task.ProjectPath, task.ID, task.Branch, "")
+				ctx, task.ProjectPath, task.ID, task.Branch, worktreeBaseRef)
 		}
 
 		if err != nil {
