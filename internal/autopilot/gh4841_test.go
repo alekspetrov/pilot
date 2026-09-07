@@ -26,6 +26,20 @@ import (
 // would normally arm pilot-retry-ready. They assert the durable
 // HasSpawnedFixForPR fallback in notifyExternalClose still finds the live fix
 // issue and marks pilot-failed instead.
+//
+// GH-5351: the CI-failure rung (handleCIFailed/spawnFailureIssue) no longer
+// designates prState.TerminalLabel at all — that eager write moved to a
+// merge-time, file-overlap-gated check (verifyFixPRDeliversSourceScope,
+// owner_death.go). The in-memory designation this crash window can now lose
+// is the self-close marker (prState.SelfClosedFixIssue, markSelfClosed) that
+// tells the next poll's checkExternalMergeOrClose this close was Pilot's own
+// doing, not an external one. Losing it to a restart still routes the close
+// into notifyExternalClose, so the durable HasSpawnedFixForPR fallback this
+// test exercises remains exactly as load-bearing as before — only the thing
+// racing against persistPRState changed. The review-feedback rung
+// (handleReviewRequested/spawnReviewIssue) is untouched by GH-5351 and still
+// designates TerminalLabel eagerly, so its crash-window test below is
+// unchanged.
 
 // TestGH4841_CIFailureCrashWindow_RetryNotArmedAfterRestart covers the
 // pre-merge CI-failure rung (handleCIFailed / spawnFailureIssue).
@@ -123,14 +137,13 @@ internal/autopilot/controller.go:1:1: some lint error (errcheck)
 	if !prClosed {
 		t.Fatal("expected the source PR to be closed once the fix issue was spawned")
 	}
-	// GH-5247: a successful spawn is a healthy hand-off, so the in-memory
-	// designation is LabelSuperseded, not LabelFailed. The durable fallback
-	// exercised after the simulated crash below is unaffected by GH-5247 —
-	// it still hardcodes LabelFailed (accepted residual: a restart loses
-	// TerminalLabel entirely, so the fallback cannot distinguish a lost
-	// hand-off designation from a lost failure designation).
-	if seedPR.TerminalLabel != github.LabelSuperseded {
-		t.Fatalf("prState.TerminalLabel = %q, want %q before the simulated crash", seedPR.TerminalLabel, github.LabelSuperseded)
+	// GH-5351: spawnFailureIssue no longer designates prState.TerminalLabel
+	// eagerly at all (that write is gone — see spawnFailureIssue's doc
+	// comment). The designation that this crash window can now lose is the
+	// self-close marker (prState.SelfClosedFixIssue), set by markSelfClosed
+	// immediately before handleCIFailed closes the PR.
+	if seedPR.SelfClosedFixIssue != fixIssueNum {
+		t.Fatalf("prState.SelfClosedFixIssue = %d, want %d before the simulated crash", seedPR.SelfClosedFixIssue, fixIssueNum)
 	}
 	// Deliberately do NOT call controllerA.persistPRState(seedPR) here — this
 	// is the crash.
@@ -150,14 +163,18 @@ internal/autopilot/controller.go:1:1: some lint error (errcheck)
 	if !ok {
 		t.Fatalf("PR %d not present in controller B's activePRs after RestoreState", prNumber)
 	}
-	if restoredPR.TerminalLabel != "" {
-		t.Fatalf("restored TerminalLabel = %q, want empty — the in-memory designation must NOT have survived the simulated crash (otherwise this test isn't exercising the crash window)", restoredPR.TerminalLabel)
+	if restoredPR.SelfClosedFixIssue != 0 {
+		t.Fatalf("restored SelfClosedFixIssue = %d, want 0 — the in-memory marker must NOT have survived the simulated crash (otherwise this test isn't exercising the crash window)", restoredPR.SelfClosedFixIssue)
 	}
 
 	// Step 3: the external-close scan (processAllPRs' checkExternalMergeOrClose)
 	// observes the PR closed on GitHub — exactly what happens on the next
-	// poll tick after restart. Before GH-4841 this would default to
-	// pilot-retry-ready because restoredPR.TerminalLabel is empty.
+	// poll tick after restart. With the self-close marker lost, this close is
+	// (mis)read as external, driving it into notifyExternalClose. Before
+	// GH-4841 this would default to pilot-retry-ready because
+	// restoredPR.TerminalLabel is empty (and GH-5351 means it always is now
+	// for this rung) — the durable HasSpawnedFixForPR fallback below is what
+	// prevents that.
 	ghPR := &github.PullRequest{Number: prNumber, State: "closed", Merged: false}
 	externallyResolved := controllerB.checkExternalMergeOrClose(context.Background(), restoredPR, ghPR)
 	if !externallyResolved {

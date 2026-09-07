@@ -112,7 +112,7 @@ func TestHandleReviewRequested_CreateIssueErrors_EscalatesInsteadOfClosing(t *te
 	if branchDeleted.Load() {
 		t.Error("branch must NOT be deleted when the PR is held via escalateAndHold")
 	}
-	if c.consumeSelfClosedMarker(91) {
+	if c.consumeSelfClosedMarker(prState) {
 		t.Error("escalateAndHold must never stamp a self-close marker — the PR was never closed")
 	}
 	if prState.Stage != StageFailed {

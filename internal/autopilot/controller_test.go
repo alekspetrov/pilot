@@ -3287,7 +3287,7 @@ func TestHandleCIFailed_ZeroEvidence_EscalatesInsteadOfClosing(t *testing.T) {
 	if branchDeleted {
 		t.Error("branch must NOT be deleted when the PR is held via escalateAndHold")
 	}
-	if c.consumeSelfClosedMarker(61) {
+	if c.consumeSelfClosedMarker(prState) {
 		t.Error("escalateAndHold must never stamp a self-close marker — the PR was never closed")
 	}
 	if prState.Stage != StageFailed {
@@ -9194,7 +9194,7 @@ func TestCIFixSizeGuard_OversizedPR_EscalatesInsteadOfClosing(t *testing.T) {
 	if branchDeleted {
 		t.Error("size guard must never delete the branch")
 	}
-	if c.consumeSelfClosedMarker(42) {
+	if c.consumeSelfClosedMarker(prState) {
 		t.Error("escalateAndHold must never stamp a self-close marker — the PR was never closed")
 	}
 	if prState.Stage != StageFailed {
@@ -9511,7 +9511,7 @@ func TestCIFixSizeGuard_GenuineCascade_StillBlocksFixIssue(t *testing.T) {
 	if branchDeleted {
 		t.Error("size guard must never delete the branch")
 	}
-	if c.consumeSelfClosedMarker(77) {
+	if c.consumeSelfClosedMarker(prState) {
 		t.Error("escalateAndHold must never stamp a self-close marker — the PR was never closed")
 	}
 	if prState.Stage != StageFailed {
@@ -9608,7 +9608,7 @@ func TestHandleCIFailed_FixIssueCreateErrors_EscalatesInsteadOfClosing(t *testin
 	if branchDeleted {
 		t.Error("branch must NOT be deleted when the PR is held via escalateAndHold")
 	}
-	if c.consumeSelfClosedMarker(88) {
+	if c.consumeSelfClosedMarker(prState) {
 		t.Error("escalateAndHold must never stamp a self-close marker — the PR was never closed")
 	}
 	if prState.Stage != StageFailed {
@@ -9730,7 +9730,7 @@ func TestHandleCIFailed_FixIssuePreflightDeclined_EscalatesInsteadOfClosing(t *t
 	if branchDeleted {
 		t.Error("branch must NOT be deleted when the PR is held via escalateAndHold")
 	}
-	if c.consumeSelfClosedMarker(89) {
+	if c.consumeSelfClosedMarker(prState) {
 		t.Error("escalateAndHold must never stamp a self-close marker — the PR was never closed")
 	}
 	if prState.Stage != StageFailed {
