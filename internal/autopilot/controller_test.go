@@ -6572,8 +6572,13 @@ func TestController_HandleReviewRequested_CreatesIssue(t *testing.T) {
 	if !prClosed {
 		t.Error("expected PR to be closed")
 	}
-	if !branchDeleted {
-		t.Error("expected branch to be deleted")
+	// GH-5362: the branch must survive this close — deleting it here is the
+	// #275 false-success shape (if the revision issue's own run ever needs to
+	// continue from this PR's commits, a deleted branch silently rebuilds
+	// from main instead). handleReviewRequested now stamps a self-close
+	// marker via markSelfClosed and leaves the branch alone.
+	if branchDeleted {
+		t.Error("branch must NOT be deleted on a successful review-issue create (GH-5362) — it must survive so the revision issue can continue from these commits")
 	}
 	if !notified {
 		t.Error("expected notification to be sent")
@@ -6585,6 +6590,16 @@ func TestController_HandleReviewRequested_CreatesIssue(t *testing.T) {
 	}
 	if pr.Stage != StageFailed {
 		t.Errorf("stage = %s, want %s", pr.Stage, StageFailed)
+	}
+	// GH-5362: TerminalLabel is no longer set eagerly at spawn time —
+	// verifyFixPRDeliversSourceScope (owner_death.go) now applies
+	// pilot-superseded to the source issue only once the revision PR merges
+	// with confirmed file overlap.
+	if pr.TerminalLabel != "" {
+		t.Errorf("TerminalLabel = %q, want empty (GH-5362: no longer set eagerly at spawn time)", pr.TerminalLabel)
+	}
+	if !c.consumeSelfClosedMarker(42) {
+		t.Error("expected a self-close marker to be stamped before the PR close (GH-5362) so the next external-close poll doesn't misread this as a human rejection")
 	}
 }
 
@@ -9528,6 +9543,180 @@ func TestCIFixSizeGuard_GenuineCascade_StillBlocksFixIssue(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected pilot-needs-human label on the issue, got labels: %v", labelsAdded)
+	}
+}
+
+// TestCIFixSizeGuard_SingleLintAnnotation_ExemptsGuard_SpawnsFixIssue is the
+// GH-5360 regression: PR #5356's incident shape — 850 production additions,
+// CI failing on exactly one golangci-lint annotation (`test` job green) —
+// must exempt the CI-fix size guard and spawn a continuation fix issue
+// instead of holding for a human. The guard's purpose is to stop fix-loop
+// churn on PRs whose failure itself is evidence of contamination; a single
+// lint annotation on an otherwise-healthy large PR is not that.
+func TestCIFixSizeGuard_SingleLintAnnotation_ExemptsGuard_SpawnsFixIssue(t *testing.T) {
+	const codeLog = `Run golangci-lint run ./...
+internal/autopilot/owner_death.go:158:6: func markSelfClosed is unused (unused)
+##[error]Process completed with exit code 1.`
+
+	issueCreated := false
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/owner/repo/commits/gh5360sha1/check-runs":
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{ID: 5360, Name: "lint", Status: "completed", Conclusion: "failure"},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(mustJSON(t, resp))
+		case r.URL.Path == "/repos/owner/repo/actions/jobs/5360/logs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(codeLog))
+		case r.URL.Path == "/repos/owner/repo/issues/5351" && r.Method == http.MethodGet:
+			resp := github.Issue{Number: 5351, Body: "<!-- autopilot-meta branch:pilot/GH-5351 pr:5356 iteration:1 -->"}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(mustJSON(t, resp))
+		case r.URL.Path == "/repos/owner/repo/pulls/5356/files" && r.Method == http.MethodGet:
+			files := []*github.PRFile{
+				{Filename: "internal/autopilot/owner_death.go", Status: "modified", Additions: 850},
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(mustJSON(t, files))
+		case r.URL.Path == "/repos/owner/repo/issues" && r.Method == http.MethodPost:
+			issueCreated = true
+			resp := github.Issue{Number: 5361}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(mustJSON(t, resp))
+		case r.URL.Path == "/repos/owner/repo/pulls/5356" && r.Method == http.MethodPatch:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		}
+	}))
+	defer server.Close()
+
+	var logBuf bytes.Buffer
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvStage
+	cfg.MaxCIFixPRSize = 200
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+	c.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	prState := &PRState{
+		PRNumber:    5356,
+		IssueNumber: 5351,
+		HeadSHA:     "gh5360sha1",
+		Stage:       StageCIFailed,
+	}
+
+	if err := c.handleCIFailed(context.Background(), prState); err != nil {
+		t.Fatalf("handleCIFailed returned unexpected error: %v", err)
+	}
+
+	if !issueCreated {
+		t.Error("fix issue MUST be created for a single-annotation lint failure, even on a large PR (GH-5360)")
+	}
+	logs := logBuf.String()
+	if !strings.Contains(logs, "CI fix size guard exempted") {
+		t.Errorf("expected the guard's exemption log line, got logs:\n%s", logs)
+	}
+	if strings.Contains(logs, "CI fix size guard fired") {
+		t.Errorf("guard must not fire for a single-annotation lint failure, got logs:\n%s", logs)
+	}
+}
+
+// TestCIFixSizeGuard_LargePR_FailingTestJob_StillBlocksAndComments is the
+// GH-5360 companion case: a large PR (850 production additions) whose
+// failing check is a `test` job — never a lint/vet/fmt check, regardless of
+// whether its log happens to contain a `.go:LINE:COL:`-shaped line (e.g. a
+// compile error blocking the test binary) — must still trip the size guard
+// exactly as before, and the resulting hold must leave a PR comment naming
+// the production-addition count and the configured limit.
+func TestCIFixSizeGuard_LargePR_FailingTestJob_StillBlocksAndComments(t *testing.T) {
+	const codeLog = `Run go test ./...
+internal/autopilot/owner_death.go:200:6: undefined: someHelper
+FAIL	github.com/qf-studio/pilot/internal/autopilot [build failed]`
+
+	issueCreated := false
+	var comments []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/owner/repo/commits/gh5360sha2/check-runs":
+			resp := github.CheckRunsResponse{
+				TotalCount: 1,
+				CheckRuns: []github.CheckRun{
+					{ID: 5362, Name: "test", Status: "completed", Conclusion: "failure"},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(mustJSON(t, resp))
+		case r.URL.Path == "/repos/owner/repo/actions/jobs/5362/logs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(codeLog))
+		case r.URL.Path == "/repos/owner/repo/issues/5352" && r.Method == http.MethodGet:
+			resp := github.Issue{Number: 5352, Body: "<!-- autopilot-meta branch:pilot/GH-5352 pr:5357 iteration:1 -->"}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(mustJSON(t, resp))
+		case r.URL.Path == "/repos/owner/repo/pulls/5357/files" && r.Method == http.MethodGet:
+			files := []*github.PRFile{
+				{Filename: "internal/autopilot/owner_death.go", Status: "modified", Additions: 850},
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(mustJSON(t, files))
+		case r.URL.Path == "/repos/owner/repo/issues" && r.Method == http.MethodPost:
+			issueCreated = true
+			resp := github.Issue{Number: 5363}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(mustJSON(t, resp))
+		case r.URL.Path == "/repos/owner/repo/issues/5357/comments" && r.Method == http.MethodPost:
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			comments = append(comments, body["body"])
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte("{}"))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		}
+	}))
+	defer server.Close()
+
+	ghClient := github.NewClientWithBaseURL(testutil.FakeGitHubToken, server.URL)
+	cfg := DefaultConfig()
+	cfg.Environment = EnvStage
+	cfg.MaxCIFixPRSize = 200
+
+	c := NewController(cfg, ghClient, nil, "owner", "repo")
+
+	prState := &PRState{
+		PRNumber:    5357,
+		IssueNumber: 5352,
+		HeadSHA:     "gh5360sha2",
+		Stage:       StageCIFailed,
+	}
+
+	if err := c.handleCIFailed(context.Background(), prState); err != nil {
+		t.Fatalf("handleCIFailed returned unexpected error: %v", err)
+	}
+
+	if issueCreated {
+		t.Error("fix issue must NOT be created — a failing test job must never exempt the size guard")
+	}
+	if prState.Stage != StageFailed {
+		t.Errorf("Stage = %s, want %s", prState.Stage, StageFailed)
+	}
+	if len(comments) == 0 {
+		t.Fatal("expected a PR comment naming the size-guard hold, got none")
+	}
+	if !strings.Contains(comments[0], "850 production additions") || !strings.Contains(comments[0], "over limit 200") {
+		t.Errorf("comment should name the production-addition count and limit, got: %s", comments[0])
 	}
 }
 
