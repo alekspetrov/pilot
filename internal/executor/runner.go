@@ -4880,6 +4880,38 @@ Only use DECLINED if implementation is truly impossible or undefined. Do not dec
 			}
 		}
 
+		// GH-5346: from here through the end of this branch — the quality-gate
+		// first pass, self-review, intent judge, contract-evidence
+		// verification, and the final push/PR-create — every stage runs on a
+		// finalization ctx, not the raw task ctx. The backend has already
+		// returned; a deadline blowing partway through this bookkeeping must
+		// not discard a completed, committed solution (see finalizeCtx's doc
+		// comment — this is the same class of bug GH-5342 fixed for the
+		// epic/decomposed-parent PR-finalize paths, now closed for the direct
+		// path too). ctx is shadowed here for the quality-gate first pass,
+		// and re-derived again (via further finalizeCtx calls; search
+		// "GH-5346: re-derive" below) immediately before each later stage —
+		// self-review/intent judge, contract evidence, and push/PR-create —
+		// rather than once for the whole rest of the function, because each
+		// of those stages is itself a real LLM/git call that can consume
+		// enough wall-clock to blow a ctx that was still live when the
+		// *previous* stage started. Re-deriving is always safe to call
+		// again: on a still-live ctx it's just an extra context.WithCancel
+		// wrap; it only actually grants a fresh window the moment ctx.Err()
+		// is DeadlineExceeded.
+		//
+		// taskCtxWasDone is captured BEFORE this first shadow so retry-gating
+		// decisions downstream (e.g. the intent-judge retry below) keep
+		// asking "had the task's own budget already run out when the backend
+		// returned" rather than "is the current finalization ctx done" —
+		// the latter is essentially always false right after finalizeCtx
+		// grants a fresh window, which would silently re-enable a Claude
+		// Code re-invocation this GH-5346 revision is explicitly meant to
+		// forbid once the backend has timed out.
+		taskCtxWasDone := ctx.Err() != nil
+		ctx, finalizeCancel := finalizeCtx(ctx, r.finalizeTimeout())
+		defer finalizeCancel()
+
 		// Track if quality gates passed for self-review decision (GH-1079)
 		qualityGatesPassed := false
 
@@ -4954,16 +4986,22 @@ Only use DECLINED if implementation is truly impossible or undefined. Do not dec
 
 					checker := r.qualityCheckerFactory(task.ID, executionPath)
 
-					// GH-5060: the first-pass gate check (retryAttempt == 0) stays on
-					// the attempt ctx - correct, it should not outlive the attempt.
-					// But retry-pass re-checks (retryAttempt > 0) must not run on that
-					// same ctx: GH-4876 gave the reset (line ~4523) and re-invoke (line
-					// ~4593) legs fresh contexts so an exhausted attempt deadline can't
-					// doom an otherwise-recoverable retry, but the gate re-check itself
-					// was left on the old ctx. A ctx-respecting checker whose deadline
-					// already passed by the time the fresh-ctx re-invoke completes would
-					// die here with "context deadline exceeded", producing a false
-					// task_failed right after a successful retry.
+					// GH-5060/GH-5346: the first-pass gate check (retryAttempt == 0)
+					// runs on ctx, which by this point is the finalization ctx set up
+					// above — not the raw attempt ctx. That's deliberate: this check
+					// happens after the backend has already returned, so it must
+					// survive an attempt deadline that blew while the backend was
+					// still finishing real, committed work (same reasoning as
+					// finalizeCtx's doc comment). Retry-pass re-checks (retryAttempt >
+					// 0) build their own fresh, unrelated context.Background()-rooted
+					// timeout instead: GH-4876 gave the reset (line ~4523) and
+					// re-invoke (line ~4593) legs fresh contexts so an exhausted
+					// attempt deadline can't doom an otherwise-recoverable retry, but
+					// the gate re-check itself was left needing the same treatment. A
+					// ctx-respecting checker whose deadline already passed by the time
+					// the fresh-ctx re-invoke completes would otherwise die here with
+					// "context deadline exceeded", producing a false task_failed right
+					// after a successful retry.
 					var outcome *QualityOutcome
 					var qErr error
 					if retryAttempt > 0 {
@@ -5328,6 +5366,17 @@ Only use DECLINED if implementation is truly impossible or undefined. Do not dec
 			)
 		}
 
+		// GH-5346: re-derive the finalization ctx here rather than trusting
+		// the one from the quality-gate section above — quality gates (and
+		// their retries) can themselves burn real wall-clock, so a ctx that
+		// was still live when that section started may have gone Done()
+		// since. finalizeCtx is idempotent to call again: if ctx is still
+		// live, this is just an extra context.WithCancel wrap; if it just
+		// blew its deadline, this is what actually grants the fresh window
+		// self-review and the intent judge run on.
+		ctx, selfReviewCancel := finalizeCtx(ctx, r.finalizeTimeout())
+		defer selfReviewCancel()
+
 		// GH-1079: Run self-review and intent judge in parallel (saves 2-5 min per task)
 		// Both are independent read-only operations:
 		// - Self-review checks code quality (syntax, wiring, style)
@@ -5440,24 +5489,39 @@ Only use DECLINED if implementation is truly impossible or undefined. Do not dec
 
 				if state.intentRetried {
 					result.IntentWarning = intentVerdict.Reason
-				} else if ctx.Err() != nil {
+				} else if taskCtxWasDone || ctx.Err() != nil {
 					// GH-5342 (subtask 3): quality-gate retries above run on
 					// their own fresh, unbounded-relative-to-ctx timeout
 					// (GH-4876), so they can burn real wall-clock while this
 					// task's own ctx keeps ticking independently. By the time
 					// the intent judge flags a mismatch here, ctx may already
-					// be done (deadline exceeded, or an explicit cancel) —
-					// unlike the no-commit-retry above, nothing upstream of
-					// this branch shares ctx to fail fast on it first.
-					// Spawning another Claude Code process on an already-done
-					// ctx can't produce anything usable — backendExecute
-					// forwards ctx straight into exec.CommandContext, which
-					// refuses to even start the process on a ctx that's
-					// already Done — so skip the retry and keep the
+					// have been done (deadline exceeded, or an explicit
+					// cancel) — unlike the no-commit-retry above, nothing
+					// upstream of this branch shares ctx to fail fast on it
+					// first. Spawning another Claude Code process once the
+					// task's own budget is exhausted can't produce anything
+					// usable — backendExecute forwards ctx straight into
+					// exec.CommandContext — so skip the retry and keep the
 					// intent-judge warning instead of burning a doomed
 					// re-invocation.
+					//
+					// GH-5346: two independent signals, either one is enough
+					// to skip. taskCtxWasDone (captured before finalizeCtx
+					// ran, further up this function) catches the case where
+					// the backend itself already timed out — ctx is now the
+					// finalization ctx, a fresh budget that's essentially
+					// never Done, so checking ctx.Err() alone would silently
+					// re-enable exactly the re-invocation this guard exists
+					// to forbid. The live ctx.Err() != nil check stays too,
+					// for the other case: the backend finished comfortably
+					// inside budget, finalizeCtx handed back a plain
+					// context.WithCancel wrapping the still-ticking original
+					// ctx (not a fresh window), and it's the intent-judge
+					// call itself that ran long enough to blow that original
+					// deadline mid-finalization.
 					log.Warn("Skipping intent-judge retry: task ctx already done",
 						slog.String("task_id", task.ID),
+						slog.Bool("task_ctx_was_done", taskCtxWasDone),
 						slog.Any("ctx_err", ctx.Err()),
 					)
 					result.IntentWarning = intentVerdict.Reason
@@ -5539,6 +5603,14 @@ Only use DECLINED if implementation is truly impossible or undefined. Do not dec
 				}
 			}
 		}
+
+		// GH-5346: re-derive the finalization ctx again — self-review and the
+		// intent judge (just above) are themselves real backend/subprocess
+		// calls that can run long enough for a still-live ctx to blow its
+		// deadline meanwhile. See the matching comment above the self-review
+		// refresh for why re-calling finalizeCtx here is safe either way.
+		ctx, contractEvidenceCancel := finalizeCtx(ctx, r.finalizeTimeout())
+		defer contractEvidenceCancel()
 
 		// Contract Evidence gate (TASK-460 doc-vs-wire leg, GH-5009/GH-5012):
 		// hard-blocks tasks whose diff touches a configured contract_files
@@ -5648,6 +5720,14 @@ Only use DECLINED if implementation is truly impossible or undefined. Do not dec
 			}
 		}
 
+		// GH-5342/GH-5346: finalization (commit count, push, PR create) must
+		// not inherit an already-exhausted task ctx — see finalizeCtx's doc
+		// comment for why. Re-derived one more time here (not reused from
+		// the contract-evidence refresh above) since that gate's own git/LLM
+		// calls can themselves consume the remainder of a still-live ctx.
+		ctx, pushCancel := finalizeCtx(ctx, r.finalizeTimeout())
+		defer pushCancel()
+
 		if task.DirectCommit {
 			r.reportProgress(task.ID, "Pushing", 96, "Pushing to main...")
 
@@ -5673,11 +5753,6 @@ Only use DECLINED if implementation is truly impossible or undefined. Do not dec
 			// Create PR if requested and we have commits
 			r.reportProgress(task.ID, "Creating PR", 96, "Pushing branch...")
 
-			// GH-5342: finalization (commit count, push, PR create) must not
-			// inherit an already-exhausted task ctx — see finalizeCtx's doc
-			// comment for why. Shadows ctx for the rest of this branch.
-			ctx, cancel := finalizeCtx(ctx, finalizeGitTimeout)
-			defer cancel()
 
 			// GH-4022: an already-merged branch short-circuits push+CreatePR —
 			// must run BEFORE the no-commits guard below and before push, since a
