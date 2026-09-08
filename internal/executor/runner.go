@@ -2644,6 +2644,307 @@ func (r *Runner) escalateUnfetchableFixSHA(ctx context.Context, task *Task) (*Ex
 	}, fmt.Errorf("autopilot-fix: %s", detail)
 }
 
+// ensureQualityCheckerFactory auto-enables a minimal build (and, when
+// detectable, test) gate when no quality checker has been configured (GH-363).
+// This ensures broken code never becomes a PR even without explicit quality
+// config. Extracted from the first-pass quality-gate block in
+// executeWithOptions (GH-5346) so attemptBackendTimeoutSalvage's single
+// gate-check can reuse the exact same auto-enable behavior instead of running
+// with no gate at all just because it takes a different code path than the
+// ordinary success flow.
+func (r *Runner) ensureQualityCheckerFactory(executionPath string, log *slog.Logger) {
+	if r.qualityCheckerFactory != nil {
+		return
+	}
+	buildCmd := quality.DetectBuildCommand(executionPath)
+	testCmd := quality.DetectTestCommand(executionPath)
+	if buildCmd == "" {
+		return
+	}
+	log.Info("Auto-enabling build gate (no quality config)",
+		slog.String("command", buildCmd),
+	)
+
+	// Create minimal quality checker with auto-detected build command
+	minimalConfig := quality.MinimalBuildGate()
+	minimalConfig.Gates[0].Command = buildCmd
+
+	// GH-2398: also auto-enable a test gate when a test runner is
+	// detectable. Empty testCmd → skip the gate entirely instead of
+	// failing it on workspaces that lack a Makefile / test harness.
+	if testCmd != "" {
+		log.Info("Auto-enabling test gate", slog.String("command", testCmd))
+		minimalConfig.Gates = append(minimalConfig.Gates, &quality.Gate{
+			Name:        "test",
+			Type:        quality.GateTest,
+			Command:     testCmd,
+			Required:    true,
+			Timeout:     5 * time.Minute,
+			MaxRetries:  1,
+			RetryDelay:  3 * time.Second,
+			FailureHint: "Fix failing tests in the changed files",
+		})
+	}
+
+	r.qualityCheckerFactory = func(taskID, projectPath string) QualityChecker {
+		return &simpleQualityChecker{
+			config:      minimalConfig,
+			projectPath: projectPath,
+			taskID:      taskID,
+		}
+	}
+}
+
+// attemptBackendTimeoutSalvage runs when the backend call itself ended
+// because the task ctx hit its deadline (timedOut == true at the call site
+// in executeWithOptions), instead of an ordinary classified backend failure.
+// GH-5346: a ctx that expires mid-run does not mean Claude Code did no
+// useful work — the deadline can fire after real commits already landed in
+// the worktree. Pre-GH-5346 that work was discarded unconditionally (the
+// backend-error branch always fell through to a bare "task failed" return).
+//
+// This is deliberately NOT the same as the ordinary quality-gate retry loop
+// (the `for retryAttempt := range maxAutoRetries` loop further down in
+// executeWithOptions): that loop re-invokes Claude Code on a gate failure,
+// and the backend has already burned its budget getting here, so
+// re-invoking it is exactly what step 2 of GH-5346 forbids. Gates run
+// exactly once, on a finalization ctx, and the result is a straight
+// pass/fail branch — never a retry.
+//
+// Returns true if it fully handled the result (result is populated and the
+// caller in executeWithOptions should return immediately). Returns false if
+// there was nothing to salvage (no commits on the branch) — the caller
+// should fall through to its normal "task failed" return.
+func (r *Runner) attemptBackendTimeoutSalvage(ctx context.Context, task *Task, git *GitOperations, result *ExecutionResult, executionPath string, log *slog.Logger, recorder *replay.Recorder) bool {
+	if git == nil || task.Branch == "" || task.DirectCommit || !task.CreatePR {
+		// Direct-commit tasks push straight to main with no branch/PR to
+		// salvage this way, and a task that never wanted a PR/branch has
+		// nothing here worth pushing either.
+		return false
+	}
+
+	finCtx, cancel := finalizeCtx(ctx, r.finalizeTimeout())
+	defer cancel()
+
+	baseBranch := task.BaseBranch
+	if baseBranch == "" {
+		baseBranch, _ = git.GetDefaultBranch(finCtx)
+		if baseBranch == "" {
+			baseBranch = "main"
+		}
+	}
+
+	commitCount, countErr := git.CountNewCommitsAgainstOrigin(finCtx, baseBranch)
+	if countErr != nil {
+		// GH-5342/GH-5346: one re-count before giving up — a transient git
+		// error is not proof there is nothing to salvage, and treating it
+		// as such is exactly the silent-data-loss bug both issues fix.
+		commitCount, countErr = git.CountNewCommitsAgainstOrigin(finCtx, baseBranch)
+	}
+	if countErr != nil {
+		r.holdPushedBranch(finCtx, task, git, result, log,
+			fmt.Sprintf("task ended by %v and commit count could not be verified after a retry: %v", ctx.Err(), countErr))
+		return true
+	}
+	if commitCount == 0 {
+		// Nothing to salvage — let the caller's ordinary "task failed"
+		// return run; there is no branch worth pushing or holding.
+		return false
+	}
+
+	log.Info("timeout salvage: backend ended by ctx expiry with commits present, attempting to save the work",
+		slog.String("task_id", task.ID),
+		slog.String("branch", task.Branch),
+		slog.Int("commit_count", commitCount),
+		slog.Any("ctx_err", ctx.Err()),
+	)
+
+	if !task.SkipQualityGates {
+		r.ensureQualityCheckerFactory(executionPath, log)
+		if r.qualityCheckerFactory != nil {
+			checker := r.qualityCheckerFactory(task.ID, executionPath)
+			outcome, qErr := checker.Check(finCtx)
+			switch {
+			case qErr != nil:
+				r.holdPushedBranch(finCtx, task, git, result, log,
+					fmt.Sprintf("timeout salvage: quality gate error: %v", qErr))
+				return true
+			case outcome == nil || !outcome.Passed:
+				r.holdPushedBranch(finCtx, task, git, result, log,
+					"timeout salvage: quality gates failed after task timeout")
+				return true
+			default:
+				result.QualityGates = r.buildQualityGatesResult(outcome, 0)
+				r.recordQualityGateEvents(task.LogExecutionID(), outcome)
+			}
+		}
+	}
+
+	r.pushAndCreatePRAfterTimeout(finCtx, task, git, result, recorder, log)
+	return true
+}
+
+// holdPushedBranch pushes task.Branch (if it is not already on the remote)
+// and parks the source issue under pilot-needs-human instead of silently
+// discarding committed work or leaving the branch stranded only in the
+// (about-to-be-deleted) local worktree. Modeled on escalateUnfetchableFixSHA
+// above, which uses the same push/comment/label idiom for a "no more
+// automatic progress possible" state. GH-5346.
+//
+// Uses a fresh, value-preserving 30s window for the push/comment/label calls
+// (context.WithoutCancel(ctx), not ctx directly) — by the time this runs,
+// ctx itself is very often already exhausted (that is frequently WHY this is
+// being called), and building the escalation calls on a dead ctx would fail
+// them before they start.
+func (r *Runner) holdPushedBranch(ctx context.Context, task *Task, git *GitOperations, result *ExecutionResult, log *slog.Logger, reason string) {
+	holdCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
+	pushed := false
+	if git != nil && task.Branch != "" {
+		if pushErr := git.Push(holdCtx, task.Branch); pushErr != nil {
+			if git.RemoteBranchExists(holdCtx, task.Branch) {
+				pushed = true
+			} else {
+				log.Warn("timeout salvage: failed to push branch for human hold",
+					slog.String("task_id", task.ID),
+					slog.String("branch", task.Branch),
+					slog.Any("error", pushErr),
+				)
+				reason = fmt.Sprintf("%s (branch push also failed: %v)", reason, pushErr)
+			}
+		} else {
+			pushed = true
+		}
+	}
+
+	log.Warn("timeout salvage: holding branch for human triage",
+		slog.String("task_id", task.ID),
+		slog.String("branch", task.Branch),
+		slog.Bool("pushed", pushed),
+		slog.String("reason", reason),
+	)
+
+	if task.SourceAdapter == "" || task.SourceAdapter == "github" {
+		if issueNum := task.GHIssueRef(); issueNum != "" {
+			outcomeNote := "The branch could not be pushed either — check the worktree/logs before retrying."
+			if pushed {
+				outcomeNote = fmt.Sprintf("Branch `%s` was pushed with the commits Pilot completed before this happened — review and finish it manually, or clear the label to let Pilot retry.", task.Branch)
+			}
+			commentBody := fmt.Sprintf("Pilot parked this task under `pilot-needs-human`: %s\n\n%s", reason, outcomeNote)
+			if commentErr := ghIssueComment(holdCtx, task.ProjectPath, issueNum, commentBody); commentErr != nil {
+				log.Warn("timeout salvage: failed to post hold comment",
+					slog.String("task_id", task.ID), slog.Any("error", commentErr))
+			}
+			if labelErr := ghEditLabels(holdCtx, task.ProjectPath, issueNum, []string{labelPilotNeedsHuman}, []string{labelPilotRetryReady}); labelErr != nil {
+				log.Warn("timeout salvage: failed to apply pilot-needs-human label",
+					slog.String("task_id", task.ID), slog.Any("error", labelErr))
+			}
+		}
+	}
+
+	result.Success = false
+	result.Outcome = "needs_human"
+	result.Error = reason
+	r.reportProgress(task.ID, "NeedsHuman", 100, reason)
+	r.recordExecutionEvent(task.LogExecutionID(), memory.StageFailed, reason)
+}
+
+// pushAndCreatePRAfterTimeout pushes task.Branch and opens (or adopts) its
+// PR after attemptBackendTimeoutSalvage confirmed real commits and (if
+// quality gates are configured) a passing single gate run. Simplified,
+// non-epic sibling of finalizeEpicBranchPR above: no epic-child sweep, and
+// none of the ordinary direct path's extra guards (adopt-open-PR,
+// issue-superseded check, dead-man push tracker, post-push ghost-SHA
+// re-check) — this is an edge-case salvage path for a task whose backend
+// call already burned its full budget, not the place to add more
+// finalization work. Any failure here falls back to holdPushedBranch so the
+// commits are never silently lost. GH-5346.
+func (r *Runner) pushAndCreatePRAfterTimeout(ctx context.Context, task *Task, git *GitOperations, result *ExecutionResult, recorder *replay.Recorder, log *slog.Logger) {
+	baseBranch := task.BaseBranch
+	if baseBranch == "" {
+		baseBranch, _ = git.GetDefaultBranch(ctx)
+		if baseBranch == "" {
+			baseBranch = "main"
+		}
+	}
+
+	if err := git.Push(ctx, task.Branch); err != nil {
+		if !git.RemoteBranchExists(ctx, task.Branch) {
+			r.holdPushedBranch(ctx, task, git, result, log,
+				fmt.Sprintf("timeout salvage: branch push failed: %v", err))
+			return
+		}
+		log.Warn("timeout salvage: push reported error but branch exists on remote, continuing",
+			slog.String("task_id", task.ID), slog.Any("error", err))
+	}
+
+	if sha, shaErr := git.GetCurrentCommitSHA(ctx); shaErr == nil && sha != "" {
+		result.CommitSHA = sha
+	}
+
+	// TASK-359 Layer 1 (Shape C) parity: don't open a duplicate PR for work
+	// that is already merged (e.g. a retried dispatch of a branch salvaged
+	// once already).
+	if mergedURL, mergedErr := git.FindMergedPRByBranch(ctx, task.Branch); mergedErr == nil && mergedURL != "" {
+		result.PRUrl = mergedURL
+		result.Success = true
+		log.Info("timeout salvage: branch already merged, adopting existing PR",
+			slog.String("task_id", task.ID), slog.String("pr_url", mergedURL))
+		r.reportProgress(task.ID, "Complete", 100, "timeout salvage: work already merged")
+		if recorder != nil {
+			recorder.SetPRUrl(mergedURL)
+		}
+		return
+	}
+
+	diffStats, _ := git.GetDiffStats(ctx, baseBranch)
+	normalizedTitle, titleErr := normalizeTitle(task.Title, task.Labels, diffStats)
+	if titleErr != nil {
+		r.holdPushedBranch(ctx, task, git, result, log,
+			fmt.Sprintf("timeout salvage: PR title normalization failed: %v", titleErr))
+		return
+	}
+	prTitle := fmt.Sprintf("%s: %s", task.ID, normalizedTitle)
+	issueNum := strings.TrimPrefix(task.ID, "GH-")
+	prBody := fmt.Sprintf("## Summary\n\nAutomated PR created by Pilot after a task timeout (GH-5346 salvage path) for %s.\n\nCloses #%s%s\n\n## Changes\n\n%s",
+		task.ID, issueNum, extraFixesKeyword(task.Description, issueNum), task.Description)
+
+	// GH-5346: adapter-aware routing, matching the ordinary direct-path
+	// PR-create leg (executeWithOptions) — a GitHub-SDK-managed repo, a
+	// non-GitHub adapter's PRCreator, and the gh-CLI fallback all need PRs
+	// opened through their own creator, not just `gh pr create`.
+	var prURL string
+	var createErr error
+	switch {
+	case task.SourceAdapter == "github" && task.SourceRepo != "" && r.prCreatorFor("github:"+task.SourceRepo) != nil:
+		prURL, createErr = r.prCreatorFor("github:" + task.SourceRepo).CreatePR(ctx, task.Branch, baseBranch, prTitle, prBody)
+	case r.prCreator != nil && task.SourceAdapter != "" && task.SourceAdapter != "github":
+		closeKeyword := ""
+		if task.SourceIssueID != "" {
+			closeKeyword = fmt.Sprintf("\n\nCloses #%s", task.SourceIssueID)
+		}
+		mrBody := fmt.Sprintf("## Summary\n\nAutomated MR created by Pilot after a task timeout (GH-5346 salvage path) for %s.%s\n\n## Changes\n\n%s", task.ID, closeKeyword, task.Description)
+		prURL, createErr = r.prCreator.CreatePR(ctx, task.Branch, baseBranch, prTitle, mrBody)
+	default:
+		prURL, createErr = git.CreatePR(ctx, prTitle, prBody, baseBranch)
+	}
+	if createErr != nil {
+		r.holdPushedBranch(ctx, task, git, result, log,
+			fmt.Sprintf("timeout salvage: PR creation failed: %v", createErr))
+		return
+	}
+
+	result.PRUrl = prURL
+	result.Success = true
+	log.Info("timeout salvage: PR created", slog.String("task_id", task.ID), slog.String("pr_url", prURL))
+	r.reportProgress(task.ID, "Complete", 100, "timeout salvage: PR created from committed work")
+	r.recordExecutionEvent(task.LogExecutionID(), memory.StagePRCreated, "timeout salvage: pr created: "+prURL)
+	if recorder != nil {
+		recorder.SetPRUrl(prURL)
+	}
+}
+
 // classifyZeroDeliveryEpicCompletion reclassifies an epic-parent result that
 // reports Success=true but carries no evidence any real work happened —
 // zero tokens burned by Claude (planning or children), zero files changed,
@@ -4380,6 +4681,19 @@ func (r *Runner) executeWithOptions(ctx context.Context, task *Task, allowWorktr
 			})
 		}
 
+		// GH-5346: a backend call that ended because the task ctx hit its
+		// deadline does not mean Claude Code did no useful work — the
+		// deadline can fire after real commits already landed in the
+		// worktree. Attempt to salvage those commits (push+PR, or
+		// push+pilot-needs-human) before falling through to the "task
+		// failed" return below, which pre-GH-5346 discarded them
+		// unconditionally. Only reachable via the timedOut branch above —
+		// ordinary classified backend failures (rate limit, API error,
+		// refusal, ...) always fall through here exactly as before.
+		if timedOut && r.attemptBackendTimeoutSalvage(ctx, task, git, result, executionPath, log, recorder) {
+			return result, nil
+		}
+
 		// GH-1599: Log task failed milestone
 		r.saveLogEntry(task.LogExecutionID(), "error", "Task failed: "+result.Error)
 
@@ -4931,44 +5245,7 @@ Only use DECLINED if implementation is truly impossible or undefined. Do not dec
 
 			// Auto-enable minimal build gate if not configured (GH-363)
 			// This ensures broken code never becomes a PR, even without explicit quality config
-			if r.qualityCheckerFactory == nil {
-				buildCmd := quality.DetectBuildCommand(executionPath)
-				testCmd := quality.DetectTestCommand(executionPath)
-				if buildCmd != "" {
-					log.Info("Auto-enabling build gate (no quality config)",
-						slog.String("command", buildCmd),
-					)
-
-					// Create minimal quality checker with auto-detected build command
-					minimalConfig := quality.MinimalBuildGate()
-					minimalConfig.Gates[0].Command = buildCmd
-
-					// GH-2398: also auto-enable a test gate when a test runner is
-					// detectable. Empty testCmd → skip the gate entirely instead of
-					// failing it on workspaces that lack a Makefile / test harness.
-					if testCmd != "" {
-						log.Info("Auto-enabling test gate", slog.String("command", testCmd))
-						minimalConfig.Gates = append(minimalConfig.Gates, &quality.Gate{
-							Name:        "test",
-							Type:        quality.GateTest,
-							Command:     testCmd,
-							Required:    true,
-							Timeout:     5 * time.Minute,
-							MaxRetries:  1,
-							RetryDelay:  3 * time.Second,
-							FailureHint: "Fix failing tests in the changed files",
-						})
-					}
-
-					r.qualityCheckerFactory = func(taskID, projectPath string) QualityChecker {
-						return &simpleQualityChecker{
-							config:      minimalConfig,
-							projectPath: projectPath,
-							taskID:      taskID,
-						}
-					}
-				}
-			}
+			r.ensureQualityCheckerFactory(executionPath, log)
 
 			// Run quality gates if configured.
 			// Previously skipped in LocalMode (v25 OOM concern), re-enabled since
