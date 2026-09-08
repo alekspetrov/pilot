@@ -2918,7 +2918,7 @@ func (r *Runner) pushAndCreatePRAfterTimeout(ctx context.Context, task *Task, gi
 	var createErr error
 	switch {
 	case task.SourceAdapter == "github" && task.SourceRepo != "" && r.prCreatorFor("github:"+task.SourceRepo) != nil:
-		prURL, createErr = r.prCreatorFor("github:" + task.SourceRepo).CreatePR(ctx, task.Branch, baseBranch, prTitle, prBody)
+		prURL, createErr = r.prCreatorFor("github:"+task.SourceRepo).CreatePR(ctx, task.Branch, baseBranch, prTitle, prBody)
 	case r.prCreator != nil && task.SourceAdapter != "" && task.SourceAdapter != "github":
 		closeKeyword := ""
 		if task.SourceIssueID != "" {
@@ -6029,7 +6029,6 @@ Only use DECLINED if implementation is truly impossible or undefined. Do not dec
 		} else if task.CreatePR && task.Branch != "" {
 			// Create PR if requested and we have commits
 			r.reportProgress(task.ID, "Creating PR", 96, "Pushing branch...")
-
 
 			// GH-4022: an already-merged branch short-circuits push+CreatePR —
 			// must run BEFORE the no-commits guard below and before push, since a
