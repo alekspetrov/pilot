@@ -4377,7 +4377,7 @@ func (c *Controller) handleReviewRequested(ctx context.Context, prState *PRState
 	// consumeSelfClosedMarker short-circuits into
 	// removePRTracking(pr, false) instead — tracking stops, but the branch
 	// and its commits survive.
-	c.markSelfClosed(prState.PRNumber)
+	c.markSelfClosed(prState, issueNum)
 
 	// Close the PR. The branch is deliberately left alone (see above) — it
 	// is no longer deleted here, and checkExternalMergeOrClose's self-close

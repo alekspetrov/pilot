@@ -6598,7 +6598,7 @@ func TestController_HandleReviewRequested_CreatesIssue(t *testing.T) {
 	if pr.TerminalLabel != "" {
 		t.Errorf("TerminalLabel = %q, want empty (GH-5362: no longer set eagerly at spawn time)", pr.TerminalLabel)
 	}
-	if !c.consumeSelfClosedMarker(42) {
+	if !c.consumeSelfClosedMarker(pr) {
 		t.Error("expected a self-close marker to be stamped before the PR close (GH-5362) so the next external-close poll doesn't misread this as a human rejection")
 	}
 }
