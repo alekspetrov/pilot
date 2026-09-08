@@ -297,16 +297,25 @@ const finalizeGitTimeout = 5 * time.Minute
 // shutdown) is left untouched, since that's a genuine "stop now" signal, not
 // an exhausted budget on otherwise-complete work. Only a blown deadline gets
 // a fresh, bounded window to finish saving already-completed work.
+//
+// GH-5346: the fresh window is built on context.WithoutCancel(ctx) rather
+// than context.Background() — a plain Background() root silently dropped
+// every value threaded onto the task ctx (request-scoped trace/log fields,
+// per-task deadlines set by callers further up the stack) the moment a
+// deadline blew, even though the whole point of this function is to keep
+// finalization working like nothing happened. WithoutCancel preserves ctx's
+// values and detaches only its Done()/Err() (which are already spent) and
+// its cancellation propagation — exactly the two properties we need to shed.
 func finalizeCtx(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
 	if ctx.Err() == context.DeadlineExceeded {
-		return context.WithTimeout(context.Background(), budget)
+		return context.WithTimeout(context.WithoutCancel(ctx), budget)
 	}
 	return context.WithCancel(ctx)
 }
 
 // logGitCtxErr logs a post-backend git/gh call failure, downgrading to
-// Debug when the call ran on a ctx that was already Done() (deadline
-// blown or explicit cancellation) at the time it was made.
+// Debug only when the call ran on a ctx whose deadline had already blown
+// (context.DeadlineExceeded) at the time it was made.
 //
 // GH-5342 (subtask 4): several classification-only git calls made right
 // after the backend returns — the no-commit-retry's pre/post commit-count
@@ -317,12 +326,17 @@ func finalizeCtx(ctx context.Context, budget time.Duration) (context.Context, co
 // gates the retry/backstop logic that follows them (see GH-5342-3's
 // resolution note on the no-commit-retry gate). That's correct behavior,
 // but every one of those fast failures is a "context deadline exceeded"
-// (or context.Canceled) that used to log at Warn — daemon-log noise for an
-// expected, designed outcome, not evidence of an actual git/gh problem.
-// Warn is reserved for failures that aren't explained by the ctx already
-// being done.
+// that used to log at Warn — daemon-log noise for an expected, designed
+// outcome, not evidence of an actual git/gh problem.
+//
+// GH-5346: an explicit context.Canceled is NOT downgraded here — unlike a
+// blown deadline, a real cancellation (stop request, process shutdown) is
+// exactly the kind of unexpected mid-flight interruption that's worth a
+// Warn: it's the signal the push+hold path uses to decide committed work
+// needs a human's attention. Debug is reserved for the designed, expected
+// deadline-exceeded case.
 func logGitCtxErr(ctx context.Context, log *slog.Logger, msg string, attrs ...any) {
-	if ctx.Err() != nil {
+	if ctx.Err() == context.DeadlineExceeded {
 		log.Debug(msg, attrs...)
 		return
 	}
@@ -1326,6 +1340,15 @@ func (r *Runner) effectiveStallTimeout() time.Duration {
 	return r.config.EffectiveStallTimeout()
 }
 
+// finalizeTimeout returns the budget finalizeCtx should grant post-backend
+// finalization calls (quality gates, self-review, intent judge, contract
+// evidence, push/PR create). Delegates to
+// BackendConfig.EffectiveFinalizeTimeout(); returns the 15m default when no
+// config is set. GH-5346.
+func (r *Runner) finalizeTimeout() time.Duration {
+	return r.config.EffectiveFinalizeTimeout()
+}
+
 func (r *Runner) selfReviewTimeout() time.Duration {
 	if r.backendType() == BackendTypeOpenCode {
 		return 10 * time.Minute
@@ -2102,7 +2125,8 @@ func (r *Runner) Execute(ctx context.Context, task *Task) (*ExecutionResult, err
 func (r *Runner) finalizeEpicBranchPR(ctx context.Context, task *Task, git *GitOperations, result *ExecutionResult, childTerminalStates []string) {
 	// GH-5342: finalization (commit count, push, PR create) must not inherit
 	// an already-exhausted task ctx — see finalizeCtx's doc comment for why.
-	ctx, cancel := finalizeCtx(ctx, finalizeGitTimeout)
+	// GH-5346: budget is now configurable (orchestrator.execution.finalize_timeout).
+	ctx, cancel := finalizeCtx(ctx, r.finalizeTimeout())
 	defer cancel()
 
 	// Determine base branch before the no-commits guard.
